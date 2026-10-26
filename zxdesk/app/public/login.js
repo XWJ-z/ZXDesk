@@ -67,6 +67,9 @@
   const err = $('err');
   const pwHint = $('pwHint');
   const switchEl = $('switch');
+  const help = $('help');
+  const forgot = $('forgot');
+  const tip = $('resetTip');
   const submit = $('submit');
   const usernameEl = $('username');
   const passwordEl = $('password');
@@ -130,6 +133,14 @@
     pwHint.hidden = !registering;
     pwHint.textContent = `密码至少 ${minLen} 位`;
 
+    // 库里连一个账号都没有时（注册形态）谈不上「忘记密码」，整块不出现
+    help.hidden = !hasUsers;
+    if (!hasUsers) {
+      tip.hidden = true;
+      forgot.setAttribute('aria-expanded', 'false');
+      forgot.textContent = '忘记密码？';
+    }
+
     if (registering) {
       // 首个账号必须建出来，没得切
       if (!hasUsers) return setSwitch([]);
@@ -163,6 +174,20 @@
     }
     return { ok: res.ok, status: res.status, data };
   }
+
+  /**
+   * 功能：展开 / 收起「忘记密码」的说明面板，并同步按钮文案与 `aria-expanded`。
+   *
+   * ⚠️ 这里**只有说明文字**，没有任何在线重置通道 —— 忘记密码只能由人在 NAS 本机上
+   *    用 `cmd/reset-admin` 重置。⛔ 别在这里挂接口，那等于给所有人一个后门。
+   * @returns {void}
+   */
+  forgot.addEventListener('click', () => {
+    const open = tip.hidden;
+    tip.hidden = !open;
+    forgot.setAttribute('aria-expanded', String(open));
+    forgot.textContent = open ? '收起' : '忘记密码？';
+  });
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();

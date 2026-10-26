@@ -35,6 +35,39 @@
 
       <p class="switch" id="switch" hidden></p>
 
+      <!-- 忘记密码：只给「怎么自救」的说明，页面上没有任何重置通道。
+           ⚠️ 别在这里加输入框或发送验证码之类的入口 —— 那等于给所有人一个后门，
+              重置只能在 NAS 本机用 cmd/reset-admin 做。 -->
+      <div class="help" id="help" hidden>
+        <button class="forgot" id="forgot" type="button" aria-expanded="false" aria-controls="resetTip">
+          忘记密码？
+        </button>
+
+        <section class="tip" id="resetTip" hidden>
+          <h2>重置密码</h2>
+
+          <p class="who">管理员：在 NAS 的终端里重置</p>
+          <ol class="steps">
+            <li>用 SSH 登录这台 NAS。</li>
+            <li>
+              先看清有哪些账号、哪个是管理员（这一步只读，不用停应用）：
+              <code>/var/apps/zxdesk/cmd/reset-admin --list</code>
+            </li>
+            <li>在飞牛「应用中心」把 ZXDesk 停掉。</li>
+            <li>
+              重置指定账号的密码，按提示输两遍（不回显）：
+              <code>/var/apps/zxdesk/cmd/reset-admin &lt;用户名&gt;</code>
+            </li>
+            <li>回「应用中心」启动 ZXDesk，用新密码登录。</li>
+          </ol>
+
+          <p class="who">普通成员：联系管理员重置</p>
+          <p class="note">
+            每个人的密码只有自己知道，成员自己也改不了别人的。为了不给任何人留后门，页面上没有在线找回通道，重置只能在 NAS 本机做。
+          </p>
+        </section>
+      </div>
+
       <p class="foot">各账号的数据彼此独立，管理员也看不到成员的任务。</p>
     </main>
 

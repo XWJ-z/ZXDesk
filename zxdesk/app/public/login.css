@@ -201,6 +201,97 @@ body {
   text-decoration: underline;
 }
 
+/* ---- 忘记密码 ---- */
+/* 触发按钮做成文字链接的样子，但保留 44px 触摸目标 —— 手机上直接点文字太难点中 */
+.forgot {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.forgot:hover {
+  color: var(--accent);
+}
+
+.forgot:active {
+  opacity: 0.7;
+}
+
+/* 展开后的说明面板：只用「显示 / 隐藏」切换，不做高度动画
+   （未知高度做动画要读 scrollHeight，慢一帧就闪，得不偿失） */
+.tip {
+  margin: 6px 0 2px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--card));
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: left;
+}
+
+.tip h2 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.tip .who {
+  margin: 12px 0 6px;
+  font-weight: 600;
+}
+
+.tip .who:first-of-type {
+  margin-top: 0;
+}
+
+.tip .steps {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+
+.tip .steps li {
+  margin-bottom: 8px;
+}
+
+.tip .steps li:last-child {
+  margin-bottom: 0;
+}
+
+/* 命令块：窄屏上整条命令必然超宽，横向滚动而不是断行 —— 断开的路径没法照着敲 */
+.tip code {
+  display: block;
+  margin-top: 5px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tip .note {
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* ---- 页脚说明 ---- */
 .foot {
   margin: 18px 0 0;

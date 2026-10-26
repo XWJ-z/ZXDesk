@@ -5,9 +5,9 @@
 #       所以自救只能在这台 NAS 上、以 root 或应用用户身份做。
 #
 # 用法（SSH 到 NAS 上执行）：
-#   /var/apps/zxdesk/cmd/reset-admin                    # 只列出账号，并标出谁是管理员（先看这个）
+#   /var/apps/zxdesk/cmd/reset-admin --list              # 只列出账号，并标出谁是管理员（先看这个）
 #   /var/apps/zxdesk/cmd/reset-admin <用户名>            # 重置指定账号的密码
-#   /var/apps/zxdesk/cmd/reset-admin                    # （不带参数）重置唯一的管理员密码
+#   /var/apps/zxdesk/cmd/reset-admin                     # （不带参数）重置唯一的管理员密码
 #   /var/apps/zxdesk/cmd/reset-admin --make-admin <用户名>  # 把某个账号**提升为管理员**（不用密码）
 #
 # 卡住了怎么选：
