@@ -19,21 +19,23 @@
 
 点下面的按钮直接拿最新版安装包（都是当前 Release 里的文件，发新版会自动指向新包）：
 
-<a href="https://github.com/XWJ-z/ZXDesk/releases/latest/download/zxdesk.fpk">
-<img src="https://img.shields.io/badge/%E9%A3%9E%E7%89%9B%E5%BA%94%E7%94%A8%E5%8C%85-zxdesk.fpk%20%C2%B7%20%E7%BA%A63.2MB-2ea44f?style=for-the-badge&logo=linux&logoColor=white" alt="下载 fnOS 应用包"/>
-</a>
+<div align="center">
 
-<a href="https://github.com/XWJ-z/ZXDesk/releases/latest/download/zxdesk-android.apk">
-<img src="https://img.shields.io/badge/%E5%AE%89%E5%8D%93%E5%AE%89%E8%A3%85%E5%8C%85-zxdesk--android.apk%20%C2%B7%20%E7%BA%A69.2MB-3ddc84?style=for-the-badge&logo=android&logoColor=white" alt="下载安卓安装包"/>
-</a>
+<a href="https://github.com/XWJ-z/ZXDesk/releases/latest/download/zxdesk.fpk"><img src="https://img.shields.io/badge/%E9%A3%9E%E7%89%9B%E5%BA%94%E7%94%A8%E5%8C%85-zxdesk.fpk%20%C2%B7%20%E7%BA%A63.2MB-2ea44f?style=for-the-badge&logo=linux&logoColor=white" alt="下载 fnOS 应用包"/></a>
 
-<a href="https://github.com/XWJ-z/ZXDesk/releases/latest/download/zxdesk-windows-setup.exe">
-<img src="https://img.shields.io/badge/Windows%20%E5%AE%89%E8%A3%85%E5%8C%85-zxdesk--windows--setup.exe%20%C2%B7%20%E7%BA%A6151MB-0078d4?style=for-the-badge&logo=windows&logoColor=white" alt="下载 Windows 安装包"/>
-</a>
+<br>
 
-<a href="https://github.com/XWJ-z/ZXDesk/releases/latest/download/zxdesk-edge.zip">
-<img src="https://img.shields.io/badge/Edge%20%E6%89%A9%E5%B1%95-zxdesk--edge.zip%20%C2%B7%20%E7%BA%A60.1MB-4b5563?style=for-the-badge&logo=microsoftedge&logoColor=white" alt="下载 Edge 扩展"/>
-</a>
+<a href="https://github.com/XWJ-z/ZXDesk/releases/latest/download/zxdesk-android.apk"><img src="https://img.shields.io/badge/%E5%AE%89%E5%8D%93%E5%AE%89%E8%A3%85%E5%8C%85-zxdesk--android.apk%20%C2%B7%20%E7%BA%A69.2MB-3ddc84?style=for-the-badge&logo=android&logoColor=white" alt="下载安卓安装包"/></a>
+
+<br>
+
+<a href="https://github.com/XWJ-z/ZXDesk/releases/latest/download/zxdesk-windows-setup.exe"><img src="https://img.shields.io/badge/Windows%20%E5%AE%89%E8%A3%85%E5%8C%85-zxdesk--windows--setup.exe%20%C2%B7%20%E7%BA%A6151MB-0078d4?style=for-the-badge&logo=windows&logoColor=white" alt="下载 Windows 安装包"/></a>
+
+<br>
+
+<a href="https://github.com/XWJ-z/ZXDesk/releases/latest/download/zxdesk-edge.zip"><img src="https://img.shields.io/badge/Edge%20%E6%89%A9%E5%B1%95-zxdesk--edge.zip%20%C2%B7%20%E7%BA%A60.1MB-4b5563?style=for-the-badge&logo=microsoftedge&logoColor=white" alt="下载 Edge 扩展"/></a>
+
+</div>
 
 > 全部历史版本、每个包对应的更新说明 → **[Releases](https://github.com/XWJ-z/ZXDesk/releases)**
 
