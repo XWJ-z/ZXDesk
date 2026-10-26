@@ -27,7 +27,7 @@
 <img src="https://img.shields.io/badge/%E5%AE%89%E5%8D%93%E5%AE%89%E8%A3%85%E5%8C%85-zxdesk--android.apk%20%C2%B7%20%E7%BA%A69.2MB-3ddc84?style=for-the-badge&logo=android&logoColor=white" alt="下载安卓安装包"/>
 </a>
 
-<a href="https://github.com/XWJ-z/ZXDesk/releases/latest">
+<a href="https://github.com/XWJ-z/ZXDesk/releases/latest/download/zxdesk-windows-setup.exe">
 <img src="https://img.shields.io/badge/Windows%20%E5%AE%89%E8%A3%85%E5%8C%85-zxdesk--windows--setup.exe%20%C2%B7%20%E7%BA%A6151MB-0078d4?style=for-the-badge&logo=windows&logoColor=white" alt="下载 Windows 安装包"/>
 </a>
 
