@@ -1,0 +1,24 @@
+{
+  ".url": {
+    "zxdesk.main": {
+      "title": "ZXDesk工作台",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "",
+      "gatewayPrefix": "/app/zxdesk",
+      "gatewaySocket": "app.sock",
+      "url": "/app/zxdesk/",
+      "allUsers": true
+    },
+    "zxdesk.lan": {
+      "title": "ZXDesk工作台（局域网直连）",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "http",
+      "port": "8990",
+      "url": "/",
+      "allUsers": true,
+      "noDisplay": true
+    }
+  }
+}

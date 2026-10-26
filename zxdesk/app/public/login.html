@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>登录 · ZXDesk工作台</title>
+    <!-- ⚠️ 资源地址用**相对路径**：飞牛统一网关下应用挂在 `/app/zxdesk`，绝对路径会打到系统根目录。
+         本页永远与 login.css / login.js 同目录，相对路径在两个挂载点下都成立。 -->
+    <link rel="stylesheet" href="login.css" />
+  </head>
+  <body>
+    <main class="card">
+      <div class="brand">
+        <div class="logo">ZX</div>
+        <h1>ZXDesk工作台</h1>
+        <p class="sub" id="sub">正在检查登录状态…</p>
+      </div>
+
+      <form id="form" hidden>
+        <label class="field">
+          <span>用户名</span>
+          <input id="username" name="username" type="text" autocomplete="username" required maxlength="32" />
+        </label>
+
+        <label class="field">
+          <span>密码</span>
+          <input id="password" name="password" type="password" autocomplete="current-password" required />
+        </label>
+
+        <p class="hint" id="pwHint" hidden></p>
+        <p class="err" id="err" role="alert" hidden></p>
+
+        <button class="btn" id="submit" type="submit">登录</button>
+      </form>
+
+      <p class="switch" id="switch" hidden></p>
+
+      <p class="foot">各账号的数据彼此独立，管理员也看不到成员的任务。</p>
+    </main>
+
+    <script src="login.js"></script>
+  </body>
+</html>

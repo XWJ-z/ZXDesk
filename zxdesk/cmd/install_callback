@@ -1,0 +1,5 @@
+#!/bin/bash
+
+### Called after install.
+# Data and config are auto-initialized by server.js on first startup (SQLite + seed data).
+exit 0

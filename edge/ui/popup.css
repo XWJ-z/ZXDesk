@@ -1,0 +1,46 @@
+/* popup 壳 —— 360×600 固定；0.1.4 起：外框固定，只有条目区自己滚（⛔ 整体滚） */
+body {
+  width: 360px;
+  height: 600px;
+  margin: 0;
+  box-sizing: border-box;
+  font: 13px/1.6 var(--font);
+  color: var(--ink);
+  background: var(--bg);
+  overflow: hidden;
+}
+#app {
+  height: 100%;
+  padding: 12px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* 连接条钉死；各视图占满剩余空间 */
+#app > .bar {
+  flex: none;
+  overflow: visible;
+}
+#app > section {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* 主视图：表单钉死，条目区（.list-scroll）独占剩余空间自己滚 */
+#app > section.main-view {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.main-view .bm-form {
+  flex: none;
+}
+.main-view .list-scroll {
+  flex: 1;
+  overflow-y: auto;
+}
+/* 设置视图自己滚（连接组 + 外观 + 打开方式 + 关于） */
+#app > section.settings {
+  padding-right: 2px;
+}

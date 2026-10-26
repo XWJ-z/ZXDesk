@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no"
+    />
+    <meta name="theme-color" content="#eef1f6" />
+    <title>ZXDesk工作台</title>
+    <script>
+ /* 手机版入口守卫 —— 手机版就是手机版，与电脑版之间**没有切换按钮**。
+         电脑用户不会走到 /mobile/ 来（电脑版页面自己会分流），手机用户也不需要去电脑版，
+         所以这里不再有任何「自动弹走」的逻辑，唯一例外是应急出口：
+           - ?view=desktop  明确要电脑版 → 带着参数去电脑版（界面上不出现，仅在设备判定出错时用）
+           - ?view=mobile   留在手机版
+         出问题时留在手机版。 */
+      (function () {
+        /* ⭐ 应用挂载前缀（0.3.5 统一网关改造）：见 desktop/index.html 里同款说明。
+           ⚠️ 本页的资源地址一律写**相对路径**，且因为本页比应用根**深一层**，
+             引用 `core/` 要用 `../core/` —— 网关前缀下绝对路径会打到飞牛系统根目录（404 ⇒ 白屏）。 */
+        var base = location.pathname
+          .replace(/[^/]*$/, '')
+          .replace(/\/mobile\/$/, '')
+          .replace(/\/$/, '');
+        // 清掉旧版本写下的「已选电脑版」偏好键：本版本起两边都不再读写它
+        try {
+          localStorage.removeItem('zxdesk.view');
+        } catch (e) {
+          /* 存储不可用：无所谓，本来也不再依赖它 */
+        }
+        var q = null;
+        try {
+          q = new URLSearchParams(location.search).get('view');
+        } catch (e) {
+          q = null;
+        }
+        /* ⭐⭐ 2026-10-19：跳回电脑版时**也要把查询串带走**（只摘掉 `view`）——
+           与 `index.html` 里 `carrySearch()` **逐字同一套理由**：飞牛网关的票据跟地址走，
+           整页跳转丢掉 `location.search` 就会被重新弹访问码。
+           ⚠️ 本函数在这里**只服务上面那一条应急出口**，但请与 `index.html` 那份保持在同一个样子
+           （两处都改才叫一致 —— 只改一处的话，从手机版跳回电脑版那条路照样会丢票据）。 */
+        function carrySearch() {
+          var s = String(location.search || '');
+          if (!s) return '';
+          try {
+            var usp = new URLSearchParams(s);
+            usp.delete('view');
+            var out = usp.toString();
+            return out ? '?' + out : '';
+          } catch (e) {
+            return s;
+          }
+        }
+        if (q === 'desktop') {
+          var keep = carrySearch();
+          location.replace(base + '/?view=desktop' + (keep ? '&' + keep.slice(1) : '') + location.hash);
+        }
+      })();
+    </script>
+    <!-- ⭐ 共用设计令牌（--zx-*）：必须在 mobile/app.css 之前（见 core/tokens.css 的说明）
+         ⚠️ 资源地址一律**相对路径**，且本页深一层 ⇒ `core/` 要写成 `../core/`（见上方脚本里的说明） -->
+    <link rel="stylesheet" href="../core/tokens.css" />
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <div class="phone" id="phone">
+      <!-- 顶栏：显示用，不放主操作（主操作在拇指区的 FAB / TabBar） -->
+      <header class="topbar">
+        <span class="tb-logo">ZX</span>
+        <div class="tb-head">
+          <h1 id="tb-title">今天</h1>
+          <div class="tb-sub" id="tb-sub">正在读取…</div>
+        </div>
+        <button class="tb-btn" id="btn-refresh" type="button" aria-label="刷新数据">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6" />
+          </svg>
+        </button>
+      </header>
+
+      <!-- 数据层异常横幅（只读降级 / 备份失败时出现，常驻不滚动） -->
+      <div class="m-banner hidden" id="m-banner"></div>
+
+      <!-- 四个标签各自的滚动容器（切换时保留滚动位置） -->
+      <main id="app">
+ <!-- ⭐ 「今天」0.4.5 起是**手机版的首页看板**（「首页看板这个得大改」）：
+             区间切换条是**静态骨架**，只有 `#today-body` 由 `views/today.js` 重画 ——
+             两个 `<input type="date">` 若进重画范围，用户正在挑日期的原生选择器会被连根换掉。
+             ⚠️ 预设按钮的 `data-dash` 与 `core/dashboard.js` 的 `DASH_PRESETS` 逐个对齐。
+ ⭐ 0.8.9：「今日」那一颗**已删** —— 它与周条右上角的「今天」
+             按钮重复。现在只剩「单日 / 本周 / 本月」三颗，「回到今天」走周条那颗「今天」。
+
+ ⭐⭐ 0.8.61：「首页看板…该固定的固定，不应该随着页面滑动而滑动，
+             参考其它模块的设计」——这一屏改成**两段式**：上面这几块（胶囊 / 周条 / 筛选 / 搜索 /
+             概览）是**固定段**，只有 `#today-body` 内部滚。做法与 `#view-board` / `#view-webpass`
+             逐字同构（那两个屏是现成先例，见 `app.css` 各那一段）。
+             ⚠️⭐ 判据：**控件与「一眼要看到的那几个数」固定，内容流滚**。看板的定位是
+             「一览 + 进各模块」——顶部那几件一旦跟着滚走，翻到列表中部就既换不了区间、
+             也切不了视图、还看不出今天几件事，看板就退化成一条列表。
+             ⚠️ 改动边界只有这一屏：`.view` 那条公共规则（整屏滚）一个字没动，
+             别的屏照旧（`#view-board` / `#view-webpass` / `#view-teamwork` 是各自覆盖的）。 -->
+        <section class="view" id="view-today">
+          <!-- ⭐ 0.8.7（方案 26）：视图胶囊 `列表视图 ｜ 日历视图` 的定位槽 —— 内容由
+               `views/today.js` 的 `renderToday()` 写进来。
+ ⚠️ 「把切换按钮放【首页看板】这个标题处」⇒ 它是这一屏的**第一行**；
+               而且必须是**静态骨架**（⛔ 不能住在 `#today-body` 里）：那块每画一次就被整个换掉，
+               而这条胶囊**两个视图下都得在**（列表 / 日历）。
+               ⚠️ 手机端的「标题」是顶栏 `<header class="topbar">` 那行 —— 它是**全局固定栏**、
+               还得同时装标题与副标题，塞不进一颗胶囊 ⇒ 落到这里（与电脑端「标题行」同一个位置感）。
+               ⚠️ 没视图可切（模块被删 / 接线表里没人声明 `dashView`）时它**空着**，
+               `.dash-tabs-row:empty` 会把占位收掉 —— 一颗死胶囊都不剩（删目录验收）。 -->
+          <div class="dash-tabs-row" id="today-tabs"></div>
+          <!-- ⭐ 0.5.5 区间条（周条）：一行「‹ 区间 › 今天」+ 一行 7 个日期格。
+ 「合并今日、单日、本周菜单（两端）：改为如图所示」。
+               ⚠️ 与下面那套旧控件**驱动同一个 state**，两套必须同步（逻辑在 `views/today.js` 的
+               `renderDashBar()`）：点格子把档位切到「单日」，点档位按钮把格子跟着挪。
+               不同步的表现是「顶部写着 9/14 ~ 9/20、格子亮着 9/15、下面的 chip 亮着本月」，且不报错。
+               ⚠️ 静态骨架：7 个格子是固定节点，只由 JS 改字与类名，不重建。 -->
+          <div class="dash-week">
+            <div class="dw-head">
+              <button class="dw-nav" type="button" data-act="dash-week" data-delta="-1" aria-label="上一周">‹</button>
+              <span class="dw-range" id="dash-week-range"></span>
+              <button class="dw-nav" type="button" data-act="dash-week" data-delta="1" aria-label="下一周">›</button>
+              <button class="dw-today" type="button" data-act="dash-today">今天</button>
+ <!-- ⭐ 0.8.9：「这两个图标放到【今天】的旁边」（与电脑端同一步）——
+                   筛选那颗控制下面那条 `.dash-range`（单日 / 本周 / 本月 ＋ 两个日期框），
+                   放大镜那颗控制搜索行。⛔ 动作走本端的动作表（`data-act`），不在这里挂监听。 -->
+              <button class="dw-ico" type="button" data-act="dash-panel" data-panel="filter" aria-label="筛选区间" aria-expanded="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" /></svg>
+              </button>
+              <button class="dw-ico" type="button" data-act="dash-panel" data-panel="search" aria-label="搜索" aria-expanded="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="M16 16l4 4" /></svg>
+              </button>
+            </div>
+            <div class="dw-days" id="dash-week-days" role="group" aria-label="按天查看">
+              <button class="dash-day" type="button" data-act="dash-day" data-dash-day=""><i>一</i><b></b></button>
+              <button class="dash-day" type="button" data-act="dash-day" data-dash-day=""><i>二</i><b></b></button>
+              <button class="dash-day" type="button" data-act="dash-day" data-dash-day=""><i>三</i><b></b></button>
+              <button class="dash-day" type="button" data-act="dash-day" data-dash-day=""><i>四</i><b></b></button>
+              <button class="dash-day" type="button" data-act="dash-day" data-dash-day=""><i>五</i><b></b></button>
+              <button class="dash-day" type="button" data-act="dash-day" data-dash-day=""><i>六</i><b></b></button>
+              <button class="dash-day" type="button" data-act="dash-day" data-dash-day=""><i>日</i><b></b></button>
+            </div>
+          </div>
+          <div class="dash-search" id="dash-search" hidden>
+ <!-- ⭐ 0.8.9：放大镜点开就是这一行（与电脑端同一手法）。 -->
+            <span class="ds-ico" aria-hidden="true">🔍</span>
+            <input
+              id="dash-q"
+              name="q"
+              type="search"
+              placeholder="搜这段时间里的事项…"
+              autocomplete="off"
+              data-autofill-guard
+              data-lpignore="true"
+              data-1p-ignore
+              data-bwignore="true"
+            />
+          </div>
+          <div class="dash-range" hidden>
+            <div class="chips" id="dash-presets">
+              <button class="chip" type="button" data-act="dash-preset" data-dash="day">单日</button>
+              <button class="chip" type="button" data-act="dash-preset" data-dash="week">本周</button>
+              <button class="chip" type="button" data-act="dash-preset" data-dash="month">本月</button>
+            </div>
+            <div class="dash-dates">
+              <input id="dash-from" type="date" aria-label="起始日期" />
+              <span class="dash-dash">–</span>
+              <input id="dash-to" type="date" aria-label="截止日期" />
+            </div>
+            <div class="dash-range-note" id="dash-range-note"></div>
+          </div>
+          <!-- ⭐⭐ 0.8.61：**任务概览**（五个数 + 进度）的固定槽 —— 从前它长在 `#today-body`
+ 里，跟着清单一起滚走。「该固定的固定」+「看板要一眼看得出
+               今天几件事」，而概览那五个数还是**筛选按钮**（点一个就筛出这一类）——
+               它滚没了，等于筛选入口也滚没了。
+               ⚠️ 它是**空槽**：内容由 `views/today.js` 的 `renderStats()` 写进来，
+               数据没到 / 空工作台时写空串（空 div 高 0，不占位）。
+               ⚠️ 它住在 `#today-body` **外面** ⇒ 不参与内容重画，也不吃 `.dash-row` 那条淡入；
+               `#today-body` 每画一次都不会把它连根换掉（里面是 5 颗按钮）⇒ 点下去不会丢焦点。
+ ⚠️ 两个视图（列表 / 日历）共用这一份 —— 0.8.7 「日历视图也要有任务概览」。 -->
+          <div id="today-stats"></div>
+          <!-- ⭐⭐ 0.8.61：**唯一**的滚动区（两段式的那下半段）。从前这一屏是整屏滚，
+               滚的是 `.view` 自己；现在 `.view` 改成 `overflow:hidden`，滚动落在这里。
+               ⚠️⭐ 底部大留白（TabBar + FAB + 呼吸位）**跟着搬进这里** —— 外层改成
+               `overflow:hidden` 之后，`.view` 那条 `padding-bottom` 在本屏**等于没效果**：
+               漏了**不变红**，只是「最后一条被悬浮 ＋ 与 TabBar 盖住」（`#view-board` 记过同一条）。
+               ⚠️ 滚动位置由这个容器自己记（`display:none` 期间不丢）—— 切标签回来还在原处，
+               但**屏内切视图**要手动归零（见 `views/today.js` 的 `scrollTopToTop()`）。 -->
+          <div id="today-body"></div>
+        </section>
+ <!-- ⭐ 0.5.2：「项目」视图已整块删除（「删除现在的项目视图」）——
+             换项目 / 新建 / 编辑 / 删除项目全部收进「任务板」顶部（`renderBoard()` 的
+             【项目 ▾】下拉与 ✎ / 🗑 按钮）；底部「项目」标签的位置让给了「对话」。
+             ⭐ 0.8.7（方案 28）：**随手记并进了这一屏**（药丸「任务 ｜ 随手记」）——
+             第一行那颗药丸是静态槽，`#board-main` 装任务板自己那一块，
+             `#board-pane` 装模块（随手记）贡献的视图（由 `mountModuleSlot()` 动态挂）。
+             ⚠️ 骨架从「全空」改成这三块：`renderBoard()` 从这一版起写 `#board-main`，
+             ⛔ 不再是 `#view-board`（写它会把药丸与模块视图一起抹掉）。 -->
+        <section class="view hidden" id="view-board">
+          <div id="board-tabs"></div>
+          <!-- ⭐ 0.8.15（方案 35）：`#board-main` 与 `#board-pane` 包进同一个 `.board-stage`
+               （grid 同格 `grid-area: 1/1`）—— 交叉淡入期间两层重叠，旧的那层照常显示。
+               ⚠️ 药丸（`#board-tabs`）**留在 stage 外面**：它是屏内静态槽，⛔ 不进这一格。 -->
+          <div class="board-stage">
+            <div id="board-main"></div>
+            <div id="board-pane"></div>
+          </div>
+        </section>
+        <!-- ⭐⭐ 0.8.13（方案 33）：**课表 / 番茄钟 / 行程三块并成一个模块** `time`「番茄钟与日程表」——
+             底栏那一颗叫「日程」（`tab.name`），整屏由 `modules/time/home-mobile.js` 管：
+             四个 pane（首页「日程表」+ 三个子屏）按 `state.timeTab` 显隐。
+             ⚠️⚠️ 它们**不再各自进** `mobile/app.js` 的 `switchTab()` 视图数组 —— 屏名统一成 `time`
+             （⛔ 留着旧名字 ⇒ `$('#view-timetable')` 回 null ⇒ 切屏当场抛）。
+             ⚠️ 三个子屏的容器 id 与电脑端**同名**：`#time-timetable` / `#time-pomodoro` / `#time-trip`。 -->
+        <section class="view hidden" id="view-time">
+          <!-- ① 首页「日程表」：批 1 只放三颗进子屏的按钮，时间轴在批 3 画（`home-mobile.js`） -->
+          <div id="time-home" class="time-pane"></div>
+
+          <!-- ② 课表子屏：内容由 `modules/time/timetable-mobile.js` 的 `renderTimetable()` 整块画。
+               ⚠️ 返回行在**外面**、内容画进 `#time-timetable-body` —— 否则这一屏每次重画都会抹掉返回键。 -->
+          <div id="time-timetable" class="time-pane hidden">
+            <div class="time-back-row" data-time-back="timetable"></div>
+            <div id="time-timetable-body"></div>
+          </div>
+
+          <!-- ③ 番茄钟子屏：内容由 `modules/time/pomodoro-mobile.js` 的 `renderPomodoro()` 整块画（同上） -->
+          <div id="time-pomodoro" class="time-pane hidden">
+            <div class="time-back-row" data-time-back="pomodoro"></div>
+            <div id="time-pomodoro-body"></div>
+          </div>
+
+          <!-- ④ 行程子屏：内容由 `modules/time/trip-mobile.js` 的 `renderTrip()` 整块画（同上） -->
+          <div id="time-trip" class="time-pane hidden">
+            <div class="time-back-row" data-time-back="trip"></div>
+            <div id="time-trip-body"></div>
+          </div>
+        </section>
+        <!-- ⭐ 0.8.7 网址/密码夹（方案 27）：**纯屏模块** —— 药丸 `网址 ｜ 密码` 切两个视图，
+             按选择把 `bookmarks` / `vault` 的界面**动态挂**进 `#webpass-body`。
+             ⚠️ 药丸是这一屏的**第一行**（手机端的标题在全局顶栏里，那行还要装标题 + 副标题 + 刷新键），
+             ⛔ 不许放进 `#webpass-body` —— 后者每画一次就被整块换掉（「两个视图下都在」只有视图中立区做得到）。 -->
+        <section class="view hidden" id="view-webpass">
+          <div id="webpass-tabs"></div>
+          <div id="webpass-body"></div>
+ <!-- ⭐⭐ 0.8.17：「网址/密码库：新建的 + 图标，切换会跟随界面变化，
+               这个应该是固定在界面上的（参考任务与随手记），两端都要改」——
+               它从**两个视图片段**里搬到这里（静态层）：原先收藏夹一颗、密码库一颗，各长在
+               自己那一份片段里 ⇒ 换视图时旧那颗跟着旧片段一起被清掉、新那颗再出现，
+               看着就是「＋ 跟着界面变」。
+               ⚠️ 必须住 `#webpass-body` **外面**（与药丸同一条纪律：后者每挂一次就被整块换掉）。
+               ⚠️ 显隐与无障碍文案由 `modules/webpass/mobile.js` 的 `paintFab()` 按当前档位刷。 -->
+          <button class="fab" id="webpass-new" type="button" title="新建" aria-label="新建">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+          </button>
+        </section>
+        <!-- ⭐ 0.8.7（方案 28）：**随手记不再有自己的屏** —— 它并进了「任务板」那一屏
+             （第一行药丸「任务 ｜ 随手记」）。骨架（检索框 + 「＋ 记一条」+ #idea-body）
+             连同动作表 / 直连监听 / 弹层委托一起搬进了视图片段
+             `modules/idea/mobile-board-pane.js`，由 `mountModuleSlot()` 挂进 `#board-pane`。
+             ⛔ 别把这一屏加回来：留一半在这里 = 同一批 id 在文档里出现两遍，
+             `document.getElementById` 只命中前一个 ⇒ 片段里那块界面**静默空白**（且不报错）。 -->
+        <!-- ⭐⭐ 0.8.10 批 3（方案 30）：**数码管理不再有自己的屏**（原来那个 <section id="view-digital"> 已整块删掉）——
+             它的骨架（页头计数与「＋ 新增」、概览行、搜索框、分类与排序下拉、列表）连同屏内
+             事件委托一起搬进了视图片段 `modules/digital/mobile-assets-pane.js`，
+             由 `core/slots.js` 的 `mountModuleSlot()` 挂进「个人资产管理」那一屏（槽名 `assets-pane`）。
+             ⛔ 别把这一屏加回来：留一半在这里 = 同一批 id 在文档里出现两遍，
+             `document.getElementById` 只命中前一个 ⇒ 片段里那块界面**静默空白**（且不报错）。 -->
+        
+        <!-- ⭐⭐ 0.8.10 个人资产管理（方案 30）：**纯屏模块** —— 药丸（生活记账 ｜ 数码管理）切
+             第一层模块格，选中的那一格把那一侧的界面挂进来（`assets-pane` 槽）。
+             ⚠️ 药丸是这一屏的**第一行**（手机端的标题在全局顶栏里，那行还要装标题 + 副标题 + 刷新键），
+             ⛔ 不许放进 `#assets-body` —— 后者每画一次就被整块换掉（「药丸两个视图下都在」只有
+             视图中立区做得到，与 `#webpass-tabs` / `#board-tabs` 同一条纪律）。
+             ⚠️ 内容由 `modules/assets/mobile.js` 重画（宿主**动态 import** 它 —— 静态 import 会让
+             「删掉那个目录」连累宿主页起不来）；屏内动作走 `mobile/app.js` 的 `ACTIONS` 表
+             （`as-*` 键）＋ `[data-act]` 事件委托。
+ ⭐⭐ 0.8.20：这一屏是**两段式**（固定头 ＋ 内部滚动区），
+             并且**只剩模块格** —— 自建分组 / 分类 / 通用条目的界面与那颗「＋ 新建分组」
+             一起撤掉了；后端的 `asset_groups` 接口与数据一个字没动。 -->
+        <section class="view hidden" id="view-assets">
+          <div id="assets-tabs"></div>
+          <div id="assets-body"></div>
+ <!-- ⭐⭐ 0.8.20（「新建应该是固定的，切换的时候【新建+图标】不应该随着消失」）：
+               它住**屏级**（`#assets-body` **外面**，与上面那颗 `#webpass-new` 同一条纪律）——
+               记账的「记一笔」与数码管理的「＋ 新增」两块**共用这一颗**：谁挂在当前那一格，
+               谁在自己那边接管它（`data-act` / 图标 / 文案 / 显隐按格刷，见
+               `modules/ledger/mobile.js` 的 `paintAssetsFab()` 与 `modules/digital/mobile.js`）。
+               从前它长在各自的片段根里 ⇒ 药丸切换时跟着旧片段淡出、新那颗再淡入，
+               看着就是「＋ 消失一下」。
+               ⚠️ 初值 `hidden`：记账停在「资产」那一格、或没有任何一格可用时保持收起。
+               ⚠️ 手机端的动作走宿主 `mobile/app.js` 的 `ACTIONS` 表（`data-act` ＋ `#app` 全局委托）
+               ⇒ 这里**只放节点**，⛔ 别在这里绑 click（绑了就是同一个动作触发两次）。 -->
+          <button id="assets-new" class="fab hidden" type="button" title="新建" aria-label="新建">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+          </button>
+        </section>
+        <!-- ⭐⭐ 0.8.10 批 3（方案 30）：**生活记账不再有自己的屏**（原来那个空的
+             <section id="view-ledger"> 已整块删掉 —— 它里面本来就什么都没有，内容全由 JS 写进去）——
+             骨架与屏内委托一起搬进了视图片段 `modules/ledger/mobile-assets-pane.js`，
+             由 `mountModuleSlot()` 挂进「个人资产管理」那一屏（槽名 `assets-pane`）。
+             ⛔ 别把这一屏加回来（理由同上面数码管理那一处）。 -->
+        
+        <!-- ⭐ 「更多」= 底部放不下、又要「点进去用」的那几个模块的入口（0.4.1；0.5.0 起按清单画）。
+             由 `views/more.js` 的 `renderMore()` 重画；⭐ 0.8.5 起末尾还有一块「首页导航栏」
+             （挑哪几个模块摆到底部标签栏、长按拖动排序）。
+             ⚠️ 这里只是入口；每个功能的「开关」在「设置 → 模块功能」里（两处各司其职，别合到一起）。 -->
+        <section class="view hidden" id="view-more"></section>
+        <!-- ⭐ 「设置」自 0.4.1 起是独立的标签页（首屏顺序：今天 / 任务板 / 项目 / 课表 / 更多 / 设置）。
+             内容由 `views/more.js` 的 `renderSettings()` 重画，五块的顺序与电脑版一致：
+             数据来源 / 模块功能 / 账号设置 / 备份与恢复 / 整体备份（仅管理员）。 -->
+        <section class="view hidden" id="view-settings"></section>
+        <!-- ⭐ 0.3.5 对话（方案 06）：底部有「对话」标签（与课表 / 书签同类的主功能）。
+             ⚠️ 这一屏的骨架**一半静态、一半动态**，判据是「重画它会不会打断输入」：
+               · 静态（本文件）：两块屏幕容器、列表页的隐私提示与会话/好友/申请三块容器、
+                 对话页的对方名字与连接状态行、**底部固定输入框**；
+               · 动态（`modules/teamwork/mobile.js` 重画）：上面那些 `*-rows` 里的行与消息气泡。
+             ⚠️ 输入框若进重画范围，每敲一个字就会重建 input、焦点随之丢失
+             （表现是「只能打进去一个字」，与收藏夹搜索框同一个道理）。
+             ⚠️ 渲染函数要写的每一个 id 都必须在这里真实存在 —— 手机版骨架是 HTML 与 JS
+                之间一份没有类型检查的契约，0.3.3 的硬件页就是漏了 `#hw-count` 导致整屏
+                「读取失败」（见 AGENTS §八）。`renderTeamwork()` 的注释里列了完整清单。 -->
+        <section class="view hidden" id="view-teamwork">
+          <div id="teamwork-screen-list">
+            <!-- ⚠️ 加好友的输入框是**静态骨架**（与收藏夹搜索框、硬件搜索框同一条规矩）：
+                 它在 `modules/teamwork/mobile.js` 里被 `teamwork-add-friend` 与「回车」两条路径读，
+                 动态建的话就多一份「节点可能不在」的风险 —— 这正是 0.3.3 的 `#hw-count` 事故形态。
+                 界面上一眼可见，比藏在底部弹层里更好找：加好友是个低频动作，
+                 不该让人先想到「要点右上角那个按钮」。 -->
+            <div class="teamwork-listhead">
+              <div class="m-search">
+                <span class="m-search-ico" aria-hidden="true">👤</span>
+                <input
+                  name="peer"
+                  id="teamwork-add-name"
+                  type="text"
+                  placeholder="对方的登录名"
+                  autocomplete="off"
+                  data-autofill-guard
+                  data-lpignore="true"
+                  data-1p-ignore
+                  data-bwignore="true"
+                  readonly
+                  autocapitalize="off"
+                  autocorrect="off"
+                />
+              </div>
+              <button class="btn sm" type="button" data-act="teamwork-add-friend">＋ 加好友</button>
+ <!-- ⭐ 0.6.x：**对话自己的设置**入口（「对话模块中要有一个设置……
+                   不放到全局设置里」）。⛔ 全局设置页一行都没动，也不占 `settings-pane` 插槽。
+                   ⚠️ 这里刻意只放一个「⚙」：375px 宽的一行里已经有一个搜索框与「＋ 加好友」，
+                   再塞四个字会把输入框挤没。面板标题（「对话设置」）与电脑版逐字一致。
+                   ⚠️⭐ 0.7.7-⑫ 查过：它**不是**灰描边 —— 列表页头部那条 `.teamwork-listhead .btn.sm`
+                   给了它品牌色浅底（`background: var(--brand-soft)` + `color: var(--brand)`），
+                   所以「加一档 `.btn.line` 提可见度」在手机端是空操作（权重 0,2,0 被 0,3,0 压住）。
+                   ⛔ 别在这里加 `line` 类；真要更显眼得单独定（详见 `mobile/app.css` 的同名注释）。
+                   处理见 `modules/teamwork/mobile.js` 的 `handleTeamworkAct()`（懒加载 `mobile-settings.js`）。 -->
+              <button class="btn sm" type="button" data-act="teamwork-settings" aria-label="对话设置" title="对话设置">
+                ⚙
+              </button>
+            </div>
+            <!-- 🔒 隐私提示：方案 §八-6 **要求必须显示在界面上**，不是可选的脚注。
+                 文本由 `modules/teamwork/mobile.js` 的 `TEAMWORK_PRIVACY` 写进来（列表页与对话页同一句话）。 -->
+            <div class="teamwork-privacy" id="teamwork-privacy"></div>
+            <div id="teamwork-list-rows"></div>
+          </div>
+          <div id="teamwork-screen-thread" class="hidden">
+            <div class="teamwork-peerbar">
+              <button class="teamwork-back" type="button" data-act="teamwork-back" aria-label="返回列表">‹</button>
+              <div class="teamwork-peer">
+                <b id="teamwork-peer-name">对话</b>
+                <!-- ⚠️ 这一行**只放对方的信息**（@登录名 / 已拉黑）。
+                     以前这里还并排着半句常驻的「在线」—— 那说的是**我这台设备与服务器
+                     的连接状态**，摆在人名后面就被读成「对方在线」，而本应用根本没有
+ 「对方在线」这个能力（服务端没有任何 presence 数据）。报的
+                     「一直显示对方在线」就是它。连接状态改由下面那条**只在异常时出现**的告警条承载
+                     （见 `teamwork-netwarn` 那一块与 `paintTeamworkStatus()`）。 -->
+                <small class="teamwork-status">
+                  <span id="teamwork-peer-sub"></span>
+                </small>
+              </div>
+              <!-- 关系管理（拉黑 / 删除好友）—— 放进对话页，因为「想删掉这个人」的
+                   时机十有八九就是正看着他这一屏的时候 -->
+              <button class="tb-btn" type="button" data-act="teamwork-peer-manage" aria-label="好友管理">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="5.5" cy="12" r="1.6" />
+                  <circle cx="12" cy="12" r="1.6" />
+                  <circle cx="18.5" cy="12" r="1.6" />
+                </svg>
+              </button>
+            </div>
+            <!-- ⭐ 连接状态条：**只在线路不正常时出现**（正在重连 / 已降级为轮询）。
+                 方案 §七 要的是「降级时界面必须说出来」—— 在线时什么都不用说，
+                 以前那半句常驻的「在线」除了会被误读成「对方在线」，没有别的用途。
+                 文案由 `modules/teamwork/mobile.js` 的 `paintTeamworkStatus()` 写。 -->
+            <div class="teamwork-netwarn hidden" id="teamwork-netwarn" role="status"></div>
+            <div class="teamwork-scroll" id="teamwork-history"></div>
+            <!-- ⚠️ 底部固定输入框：`#view-teamwork` 是 flex 纵向布局，这块是最后一节、
+                 不参与滚动（`.teamwork-scroll` 才是滚动区）。它必须留在静态骨架里。 -->
+            <div class="teamwork-input">
+ <!-- ⭐ 0.8.54（「和好友的聊天框左侧加个圆圈加号图标，这个图标的高度要和聊天框的高度一致」）：
+                   圆圈 ＋ 在输入框**左侧**，直径与输入框收起时的高度一致（46px，见 app.css 的 `.teamwork-plus`）。 -->
+              <button class="teamwork-plus" type="button" data-act="teamwork-plus" aria-label="发送图片或任务">＋</button>
+              <textarea id="teamwork-input" rows="1" placeholder="说点什么…" maxlength="2000"></textarea>
+              <button class="btn primary" type="button" data-act="teamwork-send">发送</button>
+              <!-- ⭐ 0.8.54：发图片用的隐藏文件框（只收位图；⛔ 不收 svg —— 可内联执行脚本）。
+                    ⭐ 0.8.54：入口是「发送」菜单里那张 `<label for="teamwork-img-file">`，
+                    ⛔ 不要再用 JS 去 `click()` 它（真机 WebView 对隐藏 input 不弹选择器）。 -->
+              <input id="teamwork-img-file" class="teamwork-img-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" />
+            </div>
+          </div>
+        </section>
+ <!-- ⭐ 0.8.9：`#view-ai` **已撤** —— AI 的配置全是设置，
+             并入设置页的「AI 设置」一栏（模块贡献分栏）；「更多」里那一行、底部标签一起撤掉。
+             ⛔ 别把这一屏加回来：那会是「同一份配置有两个门」。
+             ⚠️ 它的界面仍**可达**（设置分栏片段 `modules/ai/mobile-settings-pane.js` 动态 import
+             `modules/ai/shared.js`），所以「孤岛模块」那条检查不会红。 -->
+      </main>
+
+      <!-- 情境新建（今天/任务板/更多 → 新建任务，项目 → 新建项目） -->
+      <button class="fab" id="fab" type="button" aria-label="新建">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+      </button>
+
+      <!-- 底部标签栏 -->
+      <nav class="tabbar" id="tabbar" aria-label="主导航">
+        <button type="button" data-tab="today" class="on">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3.5" y="5" width="17" height="15.5" rx="3.5" />
+            <path d="M8 3v4M16 3v4M3.5 10h17" />
+            <path d="M9 14.5l2 2 4-4" />
+          </svg>
+          <i>今天</i>
+        </button>
+        <button type="button" data-tab="board">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3.5" y="3.5" width="7.5" height="7.5" rx="2.4" />
+            <rect x="13" y="3.5" width="7.5" height="7.5" rx="2.4" />
+            <rect x="3.5" y="13" width="7.5" height="7.5" rx="2.4" />
+            <rect x="13" y="13" width="7.5" height="7.5" rx="2.4" />
+          </svg>
+          <i>任务</i>
+        </button>
+        <!-- ⭐ 0.5.0 模块化重构：占底部标签的模块**不写在这里** ——
+             由 `app.js` 的 `renderModuleTabs()` 按「服务端 `GET /api/bootstrap` 的 `modules` 清单 ×
+             本端接线表 `mobile/modules.js` × **本账号的 `nav_tabs` 偏好**」生成，
+             插在 `#tab-more` **前面**。
+             ⭐ 0.8.5 导航排序：摆哪几颗**由用户说了算**（「更多 → 首页导航栏」里点选 + 长按拖动排序，
+             最多两颗；判据在 `core/modules.js` 的 `navTabItems()`）；没排过时才回落到接线表里
+             标了 `tab.def` 的那两颗（对话 + 课表）。固定四颗仍是 今天 / 任务板 / 更多 / 设置 ——
+             「今天」天然移不动、也藏不掉。
+             ⚠️ 所以删掉 `app/modules/<模块>/` 那个目录，底部就自动少一个标签。
+             ⛔ 别把标签挪回静态 HTML —— 那样「删目录 ⇒ 界面少一个入口」立刻失效。
+             ⚠️ 生成出来的 id 仍是 `#tab-timetable` / `#tab-teamwork`（探针按它找，见 ttt/tools/settings-probe.js）。
+             ⚠️ 按当前账号偏好关掉它时节点**留着、只加 `hidden`**（不是删掉）—— 探针与「点了就生效」
+             的即时反馈都依赖这个节点还在。
+             ⭐ 对话的未读红点（`#tab-teamwork-dot`）由 `modules/teamwork/mobile.js` 的 `updateTeamworkUnread()`
+             **就地创建并写数**（标签按钮是动态生成的，红点跟着按钮走）—— 这里不写死。 -->
+ <!-- ⛔ 0.8.16（「手机端：更多改名为**导航栏设置**，并移到设置中」）——
+             这一颗**已撤**。它原来那两件事（模块入口列表 ＋ 挑哪几个摆到底栏）整块搬进了
+             设置页的「导航栏设置」那一块（见 `views/more.js` 的 `renderSettings()`）。
+             底栏从此是「今天 / 任务 / 模块×2 / 设置」五颗（模块×2 出厂是收藏夹 ＋ 资产）。
+             ⚠️ `#view-more` 那一屏的**节点留着**（`renderMore()` 仍在用它，只是底栏不再有入口）——
+             ⛔ 别为了「一起删干净」把它拆了：那会让 `renderMore()` 里那句 `$('#view-more')` 取到 null。 -->
+        <!-- ⭐ 「设置」自 0.4.1 起是**自己的标签**（此前它占着内部 id `more`，界面上叫「设置」） -->
+ <!-- ⭐⭐ 0.8.30（「全局设置改造」）：这一颗从「设置」改成「**更多**」——
+             0.8.16 那次是把「更多」并进设置，这一版拆回来，因为**两件事的性质变了**：
+             「更多」是**目录**（进去用各个模块），「设置」现在**重**（11 栏、每栏一个模块的全部）。
+             ⇒ 底栏只留目录那一颗；「设置」降成「更多」页里的一张卡（见 `views/more.js` 的 `renderMore()`）。
+             ⚠️ `data-tab` 必须是 `more`（`switchTab()` 与 `hashTab()` 两份名单里都有它）；
+             ⚠️ 节点 id 一并改成 `tab-more`（全仓原本没有别处引用 `tab-settings`，已核过）。 -->
+        <button type="button" data-tab="more" id="tab-more">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="5" cy="12" r="1.7" />
+            <circle cx="12" cy="12" r="1.7" />
+            <circle cx="19" cy="12" r="1.7" />
+          </svg>
+          <i>更多</i>
+        </button>
+      </nav>
+
+      <!-- 底部弹层（表单 / 详情 / 确认） -->
+      <div class="scrim" id="scrim"></div>
+      <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+        <div class="grab" aria-hidden="true"></div>
+        <div class="sheet-head">
+          <h3 id="sheet-title"></h3>
+          <button class="tb-btn" type="button" data-act="sheet-close" aria-label="关闭">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        </div>
+        <div class="sheet-body" id="sheet-body"></div>
+        <div class="sheet-foot" id="sheet-foot"></div>
+      </div>
+
+      <div class="toast" id="toast" role="status"></div>
+    </div>
+
+    <!-- ⭐ 0.2.0：前端改浏览器**原生 ESM**（零构建、零打包，铁律 1）。 -->
+    <!-- ⭐ 首屏模块预加载（0.2.0 性能，理由同电脑版 index.html）：
+         ESM 逐层发现依赖会造成 5~6 批串行往返，这里把可达模块一次声明出来。
+         ⚠️ 清单由 `ttt/test/frontend-modules.test.js` 与真实模块图核对，漏登记会测试失败。 -->
+    <link rel="modulepreload" href="data.js" />
+    <link rel="modulepreload" href="modules.js" />
+    <link rel="modulepreload" href="state.js" />
+    <link rel="modulepreload" href="ui.js" />
+    <link rel="modulepreload" href="views/more.js" />
+    <link rel="modulepreload" href="views/today.js" />
+    <!-- ⭐ 模块自己的前端（0.5.0 模块化重构）：一个模块一个目录，前后端模块名对齐 -->
+    <!-- ⭐ 0.8.7（方案 27）：网址收藏夹与密码库**不再有自己的屏**（并进 `webpass` 那一屏，
+         界面由视图片段动态挂载）⇒ 它们的静态 import 已从 `mobile/app.js` 摘掉 ⇒
+         这三行必须跟着删（`frontend-modules.test.js` 钉着「modulepreload ⟷ 入口静态 import 图」的
+         **双向等式**：多一行也会红）。⚠️ 它们仍**可达**（视图片段 / 动态 import 都指着它们）。 -->
+    <!-- ⭐ 0.8.7（方案 26）：日历**不再有自己的屏** ⇒ 它不在**首屏 modulepreload** 清单里 ——
+         它的界面由「今天」通过插槽**动态 import**（`core/slots.js` 的约定路径）。
+         ⚠️⭐ 这是**刻意**的（决策 47：懒加载模块不进 modulepreload）：这份清单必须与
+         「入口的静态 import 图」**严格相等**（`frontend-modules.test.js` 钉着这条双向等式），
+         而日历已经从 `mobile/app.js` 的静态 import 里摘掉了 ⇒ 这里那四行必须跟着删。
+         ⚠️ 它的静态依赖（`shared.js` / `lunar.js` / `life.js` / `mobile.js`）也不再登记 ——
+         片段第一次挂上时它们会自己按需取回（看板上多一次往返，换的是首屏少四个请求）。 -->
+    <!-- ⭐ 0.8.0 记账（方案 20）：静态 import（它是「更多」里的一屏 = 主功能入口，不是低频弹层）。
+         ⚠️ `calc.js`（两端共用的展示口径）也要登记：`mobile.js` / `desktop.js` 都引它，
+         漏了它「孤岛检查」与 `modulepreload` 等式都会红。
+         ⚠️ 屏内动作走 `mobile/app.js` 的 `ACTIONS` 表 + `[data-act]` 事件委托。 -->
+    <link rel="modulepreload" href="../modules/ledger/mobile.js" />
+    <link rel="modulepreload" href="../modules/ledger/calc.js" />
+    <!-- ⭐ 0.8.1 记账 2 期（方案 21 §7.5 / C-39）：流水那一套纯展示函数**另开一份**
+         （`calc.js` 已经 1100+ 行，再塞就破了「JS > 800 行该拆」那条线）。
+         ⚠️ `mobile.js` **静态 import** 它 ⇒ 它属「入口可达」，必须登记 ——
+         漏了这条 `frontend-modules.test.js` 的 `modulepreload` 双向等式当场红。 -->
+    <link rel="modulepreload" href="../modules/ledger/entry-calc.js" />
+    <!-- ⭐ 0.8.6 行程（方案 25）：`mobile.js` 静态 import `./shared.js`（两端共用的几何 / 统计 / 文案）
+         ⇒ 两份都属「入口可达」，必须登记 —— 漏了这条 `frontend-modules.test.js` 的
+         `modulepreload` 双向等式当场红（多一行也会红）。 -->
+    <link rel="modulepreload" href="../modules/time/trip-mobile.js" />
+    <link rel="modulepreload" href="../modules/time/trip-shared.js" />
+    <link rel="modulepreload" href="../modules/time/trip-recorder.js" />
+    <link rel="modulepreload" href="../modules/time/trip-track.js" />
+    <!-- ⭐ 0.8.9：人生日历的口径随它搬进行程（与电脑端同一条） -->
+    <link rel="modulepreload" href="../modules/time/trip-life.js" />
+    <link rel="modulepreload" href="../modules/teamwork/mobile.js" />
+    <link rel="modulepreload" href="../modules/teamwork/shared.js" />
+    <!-- ⭐ 0.8.7（方案 28）：`../modules/idea/mobile.js` 的那一条**已删** —— 随手记不再是独立一屏，
+         它的界面挂进「任务板」那一屏，宿主对它改成了**动态** `import()`（点了才取）。
+         ⚠️ 这条清单必须与「入口静态 import 图」**双向相等**（`frontend-modules.test.js` 钉着）。 -->
+    <!-- ⭐ 0.3.1 数码管理（0.8.10 由「NAS硬件管理」改名，方案 30）：`mobile/app.js` **静态**
+         import 它（它是「更多」里的一屏 = 主功能入口），所以这两条跟着目录改名。
+         ⚠️ 表名 / 接口前缀仍是 `hardware`，文件名与导入名一个字没改。
+         ⚠️⭐ `../modules/assets/mobile.js` **刻意不进这份清单** —— 它是**动态** `import()`
+         （与 `webpass` 同款：静态 import 会让「删掉那个目录」连累宿主页），而这份清单必须与
+         「入口的**静态** import 图」双向相等（`frontend-modules.test.js` 钉着，多一行也会红）。 -->
+    <link rel="modulepreload" href="../modules/digital/mobile.js" />
+    <link rel="modulepreload" href="../modules/digital/shared.js" />
+    <!-- ⭐ 0.7.5 番茄钟（方案 17 §7.2）：静态 import（它是「更多」里的一屏 = 主功能入口，不是低频弹层）。
+         ⚠️ 屏内动作走 `mobile/app.js` 的 `ACTIONS` 表 + `[data-act]` 事件委托。 -->
+    <link rel="modulepreload" href="../modules/time/pomodoro-mobile.js" />
+    <!-- ⭐ 任务板：三屏都是**静态** import，所以三条都要登记 —— 0.5.0 批次 6b 起住模块目录 -->
+    <link rel="modulepreload" href="../modules/tasks/mobile-board.js" />
+    <link rel="modulepreload" href="../modules/tasks/mobile-projects.js" />
+    <link rel="modulepreload" href="../modules/tasks/mobile-tasks.js" />
+    <link rel="modulepreload" href="../modules/tasks/shared.js" />
+    <!-- ⭐ 课表：手机版两屏都是**静态** import（与电脑版不同），所以两条都要登记 -->
+    <link rel="modulepreload" href="../modules/time/timetable-mobile.js" />
+    <!-- ⭐⭐ 0.8.13（方案 33）：三块并成一个模块 ⇒ 入口是 `home-mobile.js`（它静态 import
+         上面三个子前端），清单必须与静态 import 图**严格相等**（多一行少一行都会红）。 -->
+    <link rel="modulepreload" href="../modules/time/home-mobile.js" />
+    <link rel="modulepreload" href="../modules/time/home-shared.js" />
+    <link rel="modulepreload" href="../modules/time/pomodoro-shared.js" />
+    <link rel="modulepreload" href="../modules/time/timetable-mobile-edit.js" />
+    <link rel="modulepreload" href="../core/api.js" />
+    <link rel="modulepreload" href="../core/backup.js" />
+    <!-- ⭐ 0.5.2：「绑定网址」下拉的唯一实现（任务表单与对话弹窗共用） -->
+    <link rel="modulepreload" href="../core/bookmarks.js" />
+    <!-- ⭐ 0.3.5：对话的实时通道（SSE + 降级轮询），两端共用一份实现 -->
+    <link rel="modulepreload" href="../modules/teamwork/teamwork-stream.js" />
+    <!-- ⭐ 0.7.5 番茄钟（方案 17 §4.6）：**秒级共用时钟** —— 全项目唯一的「现在」的秒级提供者。
+         两端各有一份 preload 清单（本页深一层，所以写 `../core/`）—— 它与电脑版索引同一份文件。 -->
+    <link rel="modulepreload" href="../core/clock.js" />
+    <link rel="modulepreload" href="../core/constants.js" />
+    <link rel="modulepreload" href="../core/dashboard.js" />
+    <link rel="modulepreload" href="../core/date.js" />
+    <link rel="modulepreload" href="../core/dom.js" />
+    <!-- ⭐⭐ 0.8.14（方案 34 §1）：周期任务的**期展开**（与电脑版同一份理由）。 -->
+    <link rel="modulepreload" href="../core/recur.js" />
+    <link rel="modulepreload" href="../core/slots.js" />
+    <link rel="modulepreload" href="../core/modules.js" />
+    <link rel="modulepreload" href="../core/task-create.js" />
+    <link rel="modulepreload" href="../core/task.js" />
+    <link rel="modulepreload" href="../core/timetable.js" />
+    <!-- ⭐ 0.8.15（方案 35 §3.1）：`core/transition.js`（与电脑版同一份理由 —— 静态被引 ⇒
+         必须进这份双向等式清单）。⚠️ `mobile/app.js` 的 `switchTab()` 会静态 import 它。 -->
+    <link rel="modulepreload" href="../core/transition.js" />
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

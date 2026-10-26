@@ -1,0 +1,13 @@
+{
+  "name": "vault",
+  "title": "密码库",
+  "icon": "🔐",
+  "order": 50,
+  "defaultEnabled": true,
+  "switchField": "hide_vault",
+  "apiPrefix": "vault",
+  "tables": ["vault_meta", "vault_items"],
+  "depends": [],
+  "archDoc": "16-密码库.md",
+  "test": "vault.test.js"
+}

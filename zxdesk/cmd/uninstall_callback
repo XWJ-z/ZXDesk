@@ -1,0 +1,83 @@
+#!/bin/bash
+# 卸载 ZXDesk（zxdesk）飞牛原生应用 —— 按卸载向导的选择处理用户数据。
+#
+# 规则（四条，一条都不能省）：
+#   ① 默认保留：没选、参数缺失、系统异常卸载 —— 一律不动数据；
+#   ② 先过卸载确认：「我已知晓，确认卸载」没勾（`wizard_uninstall_ack` 不是 yes）→ 保留；
+#   ③ 双条件才删：「选择删除数据」＋「确认已导出备份」同时成立才执行，
+#      只选一样（最常见的是选了删除却没勾确认）→ 保留，并写日志说明原因；
+#   ④ 只删自己的目录：路径形状必须是 .../zxdesk/data，且目录里得有我们的库文件，
+#      形状不对或不像数据目录 —— 跳过，绝不对上级目录动手。
+#
+# 数据位置：安装时由 config/resource 的 data-share 决定，路径在 TRIM_DATA_SHARE_PATHS
+# （冒号分隔，可能不止一个）。⛔ 不是 TRIM_PKGVAR —— 那里只有日志与 pid。
+
+LOG_FILE="${TRIM_PKGVAR}/app.log"
+
+log_msg() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE" 2>/dev/null
+}
+
+ACTION="${wizard_data_action:-keep}"
+CONFIRM="${wizard_backup_confirmed:-}"
+
+if [ "$ACTION" != "remove" ]; then
+  log_msg "卸载：按用户选择保留数据（wizard_data_action=${ACTION}）"
+  exit 0
+fi
+
+# 卸载确认（向导里是勾选框，默认不勾）。这里再判一次是**防御**：
+# 万一前端没拦住、或系统在异常路径下调用，仍按「没勾就不删」处理。
+# ⚠️ checkbox 传下来的值可能是 `yes`，也可能是数组字面量 `["yes"]` 或 `yes,...` —— 用通配兜住。
+case "${wizard_uninstall_ack:-}" in
+  *yes*|*true*)
+    ;;
+  *)
+    log_msg "卸载：没有收到卸载确认（wizard_uninstall_ack=${wizard_uninstall_ack:-空}）—— 已保留数据"
+    exit 0
+    ;;
+esac
+
+case "$CONFIRM" in
+  *yes*|*true*)
+    ;;
+  *)
+    log_msg "卸载：用户选了「删除数据」但备份确认没有选「已导出」（wizard_backup_confirmed=${CONFIRM:-空}）—— 已保留数据，未删除任何文件"
+    exit 0
+    ;;
+esac
+
+IFS=':' read -r -a DIRS <<< "${TRIM_DATA_SHARE_PATHS:-}"
+
+for p in "${DIRS[@]}"; do
+  [ -n "$p" ] || continue
+  p="${p%/}"
+
+  # 守卫一：路径形状必须是我们自己的共享目录
+  case "$p" in
+    */zxdesk/data)
+      ;;
+    *)
+      log_msg "卸载：跳过非本应用数据目录 $p"
+      continue
+      ;;
+  esac
+
+  # 守卫二：目录里得有 ZXDesk 的库文件，才认定它是数据目录
+  if [ ! -d "$p" ]; then
+    log_msg "卸载：$p 不存在，无需删除"
+    continue
+  fi
+  if [ ! -f "$p/zxdesk.db" ] && [ ! -f "$p/zxdesk.json" ]; then
+    log_msg "卸载：$p 里没有 ZXDesk 的库文件，判定不是本应用数据目录，未删除"
+    continue
+  fi
+
+  if rm -rf "$p"; then
+    log_msg "卸载：已按用户确认删除数据目录 $p"
+  else
+    log_msg "卸载：删除 $p 失败（权限或占用），数据仍在，用户可手工清理"
+  fi
+done
+
+exit 0

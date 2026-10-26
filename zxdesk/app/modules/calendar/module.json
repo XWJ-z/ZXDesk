@@ -1,0 +1,13 @@
+{
+  "name": "calendar",
+  "title": "日历",
+  "icon": "📆",
+  "order": 46,
+  "defaultEnabled": true,
+  "switchField": null,
+  "apiPrefix": "calendar",
+  "tables": ["calendar_events", "calendar_prefs"],
+  "depends": [],
+  "archDoc": "22-日历.md",
+  "test": "calendar.test.js"
+}

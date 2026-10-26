@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  API 33+ 的主题化图标（Android 13 起「按壁纸取色」会把图标变单色）。
+  ⚠️ monochrome 只放 v33：低版本解析器不认识这个子标签，别塞进 v26 那份。
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

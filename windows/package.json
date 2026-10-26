@@ -1,0 +1,29 @@
+{
+  "name": "zxdesk-windows",
+  "productName": "ZXDesk",
+  "version": "0.2.1",
+  "description": "ZXDesk 工作台 Windows 客户端（Electron 绿色版壳）",
+  "type": "module",
+  "main": "src/main/index.js",
+  "private": true,
+  "author": "ZXDesk",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"tests/**/*.test.js\"",
+    "check": "node build/check-syntax.js",
+    "pack:win": "node build/pack.js",
+    "zip": "python3 build/make-zip.py build/out/ZXDesk-win32-x64 ../../release/zxdesk-windows-0.1.6-x64.zip",
+    "mock": "node tests/mock/server.js",
+    "doctor": "node build/doctor.js",
+    "dist": "node build/dist.js",
+    "verify:zip": "python3 build/verify-zip.py",
+    "dist:setup": "node build/make-setup.js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "electron": "45.0.0",
+    "@electron/packager": "^18.3.6",
+    "resedit": "^2.0.3"
+  }
+}

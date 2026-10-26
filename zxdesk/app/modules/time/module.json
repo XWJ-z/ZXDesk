@@ -1,0 +1,30 @@
+{
+  "name": "time",
+  "title": "番茄钟与日程表",
+  "icon": "⏳",
+  "order": 20,
+  "defaultEnabled": true,
+  "switchField": ["hide_timetable", "hide_pomodoro", "hide_trip"],
+  "apiPrefix": ["timetable", "pomodoro", "trip", "time"],
+  "tables": [
+    "time_timetable_terms",
+    "time_timetable_blocks",
+    "time_timetable_periods",
+    "time_timetable_courses",
+    "time_timetable_sessions",
+    "time_timetable_adjustments",
+    "time_timetable_day_rules",
+    "time_timetable_day_notes",
+    "time_timetable_school_schedules",
+    "time_timetable_school_grids",
+    "time_pomodoro_sessions",
+    "time_pomodoro_prefs",
+    "time_trips",
+    "time_trip_tickets",
+    "time_trip_points",
+    "time_trip_prefs"
+  ],
+  "depends": [],
+  "archDoc": "27-番茄钟与日程表.md",
+  "test": null
+}

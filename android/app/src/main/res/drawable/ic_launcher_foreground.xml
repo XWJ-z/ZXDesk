@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  应用图标前景：白色 ZX 字符标（几何拼出来的，⛔ 不是文字，缩到 48px 也不会糊）。
+
+  ⚠️ 自适应图标的坐标要按「可见区」算，不是按 108 画布：系统把 108x108 图层的**中心 72x72**
+  铺满图标，所以画布坐标 1 单位 = 图标宽度的 1/72。
+  图形定为 42x26（≈ 图标宽度的 58%、字高的 36%），压 x 33~75、y 41~67，中心 (54,54)；
+  最远角半径 24.7 < 安全圆半径 33 ⇒ 圆形/圆角方形遮罩都切不到笔画。
+  笔画按「垂直方向 ≈5.5dp」配平：横杠 5.5、X 斜杠水平宽 6（斜线看起来会更细）。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Z：上横、斜、下横 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M33,41 h17 v5.5 h-17 z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M43.6,46.5 h6.4 L39.4,61.5 h-6.4 z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M33,61.5 h17 v5.5 h-17 z" />
+
+    <!-- X：两条等粗斜杠 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M58,41 h6 L75,67 h-6 z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M69,41 h6 L64,67 h-6 z" />
+</vector>

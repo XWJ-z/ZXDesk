@@ -1,0 +1,439 @@
+/**
+ * 0.1.4 app.css —— app.js 视图的布局（两形态共用；壳差异只由 popup.css / sidepanel.css 定尺寸）。
+ * 组件样式见 base.css，颜色/字号见 tokens.css。
+ */
+
+/* ---- 连接条（吸顶） ---- */
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg);
+  padding: 8px 0;
+  margin-bottom: 12px;
+}
+.bar-host {
+  font-weight: 600;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.icon-btn {
+  flex: none;
+  border: 0;
+  background: none;
+  color: var(--ink-2);
+  font-size: 15px;
+  padding: 4px 6px;
+  border-radius: var(--radius-input);
+}
+.icon-btn:hover {
+  background: var(--surface);
+}
+.pop-anchor summary.more-btn {
+  padding: 2px 10px;
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-input);
+  cursor: pointer;
+}
+.pop-anchor summary.more-btn:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+/* ---- 连接卡（未连接时居中） ---- */
+.connect-card {
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  padding: 16px;
+  margin-top: 24px;
+}
+.connect-card input {
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+}
+
+/* ---- 已连接主体 ---- */
+.bm-form {
+  margin-bottom: 8px;
+}
+.view-all {
+  width: 100%;
+  text-align: center;
+  margin-top: 8px;
+}
+/* 条目区独立滚动（popup 由壳 CSS 定 flex；侧边栏整页滚，这里无副作用） */
+.list-scroll {
+  min-height: 0;
+}
+
+/* ---- 设置视图头部（0.1.5 E1）⚠️ ⛔ 不用 .row：base.css 的 `.row button { flex:1 }` 会把
+   返回箭头撑成整行长条（那根白条会把 h1 挤到框外）。
+   改专用三列网格：左箭头 32 / 中间标题自适应 / 右侧对称留白。 ---- */
+.s-head {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: grid;
+  grid-template-columns: 32px 1fr 32px;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 4px;
+  padding: 4px 0;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+.s-head h1 {
+  margin: 0;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.s-head-pad {
+  display: block;
+  width: 32px;
+  height: 32px;
+}
+/* 返回键：视觉 32×32、命中区 40×40（::after 外扩 4px），无边框无底色，hover 才给底 */
+.s-head .back-btn {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: none;
+  border-radius: 8px;
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1;
+}
+.s-head .back-btn::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+}
+.s-head .back-btn:hover {
+  background: var(--bg);
+}
+.settings {
+  overflow-x: hidden; /* 280px 窄栏兜底：⛔ 不横向滚 */
+}
+.group > h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+  margin: 16px 4px 8px;
+}
+.settings .panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  padding: 12px;
+}
+.settings .panel input {
+  width: 100%;
+  padding: 8px 10px;
+  margin: 8px 0;
+}
+.s-conn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--ink);
+  margin: 0 0 4px;
+}
+.s-host {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.danger-btn {
+  color: var(--danger);
+  border-color: var(--line);
+}
+.danger-btn:hover {
+  border-color: var(--danger);
+}
+.settings #granted-line,
+.settings .hint[hidden] {
+  word-break: break-all;
+}
+
+/* 预览卡（外观 3 张 / 打开方式 2 张；全部 CSS 画，⛔ 图片） */
+.cards3 {
+  display: grid;
+  grid-template-columns: repeat(3, 96px);
+  gap: 12px;
+}
+.cards2 {
+  display: grid;
+  grid-template-columns: repeat(2, 140px);
+  gap: 12px;
+}
+.pick-card {
+  position: relative;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  padding: 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  color: var(--ink);
+}
+.pick-card.on {
+  border-color: var(--brand);
+}
+.pick-card.on::after {
+  content: '✓';
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  color: var(--brand);
+  font-weight: 700;
+}
+.pick-card .cap {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.prev {
+  width: 96px;
+  height: 64px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  box-sizing: border-box;
+}
+.prev-light {
+  background: #ffffff;
+}
+.prev-light::before {
+  content: '';
+  display: block;
+  margin: 8px;
+  width: 60%;
+  height: 6px;
+  border-radius: 3px;
+  background: #1f2430;
+  box-shadow: 0 12px 0 -2px #c9cfda;
+}
+.prev-dark {
+  background: #1f2430;
+}
+.prev-dark::before {
+  content: '';
+  display: block;
+  margin: 8px;
+  width: 60%;
+  height: 6px;
+  border-radius: 3px;
+  background: #e8ecf3;
+  box-shadow: 0 12px 0 -2px #3a4356;
+}
+.prev-auto {
+  background: linear-gradient(135deg, #ffffff 49.5%, #1f2430 50.5%);
+  position: relative;
+}
+.prev-auto::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 12px;
+  width: 34%;
+  height: 6px;
+  border-radius: 3px;
+  background: #1f2430;
+}
+.prev-auto::after {
+  content: '';
+  position: absolute;
+  right: 8px;
+  bottom: 12px;
+  width: 34%;
+  height: 6px;
+  border-radius: 3px;
+  background: #e8ecf3;
+}
+.prev-mode {
+  width: 120px;
+  height: 76px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  position: relative;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.prev-mode .mini {
+  position: absolute;
+  right: 10px;
+  top: 12px;
+  width: 56px;
+  height: 48px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+.mini::before {
+  content: '';
+  display: block;
+  margin: 6px;
+  width: 60%;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--brand);
+}
+.prev-mode .side {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 36px;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+}
+.side::before {
+  content: '';
+  display: block;
+  margin: 8px 6px;
+  width: 60%;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--brand);
+}
+
+/* ---- 0.1.5 E2：行内编辑（侧边栏窄，不弹全屏层） ---- */
+.li-edit {
+  display: grid;
+  gap: 6px;
+  padding: 2px 0 10px;
+}
+.li-edit .field input,
+.li-edit input.e-title {
+  flex: 1;
+  min-width: 0;
+}
+.li-edit .tag-edit {
+  display: grid;
+  gap: 6px;
+}
+.li-edit .row button {
+  flex: 1;
+}
+
+/* ---- 0.1.5 E3：密码库只读 ---- */
+/* 掩码小按钮（12px、白底、描边、圆角 999、padding 2×8）—— 手机端 m-mini 同款 */
+.key-btn {
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-chip);
+  background: var(--surface);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.key-btn:hover {
+  color: var(--ink);
+  background: var(--bg);
+}
+.vault-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(15, 18, 26, 0.38);
+}
+/* ⚠️ [hidden] 的 UA 规则没有 !important，会被上面的 display:flex 盖掉 ⇒ 必须显式关 */
+.vault-mask[hidden] {
+  display: none;
+}
+.vault-card {
+  width: 100%;
+  max-width: 320px;
+  max-height: 100%;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow);
+}
+.vault-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.vault-head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 14px;
+}
+.vault-rows {
+  display: grid;
+  gap: 6px;
+}
+.vault-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.vlabel {
+  flex: none;
+  width: 40px;
+  color: var(--ink-2);
+}
+.vvalue {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.btn-mini {
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.btn-mini:hover {
+  background: var(--bg);
+  color: var(--ink);
+}
+.vault-note {
+  margin: 10px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}

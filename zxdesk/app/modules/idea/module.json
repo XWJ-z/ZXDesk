@@ -1,0 +1,13 @@
+{
+  "name": "idea",
+  "title": "随手记",
+  "icon": "💡",
+  "order": 35,
+  "defaultEnabled": true,
+  "switchField": "hide_idea",
+  "apiPrefix": "idea",
+  "tables": ["idea_items", "idea_tags", "idea_tag_links"],
+  "depends": [],
+  "archDoc": "19-灵感库.md",
+  "test": "idea.test.js"
+}

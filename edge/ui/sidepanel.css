@@ -1,0 +1,12 @@
+/* sidepanel 壳 —— 宽自适应（≥280 不破版）、高 100vh（任务单 §4.2）；组件见 base.css */
+body {
+  margin: 0;
+  font: 13px/1.6 var(--font);
+  color: var(--ink);
+  background: var(--bg);
+  min-height: 100vh;
+}
+#app {
+  padding: 12px;
+  box-sizing: border-box;
+}

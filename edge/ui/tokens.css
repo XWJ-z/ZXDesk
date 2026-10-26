@@ -1,0 +1,42 @@
+/**
+ * 0.1.4 设计令牌 —— 照 ZXDesk 网页 `app/public/core/tokens.css` 摘的插件内一份；
+ * 深色一套与浅色一一对应（任务单 §六，⛔ 不自造第二套语义）。
+ * ⛔ 各 css 自造颜色/字号：色板、圆角、字号、间距只住这里。
+ */
+:root {
+  --brand: #4f46e5;
+  --brand-weak: #eef2ff;
+  --brand-ink: #4338ca;
+  --bg: #eef1f6;
+  --surface: #ffffff;
+  --ink: #1f2430;
+  --ink-2: #5c6470;
+  --line: #e4e9f1;
+  --danger: #ef4444;
+  --danger-weak: #fff1f2;
+  --ok: #10b981;
+  --shadow: 0 4px 16px rgba(31, 36, 48, 0.1);
+  --radius-input: 10px;
+  --radius-card: 14px;
+  --radius-chip: 999px;
+  --font: system-ui, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+}
+:root[data-theme='dark'] {
+  --brand: #818cf8;
+  --brand-weak: #262b3d;
+  --brand-ink: #a5b4fc;
+  --bg: #141821;
+  --surface: #1f2430;
+  --ink: #e8ecf3;
+  --ink-2: #9aa4b5;
+  --line: #2c3440;
+  --danger: #f87171;
+  --danger-weak: #3a1f24;
+  --ok: #34d399;
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+/* 焦点环全站统一 */
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}

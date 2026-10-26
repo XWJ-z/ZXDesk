@@ -1,0 +1,13 @@
+{
+  "name": "tasks",
+  "title": "任务与随手记",
+  "icon": "🗂",
+  "order": 10,
+  "defaultEnabled": true,
+  "switchField": null,
+  "apiPrefix": ["tasks", "projects", "daily", "export", "search", "summary", "today-count", "occurrences"],
+  "tables": ["projects", "project_tasks", "daily_tasks", "task_occurrences"],
+  "depends": [],
+  "archDoc": "05-任务板.md",
+  "test": null
+}

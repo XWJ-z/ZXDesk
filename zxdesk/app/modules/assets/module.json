@@ -1,0 +1,13 @@
+{
+  "name": "assets",
+  "title": "个人资产管理",
+  "icon": "💼",
+  "order": 38,
+  "defaultEnabled": true,
+  "switchField": null,
+  "apiPrefix": "assets",
+  "tables": ["asset_groups", "asset_items"],
+  "depends": [],
+  "archDoc": "26-个人资产管理.md",
+  "test": "assets.test.js"
+}

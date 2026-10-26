@@ -1,0 +1,130 @@
+#!/bin/bash
+# ZXDesk（zxdesk）飞牛原生应用生命周期脚本
+# 管理 start / stop / status
+#
+# 架构：server.js 一个进程**同时**监听两条入口（两个 http.Server 实例，共用同一个请求处理函数）：
+#   ① TCP 端口（默认 8990，占用则顺延）—— 局域网直连 / Windows 版 / 开发与测试；
+#   ② 飞牛统一网关的 Unix Socket（${TRIM_APPDEST}/app.sock）—— 桌面图标走的就是这条，见决策 65。
+#      ⚠️ 为什么要有第二条：飞牛开强制 HTTPS 后，端口服务那条 iframe 会被浏览器按混合内容整块拦掉
+#      （从桌面打开是一片空白，应用代码一秒都没运行）。网关入口跑在系统访问域名下，https 天然成立。
+#      应用挂在 /app/zxdesk 前缀下（飞牛**不会**替我们剥掉这层前缀，所以 GATEWAY_PREFIX 必须传进去）。
+# 数据放在 resource 声明的 data-share 目录（卸载/升级保留）。
+# 首次启动 server.js 自动初始化 SQLite 数据库并写入示例数据。
+
+LOG_FILE="${TRIM_PKGVAR}/app.log"
+PID_FILE="${TRIM_PKGVAR}/app.pid"
+export PATH=/var/apps/nodejs_v24/target/bin:$PATH
+
+# ⭐ 0.5.0 批次 6a：应用代码目录由 `server` 改名为 `core`（`server/` → `app/core/`）。
+#   ⚠️ 这一行与 `cmd/reset-admin` 的两个候选路径**必须与 `fnos/zxdesk/app/` 下的真实目录名一致** ——
+#   写错的后果是「装完起不来」且日志里只有一句找不到目录。`ttt/test/cmd-dir.test.js` 把它钉住了。
+APP_DIR="${TRIM_APPDEST}/core"
+DATA_DIR="${TRIM_DATA_SHARE_PATHS%%:*}"
+ZXDESK_PORT=8990
+# ⭐ 统一网关入口（0.4.0，决策 65）：前缀要与 app/ui/config 的 gatewayPrefix 逐字一致，
+#   Socket 要放在 APPDEST（= 已安装应用的 target 目录，与 app/ui/config 的 gatewaySocket: "app.sock" 对应）。
+GATEWAY_PREFIX="/app/zxdesk"
+SOCKET_PATH="${TRIM_APPDEST}/app.sock"
+
+log_msg() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+}
+
+status_app() {
+  if [ -f "$PID_FILE" ]; then
+    local pid
+    pid="$(head -n 1 "$PID_FILE" | tr -d '[:space:]')"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+    rm -f "$PID_FILE"
+  fi
+  return 1
+}
+
+start_app() {
+  if status_app; then
+    log_msg "ZXDesk 已在运行"
+    return 0
+  fi
+  # 确保应用 home 目录存在（飞牛 package 用户无真实 home，写文件会 EACCES）
+  HOME_DIR="${TRIM_PKGHOME:-${TRIM_APPHOME:-${TRIM_PKGVAR}/home}}"
+  mkdir -p "$HOME_DIR" 2>/dev/null
+  chown zxdesk:zxdesk "$HOME_DIR" 2>/dev/null || true
+  chmod 700 "$HOME_DIR" 2>/dev/null || true
+  # 确保数据目录存在
+  if [ -n "$DATA_DIR" ]; then
+    mkdir -p "$DATA_DIR" 2>/dev/null
+    chown -R zxdesk:zxdesk "$DATA_DIR" 2>/dev/null || true
+  fi
+  [ -d "$APP_DIR" ] || { log_msg "错误：APPDEST/core 不存在"; return 1; }
+  # ⚠️ 上一次没停干净会留下 Socket 文件，直接 listen 会 EADDRINUSE（server.js 里也会先删一次，
+  #    这里是第二道保险：真机上「文件在、没人听」的表现是桌面图标点了没反应）
+  [ -n "$SOCKET_PATH" ] && rm -f "$SOCKET_PATH" 2>/dev/null
+  cd "$APP_DIR" || exit 1
+  ZXDESK_PORT="$ZXDESK_PORT" DATA_DIR="$DATA_DIR" \
+    TRIM_PKGVAR="$TRIM_PKGVAR" TRIM_PKGETC="$TRIM_PKGETC" \
+    ZXDESK_HOME="$HOME_DIR" \
+    GATEWAY_PREFIX="$GATEWAY_PREFIX" SOCKET_PATH="$SOCKET_PATH" \
+    node server.js >> "$LOG_FILE" 2>&1 &
+  echo "$!" > "$PID_FILE"
+  log_msg "ZXDesk 已启动（端口 $ZXDESK_PORT，数据目录 $DATA_DIR，网关 Socket $SOCKET_PATH，前缀 $GATEWAY_PREFIX）"
+  return 0
+}
+
+stop_app() {
+  log_msg "停止 ZXDesk…"
+  if [ -f "$PID_FILE" ]; then
+    local pid
+    pid="$(head -n 1 "$PID_FILE" | tr -d '[:space:]')"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null
+      # ⭐ 轮询等待进程真正退出（最多 5 秒），不再「sleep 2 后无条件 kill -9」。
+      #
+      # 为什么：server.js 收到 SIGTERM 后要写收尾日志、让 SQLite 正常关闭（WAL 收尾）。
+      # 旧写法只硬等 2 秒 —— 万一收尾稍慢（NAS 上磁盘慢、库大），进程会被 -9 **打断**，
+      # 结果是「按说已停止」但 -wal/-shm 留在数据目录里，下次启动多一次恢复。
+      # 「停止」是本应用的正常运维路径，不该是一个可能损坏数据的机会。
+      #
+      # 5 秒上限仍然保留：万一是真卡住（例如库被别的东西锁着），不能无限等，
+      # 超时就显式告警后强杀 —— 静默降级在本项目一律不可接受。
+      #
+      # ⚠️ `sleep 0.2` 需要支持小数秒的 sleep（GNU coreutils / busybox 都可以）。
+      #    万一环境里不支持，循环会瞬间跑完 25 次 → 退化成「立刻 kill -9」＝旧行为，不会更糟。
+      local waited=0
+      while [ "$waited" -lt 25 ] && kill -0 "$pid" 2>/dev/null; do
+        sleep 0.2
+        waited=$((waited + 1))
+      done
+      if kill -0 "$pid" 2>/dev/null; then
+        log_msg "警告：进程 $pid 在 5 秒内未退出，强制结束（-9）"
+        kill -9 "$pid" 2>/dev/null
+      else
+        log_msg "进程 $pid 已正常退出（等待约 $((waited * 200)) 毫秒）"
+      fi
+    fi
+    rm -f "$PID_FILE"
+  fi
+  # ⭐ 进程没了就把网关 Socket 一并删掉（决策 65）：残留的 Socket 文件会让下次启动的 listen 报错，
+  #    表现就是「应用明明起来了，桌面图标却打不开」—— 与「文件在、没人听」同一种难查。
+  if [ -n "$SOCKET_PATH" ] && [ -e "$SOCKET_PATH" ]; then
+    rm -f "$SOCKET_PATH" 2>/dev/null && log_msg "已清理网关 Socket：$SOCKET_PATH"
+  fi
+  log_msg "已停止"
+  return 0
+}
+
+case "$1" in
+  start)
+    start_app
+    ;;
+  stop)
+    stop_app
+    ;;
+  status)
+    status_app
+    ;;
+  *)
+    exit 1
+    ;;
+esac

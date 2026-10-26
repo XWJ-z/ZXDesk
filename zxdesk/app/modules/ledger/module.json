@@ -1,0 +1,29 @@
+{
+  "name": "ledger",
+  "title": "生活记账",
+  "icon": "💰",
+  "order": 47,
+  "defaultEnabled": true,
+  "switchField": "hide_ledger",
+  "apiPrefix": "ledger",
+  "database": "ledger",
+  "tables": [
+    "ledger_accounts",
+    "ledger_snapshots",
+    "ledger_views",
+    "ledger_view_tags",
+    "ledger_groups",
+    "ledger_transfers",
+    "ledger_entries",
+    "ledger_categories",
+    "ledger_default_accounts",
+    "ledger_account_deletions",
+    "ledger_adjustments",
+    "ledger_meta",
+    "ledger_budgets",
+    "shayu"
+  ],
+  "depends": [],
+  "archDoc": "23-记账.md",
+  "test": "ledger.test.js"
+}

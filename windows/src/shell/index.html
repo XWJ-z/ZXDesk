@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'; font-src 'self'"
+    />
+    <title>ZXDesk 工作台</title>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body class="screen-mode">
+    <!-- 顶栏 = **纯文字菜单栏**（0.1.4）：去掉 ZX 徽标与后退/前进/刷新图标，改成 连接 / 视图 / 帮助 三个文字菜单 -->
+    <header id="menubar" class="menubar" hidden>
+      <nav class="menu-group">
+        <button class="menu-btn" type="button" data-menu="connect">连接</button>
+        <button class="menu-btn" type="button" data-menu="view">视图</button>
+        <button class="menu-btn" type="button" data-menu="settings">设置</button>
+        <button class="menu-btn" type="button" data-menu="help">帮助</button>
+      </nav>
+      <div id="access-actions" class="menu-actions" hidden>
+        <button class="menu-btn" type="button" data-action="flow.back">返回</button>
+        <button class="menu-btn" type="button" data-action="access.reload">刷新</button>
+        <button class="menu-btn primary" type="button" data-action="access.done">已输入完成</button>
+      </div>
+    </header>
+
+    <main id="content" class="content" aria-live="polite"></main>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <!-- ⚠️ 用**经典脚本**，不用 type="module"：file:// 下的 ES module 会被 Chromium 按
+         「null origin + CORS」拦掉（表现就是壳一片空白、按钮全无反应）。
+         壳不需要 import/export，踏实走经典脚本。 -->
+    <script src="app.js" defer></script>
+  </body>
+</html>

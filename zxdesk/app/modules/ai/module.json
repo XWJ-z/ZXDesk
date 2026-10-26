@@ -1,0 +1,13 @@
+{
+  "name": "ai",
+  "title": "AI 辅助任务",
+  "icon": "🤖",
+  "order": 70,
+  "defaultEnabled": false,
+  "switchField": "hide_ai",
+  "apiPrefix": "ai",
+  "tables": ["ai_configs", "ai_chats", "ai_messages", "ai_memories"],
+  "depends": [],
+  "archDoc": "18-ai辅助任务.md",
+  "test": "ai.test.js"
+}

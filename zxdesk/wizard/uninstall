@@ -1,0 +1,59 @@
+[
+  {
+    "stepTitle": "卸载 ZXDesk 工作台",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "你的任务、日程、课表、账目、密码库与协作附件都存放在安装时选择的存储空间（共享文件夹 zxdesk/data）里，不在系统盘。卸载应用本身不会自动删除这些数据。"
+      },
+      {
+        "type": "tips",
+        "helpText": "要保留数据、将来重装后继续使用，请选「保留数据」，重装后登录原账号即可看到原来的一切。要彻底清除，请先在 设置 → 管理员设置 → 整体备份 导出备份，再选「删除数据」并勾选下面两项。"
+      },
+      {
+        "type": "radio",
+        "field": "wizard_data_action",
+        "label": "卸载后如何处理数据",
+        "initValue": "keep",
+        "options": [
+          {
+            "label": "保留数据（推荐，重装后可继续使用）",
+            "value": "keep"
+          },
+          {
+            "label": "删除数据（不可恢复）",
+            "value": "remove"
+          }
+        ]
+      },
+      {
+        "type": "checkbox",
+        "field": "wizard_backup_confirmed",
+        "label": "整体备份",
+        "options": [
+          {
+            "label": "我已导出整体备份，并确认删除后无法恢复（仅在选「删除数据」时需要）",
+            "value": "yes"
+          }
+        ]
+      },
+      {
+        "type": "checkbox",
+        "field": "wizard_uninstall_ack",
+        "label": "卸载确认",
+        "options": [
+          {
+            "label": "我已知晓上述说明，确认卸载 ZXDesk 工作台",
+            "value": "yes"
+          }
+        ],
+        "rules": [
+          {
+            "required": true,
+            "message": "请先勾选上面的确认，才能继续卸载"
+          }
+        ]
+      }
+    ]
+  }
+]

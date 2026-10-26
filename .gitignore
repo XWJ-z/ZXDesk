@@ -1,0 +1,54 @@
+# ── 闭源模块（不进本仓库）──────────────────────────────────────────
+# 当前没有。将来若有不宜公开的部分，放 closed/ 下 —— 这里排除，
+# 即「不会出现在这个仓库里」。公开部分必须仍能独立构建运行。
+closed/
+
+# ── 依赖 ──────────────────────────────────────────────────────────
+node_modules/
+
+# ── 构建产物与安装包 ──────────────────────────────────────────────
+*.fpk
+*.apk
+*.exe
+*.msi
+*.zip
+*.tar.gz
+*.vsix
+dist/
+out/
+build/out/
+build/tmp/
+android/app/build/
+android/core/*/build/
+android/.gradle/
+android/.kotlin/
+windows/build/tmp/
+windows/build/out/
+windows/dist/
+
+# ── 本地运行数据（⛔ 绝不允许进仓库：库文件与会话密钥）─────────────
+zxdesk/var/
+zxdesk/ttt/
+*.db
+*.db-wal
+*.db-shm
+auth.secret
+*.sqlite
+
+# ── 本机配置 ──────────────────────────────────────────────────────
+android/local.properties
+.idea/
+*.iml
+.vscode/
+
+# ── 日志与临时文件 ────────────────────────────────────────────────
+*.log
+temp/
+tmp/
+*.pid
+*.sock
+
+# ── 系统垃圾 ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,958 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ZXDesk工作台</title>
+    <script>
+      /* 入口分流（电脑版页面）—— 手机版就是手机版，电脑版就是电脑版，界面上没有切换入口
+ 。这里只做一件事：看着像手机就送去 /mobile/。
+
+         1) ?view=desktop  应急出口：强制留在电脑版（设备判定万一出错时用，界面上不出现）
+         2) ?view=mobile   应急出口：强制去 /mobile/（想在电脑上预览手机版时用）
+         3) 其余按设备判定 —— 触屏 → /mobile/，否则留在电脑版
+         ⚠️ 判定必须「保守」：现在两边都没有切换按钮了，判错就是把用户关在错的那一边。
+            因此只在「主指针是手指（pointer: coarse）」或「只有触屏、没有任何精确指针」时才当手机：
+            触屏笔记本（有鼠标 = pointer: fine）不会被抢走；
+            并且要求 innerWidth <= 1024，大屏触屏设备仍给电脑版。
+            **绝不用窗口宽度单独判定** —— 那会把「窗口拉窄的电脑浏览器」弹进手机版（0.0.8 踩过）。
+         出问题时（matchMedia 缺失、异常）一律留在电脑版。 */
+      (function () {
+        /* ⭐ 应用挂载前缀（0.3.5 统一网关改造）：飞牛统一网关把应用挂在系统域名的 /app/zxdesk 下，
+           页面里的地址必须带上它。⚠️ 本页里的静态链接（样式表 / modulepreload）**一律写成相对路径** ——
+           相对路径在 `/` 与 `/app/zxdesk/` 下都成立，而绝对路径 `/core/x.js` 在网关下会打到
+           飞牛系统根目录（404 ⇒ 整页白屏）。JS 里的接口地址另有唯一出处：`core/api.js` 的 `BASE`。 */
+        var base = location.pathname.replace(/[^/]*$/, '').replace(/\/$/, '');
+        function cleanupLegacy() {
+          // 旧版本的「已选电脑版」偏好键（0.0.8 中间版本写过），此版本起不再读写，顺手清掉
+          try {
+            localStorage.removeItem('zxdesk.view');
+          } catch (e) {
+            /* 存储不可用：无所谓，本来也不再依赖它 */
+          }
+        }
+        var q = null;
+        try {
+          q = new URLSearchParams(location.search).get('view');
+        } catch (e) {
+          q = null;
+        }
+        cleanupLegacy();
+
+        /* ⭐⭐ 2026-10-19：**跳去手机版时必须把地址上的查询串一起带走**（只摘掉 `view`）。
+           现场：飞牛开「访问码」+ 走 FN Connect 中转时，手机端一直停在访问码输入界面，
+           输对了也进不去（只有中继模式这样、电脑端正常）。
+           根因就在这一行 —— 从前写的是 `base + '/mobile/' + location.hash`，
+           **把 `location.search` 整个丢了**。飞牛网关会在入口地址上带自己的票据 / 标记
+           （形如 `?xxx=…`），我们这一跳把它甩掉之后，网关认为「这一趟没带凭证」，
+           于是又把访问码页顶出来 —— 用户看到的就是「输入对了还回到输入界面」。
+           ⚠️ 中继模式比局域网更容易触发：中继那条链路上票据是**跟着地址走**的。
+           ⛔ 别改回「只拼 hash」：那是本项目唯一一处会丢掉网关查询串的整页跳转。 */
+        function carrySearch() {
+          var s = String(location.search || '');
+          if (!s) return '';
+          try {
+            var usp = new URLSearchParams(s);
+            usp.delete('view'); // 我们自己的参数不往下一屏带
+            var out = usp.toString();
+            return out ? '?' + out : '';
+          } catch (e) {
+            return s; // 解析失败时原样带过去 —— 宁可多带，不可丢票据
+          }
+        }
+
+        if (q === 'desktop') return; // ⭐ 应急出口最优先
+        if (q === 'mobile') {
+          location.replace(base + '/mobile/' + carrySearch() + location.hash);
+          return;
+        }
+        var mm = window.matchMedia;
+        var coarse = !!(mm && mm('(pointer: coarse)').matches);
+        var fine = !!(mm && mm('(pointer: fine)').matches);
+        var fingers = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
+        var isPhone = coarse || (fingers && !fine);
+        if (isPhone && window.innerWidth <= 1024) {
+          location.replace(base + '/mobile/' + carrySearch() + location.hash);
+        }
+      })();
+    </script>
+    <!-- ⭐ 共用设计令牌（--zx-*）：必须在 desktop/app.css 之前（见 core/tokens.css 的说明）
+         ⚠️ 资源地址**一律相对路径**（网关挂载前缀下绝对路径会打到系统根）—— 见上方引导脚本里的说明 -->
+    <link rel="stylesheet" href="core/tokens.css" />
+    <link rel="stylesheet" href="desktop/app.css" />
+  </head>
+  <body>
+    <div id="app" class="app">
+      <!-- 左侧栏：搜索 + 三个平级主导航（首页看板 / 项目任务 / 大学课表）+ 底部工具 -->
+      <aside class="sidebar">
+        <!-- ⭐ 0.7.6：主导航折叠开关（全局 —— 所有视图共用这一条侧栏）。
+             收起只切 `#app` 上的 `collapsed` 类，⛔ **不摘任何节点**：`.sidebar` / `#nav-home` /
+             `#project-list` 必须一直在（`module-ui.test.js` 与三个浏览器探针都按它们找节点）。
+             ⚠️ 它是 `.sidebar` 的**直接子节点**、刻意放在 `.sidebar-head` **外面** ——
+             折叠时 `.sidebar-head` / `#project-list` / `.sidebar-foot` 都要隐藏，
+             开关若住在里面就会跟着被藏起来，那就再也点不回来了。
+             ⚠️ id 与 class 都用外壳自己的名字（`side-toggle`）：⛔ 别写成 `nav-<模块名>` 那种形式
+             （那会把 `module-ui.test.js` 的一条断言顶红，见 `desktop/shell.js` 里的同类说明）。
+             箭头指向「点下去会往哪边走」：展开时 ‹（收起来）、收起时 ›（放出来）。 -->
+        <button
+          id="side-toggle"
+          class="side-toggle"
+          type="button"
+          aria-expanded="true"
+          aria-controls="project-list"
+          title="收起主导航"
+        >
+          ‹
+        </button>
+        <div class="sidebar-head">
+          <div class="brand">
+            <span class="brand-logo">ZX</span>
+            <span class="brand-name">ZXDesk工作台</span>
+          </div>
+          <!-- ⚠️ 下面这一格（以及全页其它文本框）是「防浏览器自动填充」的**静态骨架**（0.4.4 起，0.4.5 修正）：
+               `autocomplete="off"` ＋ 中性 `name` ＋ 三家密码管理器的忽略标记 ＋ **初始 readonly**。
+               ⛔ **别再写 `autocomplete="new-password"`** —— Chromium 的密码管理器按名字认这个值，
+               写上去等于告诉它「这是密码框」，Edge 的「保存的密码」浮层就是这么被勾出来的（0.4.4 踩过）。
+               解锁时机（键鼠 `keydown` / 触摸 `touchstart` / 失焦装回 readonly）与完整论证
+               写在 `app.js` 的 `unlockAutofillGuards()` 里。
+               ⛔ 别把 `readonly` 或 `data-autofill-guard` 写丢 —— 丢了就退回「搜索框里被灌进
+ ZXDesk 登录用户名」的老毛病（报的）。 -->
+          <div class="search-box">
+            <span class="s-ico" aria-hidden="true">🔍</span>
+            <input
+              role="searchbox"
+              name="q"
+              id="search-input"
+              type="search"
+              placeholder="搜索任务 / 项目 / 标签（/）"
+              autocomplete="off"
+              data-autofill-guard
+              data-lpignore="true"
+              data-1p-ignore
+              data-bwignore="true"
+              readonly
+            />
+            <button id="search-clear" class="s-clear hidden" type="button" title="清除搜索">✕</button>
+          </div>
+        </div>
+        <nav id="project-list" class="project-list nav-list" aria-label="主导航">
+          <button id="nav-home" class="nav-item" type="button">
+            <span class="ni-ico" aria-hidden="true">🧭</span>
+            <span class="ni-main"><b>首页看板</b><small>今日待办 · 逾期 · 项目进度</small></span>
+          </button>
+          <button id="nav-projects" class="nav-item" type="button">
+            <span class="ni-ico" aria-hidden="true">🗂</span>
+            <span class="ni-main"><b>任务与随手记</b><small>选项目 · 看任务 · 记念头</small></span>
+          </button>
+               <!-- ⭐ 0.5.0 模块化重构：**模块入口不写在这里了** —— 由 `desktop/shell.js` 的
+               `renderNavModules()` 按「服务端 `GET /api/bootstrap` 的 `modules` 清单 × 本端接线表
+               `desktop/modules.js`」生成，插在 `#nav-projects` 后面（顺序 = `module.json` 的 `order`）。
+               ⚠️ 所以「大学课表 / 网址/密码夹 / 数码管理 / 生活记账 / 个人资产管理 / …」这些按钮
+               **全仓库只此一份数据源**：删掉 `app/modules/<模块>/` 那个目录，这里就自动少一颗按钮
+               （不报错、也不留空壳）。
+               ⛔ 别把按钮挪回静态 HTML —— 那样「删目录 ⇒ 界面少一个入口」立刻失效。
+               ⚠️ 生成出来的 id 是接线表里写的那几个（`#btn-timetable` / `#nav-webpass` /
+               `#btn-digital` / `#nav-assets` / `#nav-teamwork` …，浏览器探针按 id 找它们，见 ttt/tools/*.js）。 -->
+        </nav>
+        <!-- 手机版没有入口按钮：手机打开本页会被上面的引导脚本直接送去 /mobile/，电脑用户用不到 -->
+        <div class="sidebar-foot">
+          <button id="btn-refresh" class="btn btn-line foot-btn" title="重新读取数据库的数据">↻ 刷新</button>
+          <!-- ⭐ 0.2.1：账号 / 成员 / 导出备份 三个入口全部收进「设置」，侧栏底部只留这一扇门 -->
+          <button id="btn-settings" class="btn btn-primary foot-btn" title="设置（账号 / 成员 / 备份 / 课表）">
+            ⚙ 设置
+          </button>
+        </div>
+      </aside>
+
+      <!-- 主体区 -->
+      <main class="main">
+        <!-- 数据层异常横幅（只读降级 / 读的不是数据库时才会出现） -->
+        <div id="banner" class="banner hidden"></div>
+
+        <!-- 首页汇总看板（⭐ 0.4.5 大改：区间切换 + 任务概览 + 具体事项 + 收藏夹/消息） -->
+        <section id="home-view" class="view hidden">
+          <div class="home-head">
+            <div class="home-title">
+              <span class="home-logo">📊</span>
+ <!-- ⭐ 0.8.9：「三屏的切换药丸位置要统一，全部放到标题处 ——
+                   已经是标题（了），不要了，直接显示切换药丸；字体大小和样式与原标题一样」。
+                   ⇒ 原来的 `<h2>首页看板</h2>` **删掉**，药丸（本行最后那个槽）占它的位置。
+                   ⚠️ 药丸仍是**静态骨架**（⛔ 不在 `#home-body` 里）：那块每画一次就被整个换掉，
+                   而这条胶囊**两个视图下都得在**（列表 / 日历）。
+                   ⚠️ 没视图可切（模块被删 / 接线表里没人声明 `dashView`）时它**空着**，
+                   `.dash-tabs-row:empty` 会把占位收掉 —— 一颗死胶囊都不剩（删目录验收）。
+                   ⚠️ 版本 / 数据状态挪去了「设置」标题旁（0.4.1 第五轮）；这里只放区间说明。 -->
+              <div class="dash-tabs-row" id="home-tabs"></div>
+            </div>
+            <span id="home-date" class="home-date"></span>
+          </div>
+          <!-- ⭐ 区间切换条：**静态骨架**（与工具栏同一条规矩）——
+               只有 `#home-body` 由 `views/home.js` 重画；两个 `<input type="date">` 若进重画范围，
+               用户正在挑日期的那个原生选择器会被连根换掉。
+               ⚠️ 预设按钮的 `data-dash` 与 `core/dashboard.js` 的 `DASH_PRESETS` 逐个对齐。
+ ⭐ 0.8.9：「今日」那一颗**已删** —— 它与周条右上角的「今天」
+               按钮重复（两颗都调 `dashSetPreset('today')`）。现在只剩「单日 / 本周 / 本月」三颗，
+               「回到今天」一律走周条那颗「今天」（或直接点周条里今天那一格）。 -->
+          <!-- ⭐ 0.5.5 区间条（周条）：一行「‹ 区间 › 今天」+ 一行 7 个日期格。
+ 「合并今日、单日、本周菜单（两端）：改为如图所示」。
+               ⚠️ 与下面那套旧控件**驱动同一个 state**，所以必须双向同步：
+               点格子会把档位切到「单日」、点档位按钮会把格子跟着挪 —— 见 `views/home.js` 的 `renderDashBar()`。
+               两边不同步的表现是「顶部写着 9/14 ~ 9/20、格子亮着 9/15、下面的按钮亮着本月」，且不报任何错。
+               ⚠️ 它同样是**静态骨架**：7 个格子是固定节点，只由 JS 改字与类名，不重建。 -->
+          <div class="dash-week">
+            <div class="dw-head">
+              <button class="dw-nav" type="button" id="dash-prev" aria-label="上一周">‹</button>
+              <span class="dw-range" id="dash-week-range"></span>
+              <button class="dw-nav" type="button" id="dash-next" aria-label="下一周">›</button>
+              <button class="dw-today" type="button" id="dash-go-today">今天</button>
+ <!-- ⭐ 0.8.9：「这三个变为一个：筛选图标，点击筛选向下展开出
+                   单日、本周、本月、自定义区间；还增加一个搜索图标（放大镜），点击出现输入框。
+                   这两个图标放到【今天】的旁边」—— 两颗都住在周条的工具栏里。
+                   ⚠️ 「筛选」那颗控制的是下面那条 `.dash-range`（单日 / 本周 / 本月 ＋ 两个日期框），
+                   它从「常驻」改成「点开才显示」。显隐判据**统一在 `views/home.js` 的 `renderHome()`
+                   里算**（视图维度与用户展开是两个来源，⛔ 别在 CSS 里各写一半）。
+                   ⚠️ 两颗都用**线性 SVG**（与手机端同一套画法），⛔ 不用 emoji：它们要跟着文字色走。 -->
+              <button class="dw-ico" type="button" id="dash-filter-btn" aria-label="筛选区间" aria-expanded="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" /></svg>
+              </button>
+              <button class="dw-ico" type="button" id="dash-search-btn" aria-label="搜索" aria-expanded="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="M16 16l4 4" /></svg>
+              </button>
+            </div>
+            <div class="dw-days" id="dash-week-days" role="group" aria-label="按天查看">
+              <button class="dash-day" type="button" data-dash-day=""><i>一</i><b></b></button>
+              <button class="dash-day" type="button" data-dash-day=""><i>二</i><b></b></button>
+              <button class="dash-day" type="button" data-dash-day=""><i>三</i><b></b></button>
+              <button class="dash-day" type="button" data-dash-day=""><i>四</i><b></b></button>
+              <button class="dash-day" type="button" data-dash-day=""><i>五</i><b></b></button>
+              <button class="dash-day" type="button" data-dash-day=""><i>六</i><b></b></button>
+              <button class="dash-day" type="button" data-dash-day=""><i>日</i><b></b></button>
+            </div>
+          </div>
+          <div class="dash-search" id="dash-search" hidden>
+ <!-- ⭐ 0.8.9：放大镜点开就是这一行 —— 输入即筛（纯前端，
+                 ⛔ 不重新取数：筛选是同一份数据上的事，见 `views/home.js` 的 `dashSearch`）。 -->
+            <span class="ds-ico" aria-hidden="true">🔍</span>
+            <input
+              id="dash-q"
+              name="q"
+              type="search"
+              placeholder="搜这段时间里的事项（标题 / 备注 / 归属）…"
+              autocomplete="off"
+              data-autofill-guard
+              data-lpignore="true"
+              data-1p-ignore
+              data-bwignore="true"
+            />
+          </div>
+          <div class="dash-range" hidden>
+            <div class="segmented" id="dash-presets" role="tablist" aria-label="看板区间">
+              <button class="seg-btn" type="button" role="tab" aria-selected="false" data-dash="day">单日</button>
+              <button class="seg-btn" type="button" role="tab" aria-selected="false" data-dash="week">本周</button>
+              <button class="seg-btn" type="button" role="tab" aria-selected="false" data-dash="month">本月</button>
+            </div>
+            <div class="dash-dates">
+              <input id="dash-from" type="date" title="起始日期" aria-label="起始日期" />
+              <span class="dash-dash">–</span>
+              <input id="dash-to" type="date" title="截止日期" aria-label="截止日期" />
+            </div>
+            <span id="dash-range-note" class="dash-range-note"></span>
+          </div>
+ <!-- ⭐⭐ 0.8.61（「首页看板的电脑端你没有修改吗，没有变化，两端同步」）：
+               **任务概览**的固定槽 —— 与手机端 `#today-stats` 逐字同构。
+               它从前长在 `#home-body` 里，跟着清单一起滚走；而概览那五个数**本身就是筛选按钮**，
+               滚没了等于筛选入口也没了。⇒ 搬进静态骨架，由 `views/home.js` 的 `renderStats()` 写。
+               ⚠️ 它是**空槽**：数据没到 / 空工作台时写空串（`#home-stats:empty` 收掉占位，不留高度）。
+               ⚠️ 它住在 `#home-body` **外面** ⇒ 不参与内容重画（那 5 颗按钮不会每次重画都被换掉）。 -->
+          <div id="home-stats"></div>
+          <div id="home-body" class="home-body"><!-- JS 渲染：具体事项 + 各模块（概览在 #home-stats） --></div>
+ <!-- ⭐ 0.8.5：首页看板的悬浮「＋」—— 「电脑端的首页看板……的悬浮 +，
+               点开出现 新建任务、记账、随手记」。
+               ⚠️ 它挂在 section 上、**不在 `#home-body` 里**：`#home-body` 每画一次就被整个换掉，
+               挂在里面等于每次重画都要重绑一次（漏一次就是「点了没反应」且不报错）。
+               ⚠️ 菜单是**静态骨架**，`bindEvents()` 里只切 `.hidden`，⛔ 不重建节点。 -->
+          <div class="home-new" id="home-new">
+            <div class="home-new-menu hidden" id="home-new-menu" role="menu" aria-label="新建">
+              <button class="hnm-item" type="button" role="menuitem" data-home-new="task">🗂 新建任务</button>
+              <button class="hnm-item" type="button" role="menuitem" data-home-new="ledger">💰 记一笔</button>
+              <button class="hnm-item" type="button" role="menuitem" data-home-new="idea">💡 随手记一条</button>
+            </div>
+            <button class="home-fab" type="button" id="home-fab" aria-haspopup="menu" aria-expanded="false" aria-label="新建">＋</button>
+          </div>
+        </section>
+
+        <!-- 搜索结果 -->
+        <section id="search-view" class="view hidden">
+          <div class="home-head">
+            <div class="home-title">
+              <span class="home-logo">🔍</span>
+              <h2>搜索结果</h2>
+            </div>
+            <span id="search-summary" class="home-date"></span>
+          </div>
+          <div id="search-body" class="search-body"><!-- JS 渲染 --></div>
+        </section>
+
+        <!-- ⭐ 0.4.5：原来的「项目任务」卡片屏（`#projects-view`）**已删除** ——
+ 「点击【项目任务】-点击【具体项目】-【任务】，要看其他项目还得再来一次，
+             很麻烦」。现在侧栏那一项直接打开任务板，页头有【项目 ▾】下拉可随手切换。
+             ⚠️ 卡片屏上的「项目进度」搬进了首页看板；**项目拖动排序暂时砍掉**（顺序仍存库、
+             手机版仍能长按拖）—— 项目的新建 / 编辑 / 删除仍在任务板页头那三颗按钮上。 -->
+
+        <!-- ⭐ 设置（0.2.1）—— 账号 / 成员 / 备份 / 各功能开关的**唯一入口**。
+             侧栏底部原来并排三个按钮，现在收成一扇门；内容由 desktop/views/settings.js 渲染。
+             ⭐ 0.4.1 起是**左右结构**：左边一列菜单（数据来源 / 模块功能 / 账号设置 / 成员管理 /
+             备份与恢复 / 整体备份），右边是当前那一栏 —— 所以这里只有一个容器，两个子块都由 JS 画。
+             ⚠️ 「数据来源」0.4.1 第四轮起由「数据源」改名而来（同轮去掉了标题旁与底部的两段只读说明）。
+             ⚠️ 「我的账号」原来是一整屏（#account-view），0.4.1 起改为嵌进右侧的「账号设置」栏；
+             ⚠️「成员管理」原来也是一整屏（#admin-view），0.4.1 第二轮起改为左菜单里的一栏
+             （内容由 desktop/views/admin.js 画进那一栏的 #admin-body）。 -->
+        <section id="settings-view" class="view hidden">
+          <div class="home-head">
+            <div class="home-title">
+              <span class="home-logo">⚙️</span>
+              <h2>设置</h2>
+ <!-- ⭐ 版本 / 数据状态一行（0.4.1：「移动到设置旁边显示」）——
+                   以前它贴在左菜单最底下，得把左菜单扫到底才看得见；现在紧跟标题，一进设置页就读到。
+                   ⚠️ 内容是 JS 写的（settings.js 的 renderSettings()），节点留在这里当静态骨架 -->
+              <span id="set-head-note" class="set-foot"></span>
+            </div>
+          </div>
+          <div id="settings-body" class="settings-body"><!-- JS 渲染：左菜单 + 右内容 --></div>
+        </section>
+
+
+        <!-- ⭐ 0.8.7 网址/密码夹（方案 27）：**纯屏模块** —— 屏顶一颗药丸 `网址 ｜ 密码`，
+             按选择把 `bookmarks` / `vault` 的界面**动态挂**进 `#webpass-body`
+             （`core/slots.js` 的 `mountModuleSlot()`，决策 77 / 91）。
+             ⚠️ 药丸住**屏头静态槽**（`#webpass-tabs` ⊂ `.home-title`），⛔ 不许放进 `#webpass-body`
+             —— 后者每画一次就被整块换掉，而「两个视图下都在」只有视图中立区做得到
+             （0.8.7 的看板胶囊踩过同一条，见 26 号方案）。
+             ⚠️ 这一屏也必须进 `desktop/shell.js` 的 `VIEW_NODES`，否则 `showView('webpass')`
+             会把全屏都藏掉、什么都不显示。 -->
+        <section id="webpass-view" class="view hidden">
+          <div class="home-head">
+            <div class="home-title">
+ <!-- ⭐ 0.8.17：「移除这个图标」—— 屏头那颗 `🔗`（`.home-logo`）
+                   已删，整条药丸**顶到最左**（它本来就占着标题的位置）。⛔ 别再加回来。
+                   ⚠️ 其余几屏的 `.home-logo` 是各模块自己的屏头图标，一个都没动。 -->
+ <!-- ⭐ 0.8.9：与「首页看板」同一条 —— 标题删掉，药丸占它的位置。
+                   药丸（两个视图的切换）内容由 `modules/webpass/desktop.js` 写进来；
+                   项**全是算出来的**（接线表里声明了 `webpass-pane` 插槽的模块），一个都没有时整条不画 -->
+              <span id="webpass-tabs"></span>
+            </div>
+          </div>
+          <div id="webpass-body" class="webpass-body"></div>
+ <!-- ⭐⭐ 0.8.17：「网址/密码库：新建的 + 图标，切换会跟随界面变化，
+               这个应该是固定在界面上的（参考任务与随手记），两端都要改」——
+               它从**两个视图片段**里搬到这里（`#webpass-body` 外面）：原先收藏夹一颗、密码库一颗
+               各长在自己那份片段里 ⇒ 换视图时旧那颗跟着旧片段被清掉、新那颗再出现。
+               ⚠️ 显隐与无障碍文案由 `modules/webpass/desktop.js` 的 `paintFab()` 按档位刷。 -->
+          <button id="webpass-new" class="btn-fab btn-fab-float" type="button" title="新建" aria-label="新建">＋</button>
+        </section>
+
+
+        <!-- ⭐ 0.8.7（方案 28）：**随手记不再有自己的屏** —— 它并进了任务板那一屏
+             （屏头药丸「任务 ｜ 随手记」）。骨架（检索框 + 「＋ 记一条」+ #idea-body）
+             连同三处事件绑定一起搬进了视图片段 `modules/idea/desktop-board-pane.js`，
+             由 `core/slots.js` 的 `mountModuleSlot()` 挂进 `#board-pane`（槽名 `board-pane`）。
+             ⛔ 别把这一屏加回来：留一半在这里 = 同一批 id 在文档里出现两遍，
+             `document.getElementById` 只命中前一个 ⇒ 片段里那块界面**静默空白**（且不报错）。 -->
+
+        <!-- ⭐ 0.8.10 个人资产管理（方案 30）：**纯屏模块** —— 屏顶一颗药丸（第一层子模块，
+             项来自 `GET /api/assets/groups` 的数据，⛔ 不来自接线表），切哪一格就把那一格的
+             正文画进 `#assets-body`（⭐ 0.8.20 起**只有模块格**：生活记账 / 数码管理把界面挂进来）。
+             ⚠️ 药丸住**屏头静态槽**（`#assets-tabs` ⊂ `.home-title`），⛔ 不许放进 `#assets-body`
+             —— 后者每画一次就被整块重写，药丸会跟着一起没（与 `#webpass-tabs` 同一条理由）。
+             ⚠️ 这一屏必须进 `desktop/shell.js` 的 `VIEW_NODES`，否则 `showView('assets')`
+             会把全屏都藏掉、什么都不显示。
+ ⭐⭐ 0.8.20：这一屏是**两段式**（固定头 ＋ 内部滚动区），
+             并且**只剩模块格** —— 自建分组 / 分类 / 通用条目的界面与那颗「＋ 新建分组」
+             一起撤掉了；后端的 `asset_groups` 接口与数据一个字没动。 -->
+        <section id="assets-view" class="view hidden">
+          <div class="home-head">
+            <div class="home-title">
+              <!-- 药丸内容由 `modules/assets/desktop.js` 写进来；项**全是算出来的**
+                   （`asset_groups` 第一层里**有实现**的那些行），只有一格时整条不画。
+                   ⭐ 0.8.20：这一行里**只剩药丸**（那颗「＋ 新建分组」已撤）。
+ ⭐⭐ 0.8.20：屏头那颗 💼 图标按真机截图删掉了。 -->
+              <span id="assets-tabs"></span>
+            </div>
+          </div>
+          <div id="assets-body" class="assets-body"></div>
+ <!-- ⭐⭐ 0.8.20（「新建应该是固定的，切换的时候【新建+图标】不应该随着消失」）：
+               它住**屏级**（`#assets-body` 外，与 `#webpass-new` 同一条纪律）—— 记账的「记一笔」与
+               数码管理的「＋ 新增」两块**共用这一颗**：谁挂在当前那一格，谁在 `render()` 里接管它的
+               点击与显隐（`onclick =` 覆盖式）。从前它长在各自的片段根里 ⇒ 药丸切换时跟着旧片段
+               一起淡出、新那颗再淡入，看着就是「＋ 消失一下」。
+               ⚠️ 初值 `hidden`：没有任何一格可用时由宿主保持收起（见 `modules/assets/desktop.js`）。 -->
+          <button id="assets-new" class="btn-fab btn-fab-float hidden" type="button" title="新建" aria-label="新建">＋</button>
+        </section>
+
+        <!-- ⭐⭐ 0.8.10 批 3（方案 30）：**数码管理不再有自己的屏**（原来那个 <section id="digital-view"> 已整块删掉）——
+             它的骨架（页头计数与「＋ 新增」、概览行、搜索框、分类与排序下拉、列表）连同屏内
+             事件委托一起搬进了视图片段 `modules/digital/desktop-assets-pane.js`，
+             由 `core/slots.js` 的 `mountModuleSlot()` 挂进「个人资产管理」那一屏（槽名 `assets-pane`）。
+             ⛔ 别把这一屏加回来：留一半在这里 = 同一批 id 在文档里出现两遍，
+             `document.getElementById` 只命中前一个 ⇒ 片段里那块界面**静默空白**（且不报错）。 -->
+        
+
+        <!-- ⭐⭐ 0.8.13（方案 33）：**课表 / 番茄钟 / 行程三块并成一个模块** `time`「番茄钟与日程表」。
+             这一屏是**一个模块一屏**，里面住着四个 pane：首页「日程表」+ 三个子屏；显隐由
+             `modules/time/home-desktop.js` 的 `openTime()` 按 `state.timeTab` 管。
+             ⚠️ 三个子屏的容器 id 统一成 `#time-timetable` / `#time-pomodoro` / `#time-trip`；
+             课表那一段是**静态骨架**（页头两个下拉 ＋ 网格容器），番茄钟与行程两屏的内容由 JS 整块画。
+             ⚠️⭐ 它们**不再进** `desktop/shell.js` 的 `VIEW_NODES` —— 屏名统一成 `time`
+             （留一个永远命不中的键，等于让人以为「那一块还有一屏」）。 -->
+        <section id="time-view" class="view hidden">
+          <!-- ① 首页「日程表」：批 1 只放三颗进子屏的按钮，时间轴在批 3 画（`home-desktop.js`） -->
+          <div id="time-home" class="time-pane"></div>
+
+          <!-- ② 课表子屏：**逐字保留**原来的静态骨架（两个下拉 + 网格容器）
+               ⚠️ 顶上那一行返回键由宿主 `home-desktop.js` 填；它住在**子屏内容之外**，
+               所以子屏每次重画都不会把它抹掉。 -->
+          <div id="time-timetable" class="time-pane hidden">
+            <div class="time-back-row" data-time-back="timetable"></div>
+          <div class="home-head tt-head">
+            <div class="home-title">
+              <span class="home-logo">📅</span>
+              <h2 id="tt-term-name">课表</h2>
+            </div>
+            <div class="tt-toolbar">
+              <select id="tt-term" class="tt-select" title="选择学期"></select>
+              <div class="tt-weeknav">
+                <button id="tt-prev" class="btn-ghost" title="上一周">‹</button>
+                <span id="tt-week-label" class="tt-week-label"></span>
+                <button id="tt-next" class="btn-ghost" title="下一周">›</button>
+              </div>
+              <button id="tt-all" class="btn btn-subtle btn-sm" title="不做周次筛选，显示整个学期">全学期</button>
+              <button id="tt-this" class="btn btn-subtle btn-sm" title="回到本周">本周</button>
+              <label class="tt-check" title="是否显示周六周日"
+                ><input id="tt-weekend" type="checkbox" checked /> 周末</label
+              >
+ <!-- ⭐ 0.4.4 第二版：这里原来是四颗平级按钮
+                   （导入课表 / ＋课程 / ⚙作息设置 / ＋学期），现在**合并成两个下拉** ——
+                   【新建】= 导入课表 / 新建学期 / 新建课程；【设置】= 学期设置 / 作息设置 / 课程管理。
+ ⚠️ 判断是对的：「＋ 课程」点开的一直是**课程管理列表**（新建一门课是它里面的
+                   第二级动作），这次把两种语义分到两个菜单里，按钮名与实际动作终于对得上。
+                   ⚠️ 菜单是**静态骨架**：开合只切 `.hidden`，**绝不重画工具栏** ——
+                   重画会连带换掉 `#tt-term` 那个正在被操作的 `<select>`。
+                   ⚠️ 条目上的 `data-tt-new` / `data-tt-set` 是**唯一**的派发依据（见 `app.js` 的
+                   `toggleTtMenu()` 与 `views/timetable.js` 的 `openTtNew()` / `openTtSet()`）。 -->
+              <div class="tt-menu-wrap">
+                <button
+                  id="tt-new"
+                  class="btn btn-primary btn-sm"
+                  type="button"
+                  aria-haspopup="true"
+                  aria-expanded="false"
+                >
+                  ＋ 新建 ▾
+                </button>
+                <div id="tt-new-menu" class="tt-menu hidden" role="menu">
+                  <button class="tt-menu-item" type="button" role="menuitem" data-tt-new="import">
+                    导入课表<span>从教务系统导出的 .xls / CSV 读进来</span>
+                  </button>
+                  <button class="tt-menu-item" type="button" role="menuitem" data-tt-new="term">
+                    新建学期<span>填学期名与「第 1 周星期一」</span>
+                  </button>
+                  <button class="tt-menu-item" type="button" role="menuitem" data-tt-new="course">
+                    新建课程<span>在这学期里加一门课（可带课次）</span>
+                  </button>
+                </div>
+              </div>
+              <div class="tt-menu-wrap">
+                <button
+                  id="tt-set"
+                  class="btn btn-subtle btn-sm"
+                  type="button"
+                  aria-haspopup="true"
+                  aria-expanded="false"
+                >
+                  ⚙ 设置 ▾
+                </button>
+                <div id="tt-set-menu" class="tt-menu hidden" role="menu">
+                  <button class="tt-menu-item" type="button" role="menuitem" data-tt-set="term">
+                    学期设置<span>改名 / 开学日期 / 总周数，切换或删除学期</span>
+                  </button>
+                  <button class="tt-menu-item" type="button" role="menuitem" data-tt-set="blocks">
+                    作息设置<span>上下课时间、节假日前一天提前</span>
+                  </button>
+                  <button class="tt-menu-item" type="button" role="menuitem" data-tt-set="course">
+                    课程管理<span>看这学期的课，改 / 删 / 加课次</span>
+                  </button>
+                  <button class="tt-menu-item" type="button" role="menuitem" data-tt-set="days">
+                    假期调休<span>按天设置：某天补另一天的课 / 某天停课</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div id="tt-hint" class="tt-hint hidden"></div>
+          <!-- ⭐ 0.2.3：本周「假前一天」说明条（下午提前多少分钟、几点开始）—— 由 renderTtToolbar 填 -->
+          <div id="tt-holiday" class="tt-holiday hidden"></div>
+          <!-- ⭐ 0.2.3：本周的「单次调课 / 停课」清单 + 撤销入口 —— 由 renderTtToolbar 填 -->
+          <div id="tt-adjust" class="tt-adjust hidden"></div>
+          <!-- ⭐ 0.6.2：本周的「假期调休」说明条（哪天补哪天的课 / 哪天停课）—— 由 renderTtToolbar 填。
+               刻意复用 `.tt-holiday` 的外观（两种都是「本周特殊日期」提示条，长得一样才对） -->
+          <div id="tt-dayrule" class="tt-holiday hidden"></div>
+          <div id="tt-body" class="tt-body"><!-- JS 渲染课表网格 / 引导页 --></div>
+          <div id="tt-remark" class="tt-remark"></div>
+        </div>
+
+          <!-- ③ 番茄钟子屏：内容由 `modules/time/pomodoro-desktop.js` 的 `openPomodoro()` 整块画。
+               ⚠️ 返回行在**外面**、内容画进 `#time-pomodoro-body` —— 否则这一屏每次重画都会抹掉返回键。 -->
+          <div id="time-pomodoro" class="time-pane hidden">
+            <div class="time-back-row" data-time-back="pomodoro"></div>
+            <div id="time-pomodoro-body"></div>
+          </div>
+
+          <!-- ④ 行程子屏：内容由 `modules/time/trip-desktop.js` 的 `openTrip()` 整块画（同上）。 -->
+          <div id="time-trip" class="time-pane hidden">
+            <div class="time-back-row" data-time-back="trip"></div>
+            <div id="time-trip-body"></div>
+          </div>
+        </section>
+        <!-- ⭐⭐ 0.8.10 批 3（方案 30）：**生活记账不再有自己的屏**（原来那个空的
+             <section id="ledger-view"> 已整块删掉 —— 它里面本来就什么都没有，内容全由 JS 写进去）——
+             骨架与屏内委托一起搬进了视图片段 `modules/ledger/desktop-assets-pane.js`，
+             由 `mountModuleSlot()` 挂进「个人资产管理」那一屏（槽名 `assets-pane`）。
+             ⛔ 别把这一屏加回来（理由同上面数码管理那一处）。 -->
+        
+
+
+
+        <!-- ⭐ 0.3.5 对话：左栏（会话 + 好友/申请两颗入口按钮）+ 右侧对话流。
+             ⚠️ 骨架节点的清单是 HTML 与 JS 之间**一份没有类型检查的契约**（0.3.3 手机版硬件页
+             就因为漏了一个节点导致整屏「读取失败」）：`modules/teamwork/desktop.js` 会写
+             `#teamwork-side-body` / `#teamwork-conv-head` / `#teamwork-body` 三个节点
+ （⭐ 2026-10-04：原先还写页头那颗 `#teamwork-status`，整颗移除 ⇒ 已删），
+             另外读写 `#teamwork-friend-name` / `#teamwork-add-btn` / `#teamwork-input` / `#teamwork-send` ——
+             少一个就是 TypeError。
+ ⭐ 0.7.6：好友 / 申请不再内联，各变成一颗按钮（`#teamwork-friends-btn` / `#teamwork-req-btn`，
+             点开是弹窗）；这两颗是**静态骨架**，计数与红点由 `paintTeamworkActs()` 刷上去。
+             ⚠️ 两个输入框刻意放在**重画范围之外**（`#teamwork-side-body` 整块由 JS 重画），
+             否则每收一条消息重建一次 input，表现就是「只能打进去一个字」。 -->
+        <section id="teamwork-view" class="view hidden">
+          <div class="home-head">
+            <div class="home-title">
+              <span class="home-logo">💬</span>
+              <h2>团队协作</h2>
+ <!-- ⭐ 常驻提示（定稿）：说的是这个功能的**适用范围** ——
+                   只有 ZXDesk 自己的成员之间能互加好友（一期没有「可添加的账号」列表），
+                   用途是团队内的任务下达与协作交流，不是公开的聊天工具。
+ ⚠️ 0.4.4 起它从**标题下面那一整条**搬到了标题右手边（「移动到 对话旁边」）——
+                   与 0.4.1 把版本号搬到「设置」标题旁同一个手法：它是一句常驻的**属性说明**，
+                   挂在标题上比占一整行更像它本来的身份，也给下面的三区腾出一行高度。
+                   ⚠️ 类名 `.teamwork-privacy` 是历史名字（它原先放的是「消息以明文存在你自己的 NAS 上」
+                   那句，方案 §八-6），**别因为文案换了就删样式**；⚠️ 也别在页面别处再摆一份
+                   （同一个状态出现两份，正是这类改动最先坏的形态）。⚠️ 「消息是明文存的」这条边界
+                   **没有消失**：它改由「删除好友」的确认框（`modules/teamwork/desktop.js` 的 `confirmRemoveFriend()`）
+                   与手机版对话列表页（`modules/teamwork/mobile.js` 的 `TEAMWORK_PRIVACY`）承载，
+                   产品说明 / CHANGELOG 里也照旧写着 —— 别把「屏幕上少了一句话」当成「可以对外说加密聊天」。 -->
+              <span class="teamwork-privacy">仅ZXDesk成员可互相加好友，仅用于团队间的任务下达和协作交流</span>
+            </div>
+ <!-- ⭐ 0.6.x：**对话自己的设置**入口（「对话模块中要有一个设置……
+                 不放到全局设置里」）。提醒时刻、总开关都在它里面，⛔ 全局设置页一行都没动。
+                 ⚠️ 它在这里（整屏顶栏）而不是对话流头里：没打开任何会话时也必须点得到。
+                 处理见 `modules/teamwork/desktop.js` 的事件委托（懒加载 `desktop-settings.js`）。
+                 ⭐ 0.7.7-⑫：`btn-subtle`（灰描边）看着像禁用态 ⇒ 换成 `btn-line`（品牌色描边，
+                 定义在 `desktop/app.css` 的「品牌色描边按钮」那一段）。⚠️ 这三个类被
+                 `ttt/test/teamwork.test.js` 的 0.7.7-⑫ 钉住，别顺手改。
+ ⭐ 2026-10-04：显示文案从「对话设置」改成「设置」（`title` 与处理函数不动）；
+                 页头那颗常驻「连接状态」徽标已**整颗移除**（⚠️ 别只改文案；同时去掉状态点与它的对齐依赖）。 -->
+            <button id="teamwork-settings-btn" class="btn btn-line btn-sm" type="button" title="对话设置（提醒时刻等）">
+              ⚙ 设置
+            </button>
+          </div>
+          <div class="teamwork-wrap">
+            <aside class="teamwork-side">
+              <!-- 加好友：输入**对方的登录名**（一期没有「可添加的账号」列表，让对方把登录名给你） -->
+              <div class="teamwork-add">
+                <input
+                  name="peer"
+                  id="teamwork-friend-name"
+                  type="text"
+                  placeholder="对方的登录名（让他把登录名给你）"
+                  autocomplete="off"
+                  data-autofill-guard
+                  data-lpignore="true"
+                  data-1p-ignore
+                  data-bwignore="true"
+                  readonly
+                />
+                <button id="teamwork-add-btn" class="btn btn-primary btn-sm" type="button">加好友</button>
+              </div>
+ <!-- ⭐ 0.7.6：好友 / 申请不再内联，各变成一颗按钮，点开是弹窗。
+                   ⚠️ 它们是**静态骨架**（不进下面 `#teamwork-side-body` 那块重画范围），
+                   计数与红点由 `modules/teamwork/desktop.js` 的 `paintTeamworkActs()` 补上去 ——
+                   所以这里只留空壳，⛔ 别把数字写死在 HTML 里。 -->
+              <div class="teamwork-acts">
+                <button id="teamwork-friends-btn" class="teamwork-act" type="button" title="好友：预览、拉黑、删好友">
+                  <span class="teamwork-act-t">好友</span><span class="teamwork-act-n">0</span>
+                </button>
+                <button id="teamwork-req-btn" class="teamwork-act" type="button" title="好友申请：同意 / 拒绝">
+                  <span class="teamwork-act-t">申请</span><span class="teamwork-act-n"></span>
+                </button>
+              </div>
+              <div id="teamwork-side-body" class="teamwork-side-body"><!-- JS 渲染会话区 --></div>
+            </aside>
+            <section class="teamwork-main">
+              <div id="teamwork-conv-head" class="teamwork-conv-head"><!-- JS 渲染对方名字 --></div>
+              <div id="teamwork-body" class="teamwork-body"><!-- JS 渲染消息流 --></div>
+              <!-- ⭐⭐ 0.8.61（真机 bug：「从 AI 助手切换到其它对话，底部的输入框整体没有了」）：
+                   这一块**必须带 id**。宿主靠它做「让位给插槽会话」那一下的隐藏/恢复
+                   （`modules/teamwork/desktop.js` 的 `setSlotMain()`）。
+                   ⚠️⭐ 它原先没有 id，宿主是用 `querySelector('#teamwork-view .teamwork-compose')`
+                   去找的 —— 而 0.8.55 起 AI 会话片段**自己也会造一个 `.teamwork-compose`**
+                   （`modules/ai/shared.js` 的 `createAiThreadView()`，与好友聊天共用同一套类名），
+                   且插槽容器是插在 `#teamwork-body` **之后、这一块之前**的。
+                   ⇒ 一旦 AI 片段挂上过，`querySelector` 命中的就是**AI 那一个**（文档里更靠前），
+                   `hidden` 于是设在它身上：真人的输入行从头到尾没被放开 ⇒ 切回任何好友对话都只剩消息区。
+                   ⛔ 别把 id 去掉、也别改回按类名找（AI 那份是同一套类名，永远分不开）。 -->
+              <div id="teamwork-compose" class="teamwork-compose">
+ <!-- ⭐ 0.8.54（「和好友的聊天框左侧加个圆圈加号图标，这个图标的高度要和聊天框的高度一致」）：
+                     圆圈 ＋ 在输入框**左侧**，直径与输入框收起时的高度一致（46px，见 app.css 的 `.teamwork-plus`）。 -->
+                <button id="teamwork-plus" class="teamwork-plus" type="button" title="发送图片 / 任务" aria-label="发送图片或任务">＋</button>
+                <textarea
+                  id="teamwork-input"
+                  rows="2"
+                  maxlength="2000"
+                  placeholder="输入消息，Enter 发送（Shift + Enter 换行）"
+                ></textarea>
+                <button id="teamwork-send" class="btn btn-primary" type="button">发送</button>
+                <!-- ⭐ 0.8.54：发图片用的隐藏文件框（只收位图；⛔ 不收 svg —— 可内联执行脚本） -->
+                <input id="teamwork-img-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden />
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <!-- 统一任务板：顶部时间线 + 重要/紧急四象限 -->
+        <section id="board-view" class="view hidden">
+          <!-- 任务板自己那一块（药丸停在「任务」时才画）：
+               切到模块视图时，任务板自己的那几件 —— **作用域下拉 / 三颗项目按钮 / `#bd-meta` 提示行 /
+               整块内容** —— **整块不画**（不是置灰 —— 与方案 26 对人生日历同一条口径）。
+               ⚠️ 药丸（`#board-tabs`）也住在 `.board-head` 里，但它**不跟着藏**（见下面那条注释）。 -->
+          <div class="board-head">
+            <div class="board-title">
+ <!-- ⭐ 0.8.9：三屏药丸位置统一 —— 任务板这一颗从「屏头独立一行」
+                   并进**标题行**（与「首页看板」「网址/密码夹」同一个位置感）。
+ ⭐ 同日第二轮（「删除我框选的内容，有切换列表显示当前项目就可以了」）：
+                   「📊 汇总任务视图 ＋ 全部项目 · N 个」那一组（图标 / 名字 / 状态徽章）
+                   **整块删掉** —— 当前在哪一屏只看右边那个下拉框。⛔ 别把标题加回来。
+                   ⚠️⭐ 于是这一行现在只剩「药丸 ＋ 下拉框」，而药丸**住在这里**（屏头静态骨架）
+                   ⇒ `renderBoard()` ⛔ **不许再整块隐藏 `.board-head`**：那会把药丸一起藏掉，
+ 表现是「切到随手记之后那颗切换按钮消失了」（实际出现过就是它）。
+                   内容由 `modules/tasks/desktop-board.js` 的 `renderBoard()` 写进来，项由 `slotDefs()` 算出来。
+                   ⚠️ 它仍住屏头**静态骨架**、⛔ 不许放进 `#board-main` —— 后者每画一次就被整块换掉，
+                   药丸会跟着一起没（与 `#webpass-tabs` 同一条理由）。
+                   ⚠️ 没模块可切（随手记被关掉 / 被整目录删掉）时**整条不画**，`:empty` 收掉占位。 -->
+              <div id="board-tabs"></div>
+              <!-- ⭐ 0.4.5：项目（作用域）下拉 —— 一进来就能换项目，不必退回什么卡片屏。
+                   ⚠️ 最后一项是「＋ 新建项目…」，选中它**不切作用域**、只弹新建表单。
+                   ⚠️ 选项由 `views/board.js` 的 `renderBoard()` 填；改作用域走 `openBoard()`（不在这里自己改 state）。 -->
+              <select id="bd-scope" class="tt-select" title="切换日常任务 / 项目"></select>
+            </div>
+            <div class="board-actions">
+              <button id="btn-edit-project" class="btn btn-subtle">编辑项目</button>
+              <button id="btn-del-project" class="btn btn-danger">删除项目</button>
+ <!-- ⭐ 0.8.15：改成**圆形 ＋ 图标**（照首页看板那颗 `.home-fab`）。
+                   ⚠️ 文案改走 `title` / `aria-label` —— 它随作用域变（日常任务 / 任务），
+                   由 `renderBoard()` 回填（⛔ 那里不许再写 `textContent`，会把图标覆盖成文字）。
+                   ⭐⭐ 0.8.15 真机修订二（同日「＋ 的位置也要和首页看板一样」）：再加
+                   `btn-fab-float` —— 它**脱离文档流、悬浮在右下角**，与首页那颗同位置。
+                   ⚠️ 它**仍住这个 `.board-actions` 里**（故意的）：那一块切到随手记时会整块
+                   `hidden`，`display: none` 连带把里面的 `fixed` 孩子一起收掉 ⇒
+                   不必再为「哪一屏显示哪个 ＋」补一处显隐判据（漏了 = 随手记屏上浮着一颗
+                   「新建任务」，点了还真会开任务表单）。 -->
+              <button id="btn-new-task" class="btn-fab btn-fab-float" type="button" title="新建任务" aria-label="新建任务">＋</button>
+            </div>
+          </div>
+          <div id="bd-meta" class="project-meta"></div>
+
+ <!-- ⭐⭐ 0.8.16 真机（「那颗悬浮 ＋ **应该是固定的**，现在任务切随手记会随着界面
+               消失再出现，反过来不会」）：它原来住在**随手记的视图片段**里（`idea/desktop-board-pane.js`），
+               而片段每次重挂都会**换一个新节点**（交叉淡入要的正是这个）⇒ 旧节点跟着旧根淡出、
+               新节点再淡入 = 视觉上「消失 → 出现」。任务那颗不闪，正因为它住在 `.board-actions`
+               （**静态节点**，从不被换）。
+               ⇒ 这一颗也搬到静态层：与 `.board-stage` 平级、住 `#board-view` 里。
+               ⚠️⭐ 它**默认 `hidden`**，由 `renderBoard()` 按「当前是不是随手记那一档」开关，
+               **归 idea 片段去认领**（渲染时绑事件、撤 `hidden`）—— 于是**删掉 `modules/idea/`
+               这个模块时，没人认领它 ⇒ 它永远是 hidden**，「删目录 ⇒ 界面少一块」那条退化口径保住。
+               ⛔ 别把它挪回片段骨架（挪回去就是那段「消失再出现」）。
+               ⚠️ 它与 `#btn-new-task` **互斥显示**（一个在任务档、一个在随手记档），
+               各自的显隐都归 `renderBoard()` 判。 -->
+          <button id="btn-new-idea" class="btn-fab btn-fab-float hidden" type="button" title="随手记一条" aria-label="记一条">＋</button>
+
+          <!-- ⭐ 0.8.15（方案 35）：`#board-main`（任务板自己）与 `#board-pane`（模块贡献的视图）
+               包进同一个 `.board-stage` —— 它是 grid 同格（`grid-area: 1/1`），两层重叠，
+               交叉淡入期间旧的那一层照常显示、新的那一层在它上面淡入。
+               ⚠️⭐ `.board-stage` 必须 `flex:1; min-height:0`（见 `app.css`）：少一个，
+               里面那条两段式（固定头 + 内部滚动）会塌成 0 高 = **列表看不见且不报错**。
+               ⚠️ 药丸（`#board-tabs`）**留在 stage 外面**（住 `.board-head`）：它是屏头静态槽。 -->
+          <div class="board-stage">
+            <!-- ⭐ 0.8.7（方案 28）：任务板自己的整块内容 —— 与模块视图 `#board-pane` **二选一**。
+                 ⛔ 别把药丸（`#board-tabs`）放进这一块：它每次重画都被整块换掉。 -->
+            <div id="board-main">
+            <!-- 快速添加：一行输入，回车即建（默认今天；重要/紧急可先点选，选择会被记住） -->
+            <div class="quick-add" id="quick-add">
+              <span class="qa-ico" aria-hidden="true">✎</span>
+              <input
+                name="q"
+                id="qa-input"
+                type="text"
+                placeholder="快速添加任务：输入标题后回车（默认今天，可先点右侧标签）"
+                autocomplete="off"
+                data-autofill-guard
+                data-lpignore="true"
+                data-1p-ignore
+                data-bwignore="true"
+                readonly
+              />
+              <input id="qa-date" type="date" class="qa-date" title="截止日期（留空＝今天）" />
+              <button id="qa-important" class="qa-tag" type="button" title="标记为重要（记住选择）">🔴 重要</button>
+              <button id="qa-urgent" class="qa-tag" type="button" title="标记为紧急（记住选择）">⏰ 紧急</button>
+              <button id="qa-btn" class="btn btn-primary btn-sm" type="button">添加</button>
+            </div>
+
+ <!-- 视图切换：四象限与甘特图**二选一**，不再同屏 -->
+            <div class="board-views">
+              <div class="segmented" role="tablist" aria-label="看板视图">
+                <button id="bv-quad" class="seg-btn on" type="button" role="tab" aria-selected="true">四象限</button>
+                <button id="bv-timeline" class="seg-btn" type="button" role="tab" aria-selected="false">甘特图</button>
+              </div>
+              <span id="bv-hint" class="bv-hint"></span>
+            </div>
+
+            <!-- 视图一：重要/紧急四象限（一个坐标系，横轴重要 / 纵轴紧急）+ 上方日期轴。
+                 日期轴是必须的：两个视图分开之后，切到四象限就没地方选日期了。 -->
+            <div id="pane-quad" class="board-pane">
+              <div class="day-strip-wrap">
+                <div class="timeline-toolbar">
+                  <button id="ds-prev" class="btn-ghost" title="前一周">‹</button>
+                  <span id="ds-label" class="tl-label"></span>
+                  <button id="ds-next" class="btn-ghost" title="后一周">›</button>
+                  <button id="ds-today" class="btn btn-subtle">今天</button>
+                </div>
+                <div id="day-strip" class="day-strip"></div>
+              </div>
+              <div id="quad-grid" class="quad-grid"></div>
+            </div>
+
+            <!-- 视图二：按周甘特图（任务按 [任务日, 截止日] 画成跨日条） -->
+            <div id="pane-timeline" class="board-pane hidden">
+              <div class="timeline-wrap">
+                <div class="timeline-toolbar">
+                  <button id="tl-prev" class="btn-ghost" title="前一周">‹</button>
+                  <span id="tl-label" class="tl-label"></span>
+                  <button id="tl-next" class="btn-ghost" title="后一周">›</button>
+                  <button id="tl-today" class="btn btn-subtle">今天</button>
+                </div>
+                <div id="timeline" class="timeline"></div>
+              </div>
+            </div>
+
+ <!-- ⭐ 0.8.14：原先这一行「快捷键：…」**已搬去全局设置**
+ （`desktop/views/settings.js` 的「快捷键」栏）—— 「底部快捷键移动到
+                 全局设置中的快捷键设置里」。⛔ 别加回来：任务板底部那一整块现在留给内容。
+                 ⚠️ 搬的是**说明文字**，快捷键**功能本身**一个字没动（键处理在 `desktop/app.js`）。 -->
+            </div>
+
+            <!-- ⭐ 0.8.7（方案 28）：模块贡献的视图挂在这里（槽名 `board-pane`）——
+                 由 `core/slots.js` 的 `mountModuleSlot()` 动态 import 片段并渲染。
+                 ⛔ 任务板**不认识任何模块的实现**（决策 77 / 116），也⛔ 不许写死模块名。 -->
+            <div id="board-pane"></div>
+          </div>
+        </section>
+ <!-- ⭐ 0.8.9：`#ai-view` **已撤** —— AI 的配置（连接 / 上下文 / 记忆）
+             全是设置，并入「设置 → AI 设置」那一栏（模块贡献分栏，决策 77）；独立屏与侧栏入口
+             一起撤掉，看板「其它」里那张卡也不再出（没有 `nav` 的模块不出「去那一屏」的卡）。
+             ⛔ 别把这一屏加回来：那会是「同一份配置有两个门」。
+             ⚠️ 它的界面仍**可达**（设置分栏片段 `modules/ai/desktop-settings-pane.js` 动态 import
+             `modules/ai/shared.js`），所以「孤岛模块」那条检查不会红。 -->
+      </main>
+    </div>
+
+    <!-- 模态框 -->
+    <div id="modal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h3 id="modal-title"></h3>
+          <button id="modal-close" class="btn-ghost">✕</button>
+        </div>
+        <div id="modal-body" class="modal-body"><!-- JS 注入表单 --></div>
+        <div class="modal-foot">
+          <button id="modal-cancel" class="btn btn-subtle">取消</button>
+          <button id="modal-save" class="btn btn-primary">保存（Enter）</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 任务详情弹窗（只读 + 编辑/删除/完成） -->
+    <div id="modal-detail" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h3 id="md-title">任务详情</h3>
+          <button id="md-close" class="btn-ghost">✕</button>
+        </div>
+        <div id="md-body" class="modal-body"><!-- JS 注入详情 --></div>
+        <div class="modal-foot">
+          <button id="md-edit" class="btn btn-subtle">编辑（E）</button>
+          <button id="md-delete" class="btn btn-danger">删除（Del）</button>
+          <button id="md-done-btn" class="btn btn-primary">标记完成（空格）</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 硬件详情弹窗（**只读** + 买回来了 / 再记一件 / 编辑 / 删除）——
+         ⚠️ 刻意**不复用 `#modal-detail`**：那一个的单键处理（空格=标记完成、E=编辑、Del=删除）
+         与任务板绑在一起（见 shell.js 的 keydown），混用会让「在硬件详情里按空格」触发任务动作。
+         ⭐ 它自带 `modal-wide`（760px）：这一屏的详情是「7+ 格信息 + 一段正文」，460px 太挤。 -->
+    <div id="hw-detail" class="modal modal-wide hidden">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h3 id="hwd-title">硬件详情</h3>
+          <button id="hwd-close" class="btn-ghost">✕</button>
+        </div>
+        <div id="hwd-body" class="modal-body"><!-- JS 注入详情 --></div>
+        <div class="modal-foot">
+          <button id="hwd-edit" class="btn btn-subtle">编辑（E）</button>
+          <button id="hwd-del" class="btn btn-danger">删除（Del）</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 课表专用弹窗（导入向导三步 / 作息设置 / 课程详情）——
+         不复用 #modal：导入向导要承载文件选择、多段内容与不同的按钮集合 -->
+    <div id="tt-modal" class="modal hidden">
+      <div class="modal-card tt-modal-card">
+        <div class="modal-head">
+          <h3 id="tt-modal-title"></h3>
+          <button id="tt-modal-close" class="btn-ghost">✕</button>
+        </div>
+        <div id="tt-modal-body" class="modal-body"><!-- JS 注入 --></div>
+        <div class="modal-foot">
+          <button id="tt-modal-cancel" class="btn btn-subtle">取消</button>
+          <button id="tt-modal-ok" class="btn btn-primary hidden">下一步</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast hidden">
+      <span id="toast-msg"></span>
+      <button id="toast-action" class="toast-action hidden" type="button"></button>
+    </div>
+
+    <!-- ⭐ 0.2.0：前端改浏览器**原生 ESM**（零构建、零打包，铁律 1）。
+         入口只负责绑定事件与启动，视图与两端共用的 core/ 由 import 引入。 -->
+    <!-- ⭐ 首屏模块预加载（0.2.0 性能）：ESM 是「拿到 app.js 才知道它 import 了谁」，
+         于是依赖只能一层层被发现，一次首屏要分 5~6 批串行往返（HTTP/1.1 每源只允许 6 个并发）。
+         这里把可达模块**全部提前声明**，浏览器就能和解析 HTML 同时把请求发出去。
+         ⚠️ 这份清单必须与实际 import 图完全一致 —— `ttt/test/frontend-modules.test.js`
+            会拿它和真实的模块图核对，加了新模块却忘了登记会**直接测试失败**。
+         ⚠️ 不要在这里写 `login.js`：它是经典脚本（未登录就要跑），不是模块。 -->
+    <link rel="modulepreload" href="desktop/modules.js" />
+    <link rel="modulepreload" href="desktop/shell.js" />
+    <link rel="modulepreload" href="desktop/state.js" />
+    <link rel="modulepreload" href="desktop/ui.js" />
+    <link rel="modulepreload" href="desktop/views/account.js" />
+    <link rel="modulepreload" href="desktop/views/admin.js" />
+    <link rel="modulepreload" href="desktop/views/home.js" />
+    <link rel="modulepreload" href="desktop/views/search.js" />
+    <link rel="modulepreload" href="desktop/views/settings.js" />
+    <!-- ⭐ 模块自己的前端（0.5.0 模块化重构）：一个模块一个目录，前后端模块名对齐 -->
+    <!-- ⭐ 0.8.7（方案 27）：网址收藏夹与密码库**不再有自己的屏**（并进 `webpass` 那一屏，界面由视图片段动态挂载）
+         ⇒ 它们的静态 import 已从 `desktop/app.js` 摘掉 ⇒ 这三行必须跟着删（`frontend-modules.test.js` 钉着
+         「modulepreload ⟷ 入口静态 import 图」的**双向等式**：多一行也会红）。
+         ⚠️ 它们仍**可达**（视图片段静态 import 它们）⇒ 孤岛检查那条不看 modulepreload，不会误判。 -->
+    <link rel="modulepreload" href="modules/teamwork/desktop.js" />
+    <link rel="modulepreload" href="modules/teamwork/shared.js" />
+ <!-- ⭐ 0.8.9：AI 那一行 modulepreload **已删** —— 它不再有自己的屏
+         （配置并入「设置 → AI 设置」那一栏），入口的静态 import 里也没有它了。
+         ⚠️ 这一栏必须与「入口静态 import 图」严格相等（`frontend-modules.test.js` 钉着双向等式）：
+         多留一行会红，所以它跟着 `desktop/app.js` 那处一起删。
+         ⚠️ 它的 `modules/ai/shared.js`（三块配置界面）由片段**动态 import** ⇒ 刻意不进这张清单。 -->
+    <!-- ⭐ 0.8.7（方案 26）：日历**不再有自己的屏** ⇒ 它不在**首屏 modulepreload** 清单里 ——
+         它的界面由首页看板通过插槽**动态 import**（`core/slots.js` 的约定路径）。
+         ⚠️⭐ 这是**刻意**的（决策 47：懒加载模块不进 modulepreload）：`modulepreload` 的清单
+         必须与「入口的静态 import 图」**严格相等**（`frontend-modules.test.js` 钉着这条双向等式），
+         而日历已经从 `desktop/app.js` 的静态 import 里摘掉了 ⇒ 这里那四行必须跟着删。
+         ⚠️ 它的静态依赖（`shared.js` / `lunar.js` / `life.js` / `desktop.js`）也不再登记 ——
+         片段第一次挂上时它们会自己按需取回（看板上多一次往返，换的是首屏少四个请求）。 -->
+    <!-- ⭐ 0.8.0 记账（方案 20）：静态 import（它是侧栏的一屏 = 主功能入口，不是低频弹层）。
+         ⚠️ 屏内交互与弹窗交互在 `bindLedgerEvents()` 里各挂**一处**事件委托。
+         ⚠️ `calc.js`（两端共用的展示口径）也要登记：`desktop.js` / `mobile.js` 都引它，
+         漏了它「孤岛检查」与 `modulepreload` 等式都会红。 -->
+    <link rel="modulepreload" href="modules/ledger/desktop.js" />
+    <link rel="modulepreload" href="modules/ledger/calc.js" />
+    <!-- ⭐ 0.8.1 记账 2 期：流水的纯展示函数层（`desktop.js` 静态 import ⇒ 必须登记）。
+         ⚠️ `frontend-modules.test.js` 钉着「两端 modulepreload ⟷ 模块实际 import」的**双向等式**：
+         加了 import 就必须加这一行，反之亦然（漏了会红，多一行也会红）。 -->
+    <link rel="modulepreload" href="modules/ledger/entry-calc.js" />
+    <!-- ⭐ 0.8.6 行程（方案 25）：`desktop.js` 静态 import `./shared.js`（两端共用的几何 / 统计 / 文案）
+         ⇒ 两份都属「入口可达」，必须登记 —— 漏了这条 `frontend-modules.test.js` 的
+         `modulepreload` 双向等式当场红（多一行也会红）。 -->
+    <link rel="modulepreload" href="modules/time/trip-desktop.js" />
+    <link rel="modulepreload" href="modules/time/trip-shared.js" />
+    <link rel="modulepreload" href="modules/time/trip-recorder.js" />
+    <link rel="modulepreload" href="modules/time/trip-track.js" />
+    <!-- ⭐ 0.8.9：「人生日历」的口径随它从日历模块搬进行程 —— 行程这一屏是**静态加载**的
+         （不像日历那样懒加载），所以它的依赖必须登记在这里，否则会退回逐层发现的串行往返。 -->
+    <link rel="modulepreload" href="modules/time/trip-life.js" />
+    <!-- ⭐ 0.8.7（方案 28）：`modules/idea/desktop.js` 的那一条**已删** —— 随手记不再是独立一屏，
+         它的界面挂进任务板那一屏，宿主对它改成了**动态** `import()`（点了才取）。
+         ⚠️ 这条清单必须与「入口静态 import 图」**双向相等**（`frontend-modules.test.js` 钉着）：
+         静态 import 没了却留着这一行 ⇒ 多一个用不上的首屏请求，用例当场红。 -->
+    <!-- ⭐ 0.8.10（方案 30）：数码管理（原「NAS硬件管理」）—— 目录改名 `hardware` → `digital`，
+         静态 import 图里的那两条跟着改（`frontend-modules.test.js` 钉着 modulepreload ⟷
+         入口静态 import 图的**双向等式**：少一行也会红）。
+         ⚠️⭐ `modules/assets/desktop.js` **刻意不进这份清单** —— 个人资产管理那一屏是**动态**
+         `import()`（点了才取），照 `webpass` 的做法（决策 47：懒加载模块不进 modulepreload）。 -->
+    <link rel="modulepreload" href="modules/digital/desktop.js" />
+    <link rel="modulepreload" href="modules/digital/shared.js" />
+    <!-- ⭐ 0.7.5 番茄钟（方案 17 §7.2）：静态 import（它是侧栏的一屏 = 主功能入口）。
+         ⚠️ 它自己的事件委托在 `bindPomodoroEvents()` 里挂一次 —— 与收藏夹 / 灵感库同款。 -->
+    <link rel="modulepreload" href="modules/time/pomodoro-desktop.js" />
+    <!-- ⭐ 任务板：四屏都进清单（电脑版没有懒加载的模块前端）—— 0.5.0 批次 6b 起住模块目录 -->
+    <link rel="modulepreload" href="modules/tasks/desktop-board.js" />
+    <link rel="modulepreload" href="modules/tasks/desktop-forms.js" />
+    <link rel="modulepreload" href="modules/tasks/desktop-items.js" />
+    <link rel="modulepreload" href="modules/tasks/desktop-tasks.js" />
+    <link rel="modulepreload" href="modules/tasks/shared.js" />
+    <!-- ⭐ 课表：只登记主视图；`desktop-edit.js` / `desktop-import.js` 是**懒加载**，不进这份清单 -->
+    <link rel="modulepreload" href="modules/time/timetable-desktop.js" />
+    <!-- ⭐⭐ 0.8.13（方案 33）：三块并成一个模块 ⇒ 入口是 `home-desktop.js`（它静态 import
+         上面三个子前端），清单必须与静态 import 图**严格相等**（多一行少一行都会红）。 -->
+    <link rel="modulepreload" href="modules/time/home-desktop.js" />
+    <link rel="modulepreload" href="modules/time/home-shared.js" />
+    <link rel="modulepreload" href="modules/time/pomodoro-shared.js" />
+    <link rel="modulepreload" href="core/api.js" />
+    <link rel="modulepreload" href="core/backup.js" />
+    <link rel="modulepreload" href="core/bookmarks.js" />
+    <link rel="modulepreload" href="modules/teamwork/teamwork-stream.js" />
+    <!-- ⭐ 0.7.5 番茄钟（方案 17 §4.6）：**秒级共用时钟** —— 全项目唯一的「现在」的秒级提供者。
+         ⚠️ 它进这份清单是因为 `desktop/app.js` →（`pomodoro/desktop.js` / `shell.js`）静态可达；
+         手机版要到批次 3 接上 `modules/pomodoro/mobile.js` 时才进 `mobile/index.html` 那一份。 -->
+    <link rel="modulepreload" href="core/clock.js" />
+    <link rel="modulepreload" href="core/constants.js" />
+    <link rel="modulepreload" href="core/dashboard.js" />
+    <link rel="modulepreload" href="core/date.js" />
+    <link rel="modulepreload" href="core/dom.js" />
+    <!-- ⭐⭐ 0.8.14（方案 34 §1）：周期任务的**期展开** —— 被 `core/task.js` 静态 import
+         （`activeOn` 要按期判可见性）⇒ 与它同一份清单，多一行少一行都会红。 -->
+    <link rel="modulepreload" href="core/recur.js" />
+    <link rel="modulepreload" href="core/slots.js" />
+    <link rel="modulepreload" href="core/modules.js" />
+    <link rel="modulepreload" href="core/task-create.js" />
+    <link rel="modulepreload" href="core/task.js" />
+    <link rel="modulepreload" href="core/timetable.js" />
+    <!-- ⭐ 0.8.15（方案 35 §3.1）：`core/transition.js` 是**静态**被引的（`core/slots.js` /
+         `desktop/shell.js` / `modules/tasks/*`）⇒ 必须进这份清单：`frontend-modules.test.js`
+         钉着「modulepreload ⟷ 入口静态 import 图」的**双向等式**，少一行当场红。
+         ⚠️ 它与「预热」不是一回事：`warmSlots()` 预热的是**视图片段**（懒加载，决策 47
+         ⇒ ⛔ 那些不许进这份清单）。 -->
+    <link rel="modulepreload" href="core/transition.js" />
+    <script type="module" src="desktop/app.js"></script>
+  </body>
+</html>

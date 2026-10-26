@@ -1,0 +1,13 @@
+{
+  "name": "webpass",
+  "title": "网址/密码夹",
+  "icon": "🔗",
+  "order": 29,
+  "defaultEnabled": true,
+  "switchField": null,
+  "apiPrefix": [],
+  "tables": [],
+  "depends": [],
+  "archDoc": "25-网址与密码.md",
+  "test": "webpass.test.js"
+}

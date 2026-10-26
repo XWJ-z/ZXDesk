@@ -1,0 +1,27 @@
+{
+  "name": "teamwork",
+  "title": "团队协作",
+  "icon": "💬",
+  "order": 60,
+  "defaultEnabled": true,
+  "switchField": null,
+  "apiPrefix": ["teamwork", "collab"],
+  "tables": [
+    "teamwork_friendships",
+    "teamwork_conversations",
+    "teamwork_members",
+    "teamwork_messages",
+    "teamwork_reminders",
+    "teamwork_reminder_prefs",
+    "teamwork_friend_prefs",
+    "teamwork_cleared",
+    "project_members",
+    "task_reports",
+    "collab_states",
+    "project_comments",
+    "project_files"
+  ],
+  "depends": ["tasks"],
+  "archDoc": "17-对话.md",
+  "test": "teamwork.test.js"
+}

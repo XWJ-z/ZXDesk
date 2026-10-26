@@ -1,0 +1,13 @@
+{
+  "name": "digital",
+  "title": "我的设备",
+  "icon": "🧩",
+  "order": 40,
+  "defaultEnabled": true,
+  "switchField": "hide_digital",
+  "apiPrefix": "hardware",
+  "tables": ["hardware_items", "hardware_templates"],
+  "depends": [],
+  "archDoc": "15-数码管理.md",
+  "test": "digital.test.js"
+}

@@ -1,0 +1,448 @@
+/**
+ * 0.1.4 base.css —— 三屏（popup / sidepanel / settings）共用的组件样式。
+ * ⛔ 布局（壳尺寸、卡片摆位）不住这里；颜色/字号只吃 tokens.css 变量。
+ */
+
+/* ---- 表单 ---- */
+input,
+select {
+  font: inherit;
+  color: var(--ink);
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-input);
+  background: var(--surface);
+}
+input::placeholder {
+  color: var(--ink-2);
+}
+
+/* ---- 按钮 ---- */
+button {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-input);
+  background: var(--surface);
+  color: var(--ink);
+  padding: 8px 12px;
+}
+button.primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+  font-weight: 600;
+}
+button.primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+button.ghost {
+  border: 0;
+  background: none;
+  color: var(--brand);
+  padding: 8px 4px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.row button {
+  flex: 1;
+}
+.grow {
+  flex: 1;
+}
+
+/* ---- 文字 ---- */
+h1 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+.hint {
+  color: var(--ink-2);
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+.hint.ok,
+.msg-ok {
+  color: var(--ok);
+}
+.hint.bad,
+.msg-bad {
+  color: var(--danger);
+}
+.hint a {
+  color: var(--brand);
+  cursor: pointer;
+}
+.badge {
+  padding: 0 6px;
+  border-radius: var(--radius-chip);
+  background: var(--brand-weak);
+  color: var(--brand-ink);
+  font-size: 12px;
+  flex: none;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  flex: none;
+}
+.dot.err {
+  background: var(--danger);
+}
+
+/* ---- 弹出菜单 ---- */
+.pop-anchor {
+  position: relative;
+  flex: none;
+}
+.pop-anchor summary {
+  list-style: none;
+  cursor: pointer;
+  color: var(--ink-2);
+  border-radius: var(--radius-input);
+}
+.pop-anchor summary::-webkit-details-marker {
+  display: none;
+}
+.menu-pop {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-input);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  min-width: 120px;
+  z-index: 10;
+}
+.menu-pop button {
+  text-align: left;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  padding: 8px 12px;
+}
+.menu-pop button:hover {
+  background: var(--bg);
+}
+.menu-pop .danger {
+  color: var(--danger);
+}
+.menu-sep {
+  border-top: 1px solid var(--line);
+}
+
+/* ---- 收藏表单（标题/网址/标签药丸，照网页端 openBmForm） ---- */
+.field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.flabel {
+  flex: none;
+  width: 28px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.f-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  border: 0;
+  border-radius: 8px;
+  padding: 4px 6px;
+  background: transparent;
+}
+.f-title:hover {
+  background: var(--bg);
+}
+.f-url {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--ink-2);
+  background: var(--bg);
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+.flabel-line {
+  margin: 4px 0 6px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.picks:empty {
+  margin: 0;
+}
+.pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  border: 1px solid var(--brand);
+  border-radius: var(--radius-chip);
+  background: var(--brand-weak);
+  color: var(--brand-ink);
+  font: inherit;
+  font-size: 12px;
+  line-height: 22px;
+  padding-top: 0;
+  padding-bottom: 0;
+  cursor: pointer;
+}
+.pick .x {
+  font-size: 12px;
+  color: var(--brand-ink);
+}
+.tag-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.tag-add select {
+  flex: none;
+  width: 88px;
+  padding: 4px;
+  font-size: 12px;
+}
+.tag-add input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+.btn-subtle {
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.btn-subtle:hover {
+  background: var(--bg);
+}
+.sep {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 12px 0;
+}
+
+/* ---- 列表（骨架 / 空态 / 确认条 / 高亮，两形态共用） ---- */
+.add-toggle {
+  width: 100%;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-input);
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 12px;
+  padding: 6px 0;
+  margin-bottom: 8px;
+}
+.add-toggle:hover {
+  color: var(--brand);
+  border-color: var(--brand);
+}
+.panel {
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  padding: 12px;
+  margin-bottom: 8px;
+}
+.panel.flush {
+  padding: 4px 12px;
+}
+.card {
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  padding: 4px 12px;
+}
+.list-bar {
+  margin-bottom: 8px;
+}
+.list-bar input {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+.list-bar select {
+  flex: none;
+  min-width: 96px;
+  max-width: 120px;
+  padding: 8px 4px;
+  text-overflow: ellipsis;
+}
+.total {
+  font-size: 12px;
+  color: var(--ink-2);
+  margin: 4px 0;
+}
+#list,
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.list li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.list li:last-child {
+  border-bottom: 0;
+}
+.list li:hover,
+.list li:focus-within {
+  background: var(--bg);
+  margin: 0 -12px;
+  padding-left: 12px;
+  padding-right: 12px;
+  border-radius: 8px;
+  border-bottom-color: transparent;
+}
+.li-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.li-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.li-title:hover {
+  color: var(--brand);
+  text-decoration: underline;
+}
+.li-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  color: var(--ink-2);
+  font-size: 12px;
+  margin-top: 2px;
+}
+.li-host {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 45%;
+}
+.li-tag {
+  padding: 0 6px;
+  border-radius: var(--radius-chip);
+  background: var(--brand-weak);
+  color: var(--brand-ink);
+  font-size: 12px;
+}
+.li-act {
+  flex: none;
+  display: inline-flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.list li:hover .li-act,
+.list li:focus-within .li-act {
+  opacity: 1;
+}
+@media (hover: none) {
+  .list .li-act {
+    opacity: 1;
+  }
+}
+.act-btn {
+  border: 0;
+  background: none;
+  padding: 2px 4px;
+  font-size: 13px;
+  color: var(--ink-2);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.act-btn:hover {
+  background: var(--line);
+  color: var(--ink);
+}
+.act-del:hover {
+  color: var(--danger);
+  background: var(--danger-weak);
+}
+.confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink);
+}
+.confirm .q {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.confirm button {
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: var(--radius-chip);
+  line-height: 20px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+.confirm .yes {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+.list li.hl {
+  background: var(--brand-weak);
+}
+.skel-row {
+  height: 32px;
+  border-radius: 8px;
+  margin: 8px 0;
+  background: linear-gradient(90deg, var(--bg) 25%, var(--line) 50%, var(--bg) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.2s infinite;
+}
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+.state {
+  margin: 12px 0;
+}
+
+[hidden] {
+  display: none !important;
+}

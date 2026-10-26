@@ -1,0 +1,33 @@
+# 依赖
+node_modules/
+
+# 产物（统一落根 release/，这里只是兜底）
+/dist/
+/build/
+*.fpk
+*.hap
+*.crx
+*.zip
+!docs/**/*.zip
+
+# 临时
+temp/
+tmp/
+*.log
+.DS_Store
+Thumbs.db
+
+# Android 构建
+.gradle/
+local.properties
+*.apk
+*.aab
+captures/
+
+# IDE / Kotlin
+.idea/
+*.iml
+.kotlin/
+
+# Android 构建（模块级）
+**/build/

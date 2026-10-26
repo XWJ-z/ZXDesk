@@ -1,0 +1,29 @@
+# 依赖（绝不入库；运行时不依赖任何 node_modules）
+node_modules/
+
+# 打包输出与临时目录（build/ 下的**脚本**要入库，只忽略它的产物）
+/build/out/
+/build/tmp/
+
+# 开发态数据目录（npm start 时 `data/` 的替身）
+.dev-data/
+
+# 产物兜底：正式产物统一落根 release/
+/dist/
+dist/
+out/
+*.fpk
+*.hap
+*.crx
+*.zip
+!docs/**/*.zip
+*.msi
+*.nsis
+*.exe
+
+# 临时
+temp/
+tmp/
+*.log
+.DS_Store
+Thumbs.db

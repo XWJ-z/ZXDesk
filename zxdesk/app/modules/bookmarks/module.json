@@ -1,0 +1,13 @@
+{
+  "name": "bookmarks",
+  "title": "网址收藏夹",
+  "icon": "🔖",
+  "order": 30,
+  "defaultEnabled": true,
+  "switchField": "hide_bookmarks",
+  "apiPrefix": "bookmarks",
+  "tables": ["bookmarks", "bookmark_tags", "bookmark_tag_links"],
+  "depends": [],
+  "archDoc": "14-网址收藏夹.md",
+  "test": "bookmarks.test.js"
+}
