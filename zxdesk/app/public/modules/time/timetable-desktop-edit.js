@@ -315,7 +315,7 @@ export function openTtSessionForm(course, session) {
        <div class="tt-field"><label>教室</label><input id="tt-f-room" type="text" value="${esc(s.room || '')}" maxlength="100" /></div>
        <div class="tt-field"><label>教师（留空＝沿用课程的）</label><input id="tt-f-teacher" type="text" value="${esc(s.teacher || '')}" maxlength="100" /></div>
      </div>
-     <!-- ⭐ 0.7.1（决策 55 修订）：这里原来有一个「课堂备注（这节课）」输入框 —— 它挂在课次上、
+     <!-- ⭐ 0.7.1（修订）：这里原来有一个「课堂备注（这节课）」输入框 —— 它挂在课次上、
  而课次按周重复（这几周都显示同一条）。要求「只在那一天显示」⇒ 已改成详情的
           「本节备注」（按「课次 + 日期」存），表单里不再留这个框：留着就成「填了看不见」的黑洞。 -->`,
     '保存',

@@ -728,7 +728,7 @@ export function renderMore() {
     </div>
     <div class="sec sec-card">
  <!-- ⭐ 0.9.1：与电脑版侧栏底部那两颗「关于我们 / 联系与反馈」是**同一件事的两处入口**
-           （老大指定：手机端放这里，两个卡片）。内容两端共用 core/about.js，
+           （手机端放这里，两张卡片）。内容两端共用 core/about.js，
            所以这里只管动作名，⛔ 不许在这一页把文案再写一遍。
            ⚠️⚠️ 这段注释住在模板串里面 ⇒ 里面⛔一个反引号都不能写（会截断整个串）。 -->
       <button class="mrow" type="button" data-act="about" style="width:100%;font:inherit;text-align:left">
