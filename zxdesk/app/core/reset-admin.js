@@ -49,7 +49,7 @@
  *
  * @author zx
  * @date   2026-09-10
- * @since 0.9.1
+ * @since 0.9.5
  * 相关：docs/公共/架构文档/04-多用户与账号.md
  */
 const fs = require('node:fs');

@@ -29,7 +29,7 @@
  *
  * @author zx
  * @date   2026-10-27
- * @since 0.9.1
+ * @since 0.9.5
  * 相关：Project/server/update-api/README.md、Project/windows/src/main/update/client.js、
  *      docs/公共/架构文档/03-数据安全.md（联网点那一节）
  */

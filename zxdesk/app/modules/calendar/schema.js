@@ -45,7 +45,7 @@
  *
  * @author zx
  * @date   2026-09-18
- * @since 0.9.1
+ * @since 0.9.5
  * 相关：docs/公共/架构文档/22-日历.md、docs/公共/开发方案/18-日历-1期.md
  */
 module.exports = {

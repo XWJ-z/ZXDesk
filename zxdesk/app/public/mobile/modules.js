@@ -42,7 +42,7 @@
  *
  * @author zx
  * @date   2026-09-14
- * @since 0.9.1
+ * @since 0.9.5
  * 相关：docs/公共/架构文档/07-前端-电脑版与手机版.md、13-决策记录.md（决策 67 / 76）、core/modules.js
  */
 

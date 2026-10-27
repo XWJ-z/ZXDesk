@@ -15,7 +15,7 @@
  *
  * @author zx
  * @date   2026-10-27
- * @since 0.9.1
+ * @since 0.9.5
  */
 
 import { esc } from './dom.js';

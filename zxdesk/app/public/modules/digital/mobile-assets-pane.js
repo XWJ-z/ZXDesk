@@ -27,7 +27,7 @@
  *
  * @author zx
  * @date   2026-10-03
- * @since 0.9.1
+ * @since 0.9.5
  * 相关：docs/公共/开发方案/30-个人资产管理.md、docs/公共/架构文档/15-数码管理.md、core/slots.js
  */
 

@@ -21,19 +21,19 @@
 
 <div align="center">
 
-<a href="https://github.com/XWJ-z/ZXDesk/releases/latest/download/zxdesk-0.8.71.fpk"><img src="https://img.shields.io/badge/%E9%A3%9E%E7%89%9B%E5%BA%94%E7%94%A8%E5%8C%85-zxdesk--0.8.71.fpk%20%C2%B7%20%E7%BA%A63.2MB-2ea44f?style=for-the-badge&logo=linux&logoColor=white" alt="下载 fnOS 应用包"/></a>
+<a href="https://github.com/XWJ-z/ZXDesk/releases/latest/download/zxdesk-0.9.5.fpk"><img src="https://img.shields.io/badge/%E9%A3%9E%E7%89%9B%E5%BA%94%E7%94%A8%E5%8C%85-zxdesk--0.9.5.fpk%20%C2%B7%20%E7%BA%A63.4MB-2ea44f?style=for-the-badge&logo=linux&logoColor=white" alt="下载 fnOS 应用包"/></a>
 
 <br>
 
-<a href="https://github.com/XWJ-z/ZXDesk/releases/latest/download/zxdesk-android-0.2.11-debug.apk"><img src="https://img.shields.io/badge/%E5%AE%89%E5%8D%93%E5%AE%89%E8%A3%85%E5%8C%85-zxdesk--android--0.2.11--debug.apk%20%C2%B7%20%E7%BA%A69.2MB-3ddc84?style=for-the-badge&logo=android&logoColor=white" alt="下载安卓安装包"/></a>
+<a href="https://github.com/XWJ-z/ZXDesk/releases/latest/download/zxdesk-android-0.2.14-debug.apk"><img src="https://img.shields.io/badge/%E5%AE%89%E5%8D%93%E5%AE%89%E8%A3%85%E5%8C%85-zxdesk--android--0.2.14--debug.apk%20%C2%B7%20%E7%BA%A69.1MB-3ddc84?style=for-the-badge&logo=android&logoColor=white" alt="下载安卓安装包"/></a>
 
 <br>
 
-<a href="https://github.com/XWJ-z/ZXDesk/releases/latest/download/zxdesk-windows-0.2.1-x64-setup.exe"><img src="https://img.shields.io/badge/Windows%20%E5%AE%89%E8%A3%85%E5%8C%85-zxdesk--windows--0.2.1--x64--setup.exe%20%C2%B7%20%E7%BA%A6151MB-0078d4?style=for-the-badge&logo=windows&logoColor=white" alt="下载 Windows 安装包"/></a>
+<a href="https://github.com/XWJ-z/ZXDesk/releases/latest/download/zxdesk-windows-0.2.3-x64-setup.exe"><img src="https://img.shields.io/badge/Windows%20%E5%AE%89%E8%A3%85%E5%8C%85-zxdesk--windows--0.2.3--x64--setup.exe%20%C2%B7%20%E7%BA%A6151MB-0078d4?style=for-the-badge&logo=windows&logoColor=white" alt="下载 Windows 安装包"/></a>
 
 <br>
 
-<a href="https://github.com/XWJ-z/ZXDesk/releases/latest/download/zxdesk-edge-0.1.5.zip"><img src="https://img.shields.io/badge/Edge%20%E6%89%A9%E5%B1%95-zxdesk--edge--0.1.5.zip%20%C2%B7%20%E7%BA%A60.1MB-4b5563?style=for-the-badge&logo=microsoftedge&logoColor=white" alt="下载 Edge 扩展"/></a>
+<a href="https://github.com/XWJ-z/ZXDesk/releases/latest/download/zxdesk-edge-0.1.8.zip"><img src="https://img.shields.io/badge/Edge%20%E6%89%A9%E5%B1%95-zxdesk--edge--0.1.8.zip%20%C2%B7%20%E7%BA%A60.1MB-4b5563?style=for-the-badge&logo=microsoftedge&logoColor=white" alt="下载 Edge 扩展"/></a>
 
 </div>
 
@@ -64,10 +64,10 @@ ZXDesk 把散在各处的东西收进一套界面：任务、日程、课表、�
 
 | 端 | 怎么装 | 状态 |
 | --- | --- | --- |
-| **fnOS** | 下 `zxdesk.fpk`，应用中心「手动安装」或 `appcenter-cli install-fpk zxdesk.fpk`；也可在应用中心搜「ZXDesk 工作台」 | 已上架 |
-| **Android** | 下 `zxdesk-android.apk` 侧载，连你自己的 NAS | 一期完成 |
-| **Windows** | 下 `zxdesk-windows-setup.exe` 安装，连你自己的 NAS | 正式版 |
-| **Edge** | 下 `zxdesk-edge.zip`，解压后 `edge://extensions` → 开发人员模式 → 加载解压缩的扩展 | 可用 |
+| **fnOS** | 点上面的「飞牛应用包」，应用中心「手动安装」选它即可；也可在应用中心搜「ZXDesk 工作台」 | 已上架 |
+| **Android** | 点上面的「安卓安装包」侧载，连你自己的 NAS | 可用 |
+| **Windows** | 点上面的「Windows 安装包」安装，连你自己的 NAS | 正式版 |
+| **Edge** | 点上面的「Edge 扩展」，解压后 `edge://extensions` → 开发人员模式 → 加载解压缩的扩展 | 可用 |
 | HarmonyOS | — | 规划中 |
 
 服务端只跑在 fnOS 上。其余三端是「外壳 ＋ 远程加载界面」，业务与界面始终从 NAS 拉取 —— 所以工作台升级后，壳不用跟着重发。

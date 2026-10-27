@@ -41,7 +41,7 @@
  *
  * @author zx
  * @date   2026-09-10
- * @since 0.9.1
+ * @since 0.9.5
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md
  */
 const { makeStore } = require('./store/index.js');

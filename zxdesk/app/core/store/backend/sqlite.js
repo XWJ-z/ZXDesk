@@ -26,7 +26,7 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.9.1
+ * @since 0.9.5
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md
  */
 const fs = require('node:fs');
