@@ -48,7 +48,7 @@ status_app() {
   if [ -f "$PID_FILE" ]; then
     local pid
     pid="$(head -n 1 "$PID_FILE" | tr -d '[:space:]')"
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && grep -q 'server\.js' "/proc/$pid/cmdline" 2>/dev/null; then
       return 0
     fi
     rm -f "$PID_FILE"
@@ -69,7 +69,12 @@ start_app() {
   # 确保数据目录存在
   if [ -n "$DATA_DIR" ]; then
     mkdir -p "$DATA_DIR" 2>/dev/null
-    chown -R zxdesk:zxdesk "$DATA_DIR" 2>/dev/null || true
+    # ⚠️ 只在属主不对时才递归改：数据目录含协作附件与备份，每次启停遍历整棵树会随数据量变慢。
+    #    修正失败不再静默吞掉 —— 与「静默降级不可接受」的口径一致。
+    if [ "$(stat -c %U "$DATA_DIR" 2>/dev/null)" != "zxdesk" ]; then
+      chown -R zxdesk:zxdesk "$DATA_DIR" 2>/dev/null ||
+        log_msg "警告：数据目录属主修正失败（$DATA_DIR）——请检查目录是否被其它账号占用"
+    fi
   fi
   [ -d "$APP_DIR" ] || { log_msg "错误：APPDEST/core 不存在"; return 1; }
   # ⚠️ 上一次没停干净会留下 Socket 文件，直接 listen 会 EADDRINUSE（server.js 里也会先删一次，

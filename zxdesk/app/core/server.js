@@ -46,7 +46,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { APP_VERSION } = require('./storage.js');
 const { GATEWAY_PREFIX, gatewaySlashRedirect, stripGatewayPrefix } = require('./gateway.js');
-const { currentUser, handleAdmin, handleAuth } = require('./routes/auth.js');
+const { currentUser, handleAdmin, handleAuth, mustSetupUser } = require('./routes/auth.js');
 const { fail, json, notFound } = require('./http-util.js');
 const { handleBootstrap, handleDashboard, handleHealth, handleVersions } = require('./routes/system.js');
 const { handleExportOrg, handleImportUser, handleRestoreOrg } = require('./routes/backup.js');
@@ -222,6 +222,12 @@ function handleApi(req, res, urlPath) {
   // ⭐ 数据闸门：业务接口一律要求登录。
   //    只做业务鉴权，**不管登录态之外的事** —— 也不存在任何「以他人身份访问」的入口。
   if (!user) return json(res, 401, { error: 'unauthorized' });
+
+  // ⭐ 首登强制（服务端拦截 ① 的第二半）：内置管理员仍在使用公开初始凭据时，
+  //    除 `/api/auth/*` 里那几个放行项之外**一律 403** —— 包括各模块接口、管理员接口与 SSE 长连接。
+  //    ⚠️ 前端拿到 `must_setup` 会跳 `/setup.html`；静态页那一侧还有一道 302（见 `static.js`），
+  //    两道缺一都能被绕过（只拦接口 ⇒ 能看见界面壳子；只拦页面 ⇒ 能直接打接口）。
+  if (mustSetupUser(user)) return json(res, 403, { error: 'must_setup' });
 
   // ⭐ 0.3.5 对话的 **SSE 长连接** —— 必须在查 `API_ROUTES` 表**之前**分派。
   //    原因与 `/api/health` 同类：长连接不能走「处理完就 `res.end()`」的常规路径。

@@ -17,7 +17,7 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.34
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/04-多用户与账号.md、docs/公共/开发方案/08-设置页交互改版.md
  */
 
@@ -144,7 +144,7 @@ export function openPasswordModal() {
     '修改密码',
     `
     <div class="form-group"><label>当前密码</label><input type="password" id="f-cur" autocomplete="current-password" /></div>
-    <div class="form-group"><label>新密码（至少 6 位）</label><input type="password" id="f-new" autocomplete="new-password" /></div>
+    <div class="form-group"><label>新密码（至少 8 位）</label><input type="password" id="f-new" autocomplete="new-password" /></div>
     <div class="form-group"><label>再输一次新密码</label><input type="password" id="f-new2" autocomplete="new-password" /></div>
     <div class="sec-note" style="font-size: 12px; color: var(--text-2); line-height: 1.7">
       改完之后，你在<b>其他设备</b>上的登录会立即失效，需要重新登录；这台设备不受影响。
@@ -153,7 +153,7 @@ export function openPasswordModal() {
   setModalSave('保存', false);
   $('#modal-save').onclick = async () => {
     const n1 = $('#f-new').value;
-    if (n1.length < 6) return toast('新密码至少 6 位', true);
+    if (n1.length < 8) return toast('新密码至少 8 位', true);
     if (n1 !== $('#f-new2').value) return toast('两次输入的新密码不一致', true);
     try {
       await api('POST', '/api/auth/password', { current: $('#f-cur').value, next: n1 });

@@ -30,7 +30,7 @@
  *
  * @author zx
  * @date   2026-09-18
- * @since 0.8.32
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/21-番茄钟.md、docs/公共/开发方案/17-番茄钟-1期.md
  */
 module.exports = {

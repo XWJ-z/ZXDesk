@@ -10,16 +10,19 @@
  * ⚠️ 拆自 `server.js`（002 报告 §5.1 ①），**只搬家不改逻辑**；运行期单例从 `../context.js` 取。
  * ⚠️ 越权与「不存在」统一 404（不是 403）—— 403 等于告诉对方「这条记录存在，只是不归你」。
  * ⚠️ **管理面板不显示成员的任务条数**（需求红线：管理员也看不到成员的数据）。
- * ⚠️ 登录失败节流按**账号名**计数，攻击者换用户名即可绕过（已知缺陷，见 12-部署与安全清单）。
+ * ⚠️ 登录失败节流按**「IP + 账号名」**计（并另有一条纯 IP 上限），换用户名绕不过去，
+ *    也不能靠打某个名字把别人锁死。
+ * ⚠️ 内置管理员**仍在使用初始凭据**时，除改用户名 / 改密码 / 登出 / 取自己信息之外一律拦下
+ *    （`mustSetupUser()`，服务端与静态页两处都要拦）。
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.8.21
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/04-多用户与账号.md
  */
 'use strict';
 
-const { AUTH_SECRET, logLine, store } = require('../context.js');
+const { AUTH_SECRET, BUILTIN_ADMIN, logLine, store } = require('../context.js');
 // ⭐ 0.8.5：日志文件（目录 / 清单 / 读尾部 / 删账号时清）—— 见 `/api/admin/logs` 那两个分支
 const logs = require('../logs.js');
 const {
@@ -53,65 +56,156 @@ function currentUser(req) {
 }
 
 /**
- * 功能：读取「是否允许自主注册」这一设置项。
- * @returns {boolean} 允许自主注册返回 true；仅当设置为 '0' 时返回 false（未设置默认允许）
+ * 「这个账号的口令是不是还是公开初始值」的记忆表（uid → { hash, yes }）。
+ *
+ * ⚠️⭐ 必须有：`verifyPassword` 内部是 **scrypt**（本机实测 ≈250 ms）。而这条判定挂在
+ *      **每个已登录请求**上（`server.js` 的闸门之后、`static.js` 的静态页之前），
+ *      不缓存就等于给管理员账号的每次点击加四分之一秒、还占满事件循环。
+ * 缓存键取 `password_hash` 本身：口令一改散列就变 ⇒ 自动失效，不需要任何手动清理。
+ *
+ * @type {Map.<number, {hash: string, yes: boolean}>}
+ */
+const defaultPwCache = new Map();
+
+/**
+ * 功能：判断某个账号的口令是否**仍是公开的初始口令**（不看用户名）。
+ *
+ * 说明：给「首登改密」用的一条例外：账号还在用 `admin123` 时，改密接口允许不填「当前密码」——
+ *      那串口令本来就是公开的，多问一次没有任何安全收益，只会让首登多一道坎。
+ * ⚠️ 结果按散列记忆（见 `defaultPwCache`），别删 —— 删了就是每请求一次 scrypt。
+ *
+ * @param {Object} user - `currentUser()` 返回的账号元信息
+ * @returns {boolean} 仍在用初始口令返回 true
+ */
+function usesDefaultPassword(user) {
+  if (!user) return false;
+  const row = store.findUserById(user.id);
+  if (!row || !row.password_hash) return false;
+  const hit = defaultPwCache.get(user.id);
+  if (hit && hit.hash === row.password_hash) return hit.yes;
+  const yes = verifyPassword(BUILTIN_ADMIN.password, row.password_hash);
+  defaultPwCache.set(user.id, { hash: row.password_hash, yes });
+  return yes;
+}
+
+/**
+ * 功能：判断某个账号是否**仍在使用公开的初始凭据**（内置管理员的 `admin` / `admin123`）。
+ *
+ * 说明：⭐ 首登强制的唯一判据 —— 比对散列，不加标志位、不改表结构。好处是老库不用迁移、
+ *      重启不丢、整库备份恢复后照样成立，管理员改过用户名或密码后**自动**不命中。
+ *      只认「内置管理员仍在使用初始凭据」这一种，普通成员与其它管理员一律不受影响。
+ *
+ * @param {Object} user - `currentUser()` 返回的账号元信息（不含口令散列）
+ * @returns {boolean} 命中时 true（调用方必须拦住它，逼用户先改用户名与密码）
+ */
+function mustSetupUser(user) {
+  if (!user || user.username !== BUILTIN_ADMIN.username) return false;
+  return usesDefaultPassword(user);
+}
+
+/**
+ * 功能：判断本次请求是否走 HTTPS（决定会话 Cookie 要不要带 `Secure`）。
+ *
+ * 说明：线程内没有 TLS 时 `req.socket.encrypted` 是 undefined；经统一网关（Socket）时它也不是 TLS，
+ *      所以再看一眼 `x-forwarded-proto`。两样都不成立就是明文 http（端口入口），不加 `Secure`。
+ *
+ * @param {Object} req - HTTP 请求对象
+ * @returns {boolean} 走了 HTTPS 返回 true
+ */
+function isSecureReq(req) {
+  if (req.socket && req.socket.encrypted === true) return true;
+  return String(req.headers['x-forwarded-proto'] || '').toLowerCase() === 'https';
+}
+
+/**
+ * 功能：读「是否允许自主注册」。
+ * @returns {boolean} 只有显式设成 '1' 才允许；缺键、空值、'0' 一律视为**关闭**
  */
 function selfRegisterAllowed() {
-  return store.getSetting('allow_self_register') !== '0';
+  return store.getSetting('allow_self_register') === '1';
 }
 
 /**
  * 功能：登录失败节流器（内存 Map，按登录名计数）—— 对外只暴露 `check` / `fail` / `reset` 三个方法。
  *
- * 说明：窗口 5 分钟、上限 10 次失败 —— `check` 在超限时返回一句可直接展示给用户的中文提示。
+ * 说明：窗口 5 分钟。两个维度同时计：**「来源 IP + 登录名」10 次**（防定向爆破某个账号）、
+ * **「来源 IP」30 次**（防换着名字试，且不让攻击者靠打某个名字把别人锁死）。
  * 为什么必须有：登录是**唯一可被匿名反复尝试**的入口，而每次尝试都要跑一遍 scrypt，
  * 而 `scryptSync` 会阻塞事件循环 —— 不设限就等于把「猜密码」变成「打垮服务」。
- * 阈值刻意宽松（5 分钟 10 次），避免误伤：正常用户打错几次不会被锁。
+ * 阈值刻意宽松，避免误伤：正常用户打错几次不会被锁。
  *
- * ⚠️ 已知局限：按登录名计数，攻击者换用户名即可绕过计数（但那样也无法命中某个特定账号）；
- *    且恶意者可以故意把某个用户名打到限流来干扰其登录。更完善的方案（按 IP + 全局配额）
- *    留待后续版本，这里先堵住最直接的风险。
+ * ⚠️ 计数只在内存里，进程重启即清空（这是刻意的：没有持久化就有没有「重启绕过」之外的副作用）。
+ * ⚠️ 取的是 `req.socket.remoteAddress` —— 经网关时它是**本机**，此时真正的来源在
+ *    `x-forwarded-for` 里；本项目不让用户配反代头，所以不做猜测（宁可退化成「按网关 IP 计数」）。
  */
 const loginThrottle = (() => {
   const WINDOW_MS = 5 * 60 * 1000;
+  /** 同一「IP + 登录名」的失败上限 */
   const MAX_FAILS = 10;
+  /** 同一 IP（不分登录名）的失败上限 —— 挡住「换着名字试」 */
+  const MAX_FAILS_IP = 30;
   const hits = new Map();
+  const pairKey = (ip, name) => `${ip || '-'}|${name}`;
+  const ipKey = (ip) => `ip:${ip || '-'}`;
   const prune = (now) => {
     for (const [k, v] of hits) if (now - v.at > WINDOW_MS) hits.delete(k);
   };
+  const bump = (k, now) => {
+    const v = hits.get(k);
+    hits.set(k, { n: v && now - v.at <= WINDOW_MS ? v.n + 1 : 1, at: now });
+  };
+  const blockedFor = (v, now) => {
+    if (!v || now - v.at > WINDOW_MS || v.n < 0) return null;
+    return Math.max(1, Math.ceil((WINDOW_MS - (now - v.at)) / 60000));
+  };
   return {
     /**
-     * 功能：检查某个登录名当前是否已被节流。
+     * 功能：检查「这一对来源 IP + 登录名」以及「这个来源 IP」当前是否已被节流。
      * @param {string} name - 登录用户名
+     * @param {string} [ip] - 来源地址（`req.socket.remoteAddress`）
      * @returns {?string} 被节流时返回含剩余分钟数的中文提示，否则返回 null
      */
-    check(name) {
+    check(name, ip) {
       const now = Date.now();
       prune(now);
-      const v = hits.get(name);
-      if (v && now - v.at <= WINDOW_MS && v.n >= MAX_FAILS) {
-        const mins = Math.max(1, Math.ceil((WINDOW_MS - (now - v.at)) / 60000));
-        return `登录失败次数过多，请约 ${mins} 分钟后再试`;
+      const byPair = hits.get(pairKey(ip, name));
+      if (byPair && byPair.n >= MAX_FAILS) {
+        const mins = blockedFor(byPair, now);
+        if (mins) return `登录失败次数过多，请约 ${mins} 分钟后再试`;
+      }
+      const byIp = hits.get(ipKey(ip));
+      if (byIp && byIp.n >= MAX_FAILS_IP) {
+        const mins = blockedFor(byIp, now);
+        if (mins) return `该网络登录失败次数过多，请约 ${mins} 分钟后再试`;
       }
       return null;
     },
     /**
-     * 功能：登记一次登录失败（同一时间窗口内累加计数，窗口过期则从 1 重新计）。
+     * 功能：登记一次登录失败（同时累加「IP + 登录名」与「IP」两个计数）。
      * @param {string} name - 登录用户名
+     * @param {string} [ip] - 来源地址
      * @returns {void}
      */
-    fail(name) {
+    fail(name, ip) {
       const now = Date.now();
-      const v = hits.get(name);
-      hits.set(name, { n: v && now - v.at <= WINDOW_MS ? v.n + 1 : 1, at: now });
+      bump(pairKey(ip, name), now);
+      bump(ipKey(ip), now);
     },
     /**
-     * 功能：清掉某个登录名的失败计数（登录成功后调用，让正常用户不会因历史失败被误锁）。
+     * 功能：清掉这一对「IP + 登录名」的失败计数（登录成功后调用）。
      * @param {string} name - 登录用户名
+     * @param {string} [ip] - 来源地址
      * @returns {void}
      */
-    reset(name) {
-      hits.delete(name);
+    reset(name, ip) {
+      hits.delete(pairKey(ip, name));
+    },
+    /**
+     * 功能：清掉全部计数（只给测试用，生产代码不许调用）。
+     * @returns {void}
+     */
+    _reset() {
+      hits.clear();
     },
   };
 })();
@@ -206,6 +300,7 @@ function handleAuth(req, res, parts, user) {
       allowSelfRegister: selfRegisterAllowed(),
       minPasswordLength: MIN_PASSWORD_LENGTH,
       authenticated: !!user,
+      mustSetup: !!user && mustSetupUser(user),
       user: user || null,
     });
   }
@@ -244,17 +339,23 @@ function handleAuth(req, res, parts, user) {
       const username = String(b.username || '').trim();
       const password = String(b.password || '');
 
-      const limited = loginThrottle.check(username);
+      const ip = (req.socket && req.socket.remoteAddress) || '';
+      const limited = loginThrottle.check(username, ip);
       if (limited) return json(res, 429, { error: limited });
 
       const row = store.findUserByName(username);
       // ⚠️ 用户不存在与密码错误**返回同一句话**，不泄露「该用户名是否存在」
       if (!row || !verifyPassword(password, row.password_hash)) {
-        loginThrottle.fail(username);
-        logLine('warn', `登录失败: ${username || '(空用户名)'}`);
+        loginThrottle.fail(username, ip);
+        // ⚠️ 不写用户名字面值：用户可能把口令误粘到用户名框，写进去就是明文入日志
+        logLine('warn', `登录失败: 用户名长度 ${username.length}，来源 ${ip || '未知'}`);
         return json(res, 401, { error: '用户名或密码不正确' });
       }
-      loginThrottle.reset(username);
+      loginThrottle.reset(username, ip);
+
+      // ⭐ 首登强制：内置管理员仍在使用公开初始凭据 ⇒ 告诉前端去 /setup.html
+      const mustSetup =
+        row.username === BUILTIN_ADMIN.username && verifyPassword(BUILTIN_ADMIN.password, row.password_hash);
 
       // 成本参数升级：老散列在登录成功时静默重算（不会让老账号失效）。
       // 走 setPasswordHash 而非 setPassword —— 后者会递增 session_epoch，把该账号其他设备一并踢下线，
@@ -263,14 +364,24 @@ function handleAuth(req, res, parts, user) {
       store.touchLastLogin(row.id);
 
       const token = issueSession(AUTH_SECRET, row.id, store.sessionEpoch(row.id), Date.now());
-      res.setHeader('Set-Cookie', sessionCookie(token));
+      res.setHeader('Set-Cookie', sessionCookie(token, isSecureReq(req)));
       logLine('info', `登录成功: ${row.username}（uid=${row.id}）`);
-      return json(res, 200, { ok: true, user: store.getUser(row.id) });
+      return json(res, 200, { ok: true, mustSetup, user: store.getUser(row.id) });
     });
   }
 
   // ---- 以下需要已登录 ----
   if (!user) return json(res, 401, { error: 'unauthorized' });
+
+  // ⭐ 首登强制（服务端拦截 ①）：仍在使用公开初始凭据时，只放行「改用户名 / 改密码 / 登出 / 取自己信息」。
+  //   ⚠️ 只拦接口不够 —— 静态页那一侧还有一道 302（见 `static.js`），两处缺一都会被绕过。
+  if (mustSetupUser(user)) {
+    const allowed =
+      (method === 'POST' && (parts[2] === 'password' || parts[2] === 'logout')) ||
+      (method === 'PUT' && parts[2] === 'username') ||
+      (method === 'GET' && (parts[2] === 'me' || parts[2] === 'state'));
+    if (!allowed) return json(res, 403, { error: 'must_setup' });
+  }
 
   if (method === 'POST' && parts[2] === 'logout') {
     res.setHeader('Set-Cookie', clearSessionCookie());
@@ -449,7 +560,10 @@ function handleAuth(req, res, parts, user) {
     return readBody(req, res, (b) => {
       if (!b) throw httpError(400, 'bad body');
       const row = store.findUserByName(user.username);
-      if (!row || !verifyPassword(String(b.current || ''), row.password_hash)) {
+      const currentOk = !!row && verifyPassword(String(b.current || ''), row.password_hash);
+      // ⚠️ 首登例外：账号仍在用公开初始口令时不必填「当前密码」（见 `usesDefaultPassword()`）。
+      //    除此之外一律要求校验 —— 这条不能放宽成「有会话就能改密」。
+      if (!row || (!currentOk && !usesDefaultPassword(user))) {
         return json(res, 401, { error: '当前密码不正确' });
       }
       const next = String(b.next || '');
@@ -460,7 +574,7 @@ function handleAuth(req, res, parts, user) {
       store.setPassword(row.id, hashPassword(next));
       // 但本次会话要续上，否则用户改完密码自己也被登出
       const token = issueSession(AUTH_SECRET, row.id, store.sessionEpoch(row.id), Date.now());
-      res.setHeader('Set-Cookie', sessionCookie(token));
+      res.setHeader('Set-Cookie', sessionCookie(token, isSecureReq(req)));
       logLine('info', `账号「${row.username}」修改了自己的密码（其他设备已下线）`);
       return json(res, 200, { ok: true });
     });
@@ -621,6 +735,7 @@ function handleAdmin(req, res, parts, user) {
 
 module.exports = {
   currentUser,
+  mustSetupUser,
   selfRegisterAllowed,
   loginThrottle,
   validateUsername,

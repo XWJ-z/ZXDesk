@@ -227,6 +227,11 @@
         showError((l.data && l.data.error) || `登录失败（${l.status}）`);
         return;
       }
+      // ⭐ 首登强制：内置管理员还在用公开初始口令 ⇒ 先去设置页，改完才能进主界面
+      if (l.data && l.data.mustSetup) {
+        window.location.replace(BASE + '/setup.html' + carrySearch());
+        return;
+      }
       // ⚠️ 带上查询串（见 `carrySearch()`）—— 丢掉它会被飞牛网关重新弹访问码
       window.location.replace(BASE + '/' + carrySearch());
     } catch (_e) {
@@ -245,13 +250,15 @@
       const res = await fetch(BASE + '/api/auth/state');
       const s = await res.json();
       if (s && s.authenticated) {
-        // ⚠️ 同上：带查询串
-        window.location.replace(BASE + '/' + carrySearch());
+        // ⭐ 首登强制：账号还在用公开初始口令 ⇒ 先去设置页
+        window.location.replace(
+          s.mustSetup ? BASE + '/setup.html' + carrySearch() : BASE + '/' + carrySearch(),
+        );
         return;
       }
       hasUsers = !!(s && s.hasUsers);
-      allowSelfRegister = !(s && s.allowSelfRegister === false);
-      minLen = Number(s && s.minPasswordLength) || 6;
+      allowSelfRegister = !!(s && s.allowSelfRegister);
+      minLen = Number(s && s.minPasswordLength) || 8;
       // 正常情况（库里已有内置管理员）就是登录形态；只在「连账号都没有」的极端情况下给注册形态
       mode = hasUsers ? 'login' : 'register';
       sub.textContent = hasUsers ? '登录后继续' : '先创建一个账号';

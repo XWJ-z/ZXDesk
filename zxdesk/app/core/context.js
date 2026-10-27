@@ -25,6 +25,7 @@
  */
 'use strict';
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Store, dbStatusOf } = require('./storage.js');
@@ -330,7 +331,7 @@ if (secretInfo.error) {
  *    于是提升出了一个**没有密码的管理员**：账号在、权限在、显示名还叫「管理员」，
  *    但 `verifyPassword(任何口令, NULL)` 恒为 false —— 敲什么都是「密码不正确」，
  *    而「绝不改密码」又让它永远修不回来。**判据必须是「能不能用它登录」，不是「这一行在不在」。**
- *    散列为空/损坏时重写初始口令**不违反「绝不重置密码」**：那种状态下没有任何人的密码被夺走。
+ *    散列为空/损坏时重写口令**不违反「绝不重置密码」**：那种状态下没有任何人的密码被夺走。
  *
  * ⚠️ 这个默认口令是**公开**的 —— 谁能在改密码之前访问到这个应用，谁就是管理员。
  *    因此：启动日志每次都会 `[warn]` 催改；**已经另有管理员的库里补出它时会额外告警**
@@ -397,8 +398,25 @@ function claimBuiltinAdmin(id) {
  *      并把实际动作写进日志。
  * @returns {void}
  */
+/**
+ * 功能：生成一次性初始口令（内置管理员散列为空/损坏、必须重写时用）。
+ *
+ * 说明：⚠️ 刻意**不复用** `BUILTIN_ADMIN.password` —— 那个口令是公开的，用它重置等于把一个
+ *      「账号不可用」的故障自动转换成「公开口令可登录」。这里给 12 位随机串，只打印到启动日志一次。
+ *      `base64url` 不会产生需要转义的字符，复制粘贴进登录框即可。
+ *
+ * @returns {string} 12 位一次性口令
+ */
+function oneTimePassword() {
+  return crypto.randomBytes(9).toString('base64url');
+}
+
 function ensureBuiltinAdmin() {
   try {
+    // ⭐ 自助注册的出厂值：**首次启动显式写一次 '0'**（关闭）。
+    //    ⚠️ 不靠「缺键即关闭」推断 —— 管理员在界面上要能看见「已关闭」这个状态，而不是一片空白。
+    //    ⚠️ 只写一次：老库若已显式开过（'1'），这里不动它。
+    if (store.getSetting('allow_self_register') == null) store.setSetting('allow_self_register', '0');
     // ---- ⭐ 第一判据：按**身份**认领（0.2.1 起登录名可改，不能再看名字了）----
     //      分支与下面的按名字兜底**逐条对应**，只是不依赖名字。
     const claimedId = builtinAdminId();
@@ -409,13 +427,14 @@ function ensureBuiltinAdmin() {
         // 口令坏掉：重写初始口令（用 setPassword，顺带作废可能残留的旧会话）
         if (!hashUsable(claimed.password_hash)) {
           if (!claimedIsAdmin) store.setAdminFlag(claimed.id, true);
-          store.setPassword(claimed.id, hashPassword(BUILTIN_ADMIN.password));
+          const tmp = oneTimePassword();
+          store.setPassword(claimed.id, hashPassword(tmp));
           logLine(
             'warn',
             `⚠️ 内置管理员账号「${claimed.username}」（uid=${claimed.id}）**没有可用口令**（散列为空或已损坏）` +
-              `—— 谁都登不进去。已把它的密码重写为初始口令 ${BUILTIN_ADMIN.password}` +
+              `—— 谁都登不进去。已为它重置**一次性口令** ${tmp}（只打印这一次，请立刻抄下）` +
               (claimedIsAdmin ? '' : '，并提升为管理员') +
-              '，请立刻登录并在「设置 → 账号设置」里修改。',
+              '；登录后请在「设置 → 账号设置」里改掉。',
           );
           return;
         }
@@ -479,13 +498,16 @@ function ensureBuiltinAdmin() {
       if (!isAdmin) store.setAdminFlag(existing.id, true);
       // 用 setPassword 而**不是** setPasswordHash：它会递增 session_epoch，
       // 把这条记录上可能残留的旧会话一并作废 —— 重写口令不该留下旧会话。
-      store.setPassword(existing.id, hashPassword(BUILTIN_ADMIN.password));
+      // ⚠️ 用**一次性随机口令**而不是那个公开的初始口令：后者等于把一个故障（散列坏了）
+      //    自动转换成「公开口令可登录」。口令写在启动日志里，照样能做到「永不把人锁在门外」。
+      const tmp = oneTimePassword();
+      store.setPassword(existing.id, hashPassword(tmp));
       logLine(
         'warn',
         `⚠️ 账号「${BUILTIN_ADMIN.username}」在库里存在，但**没有可用口令**（散列为空或已损坏）—— ` +
-          `谁都登不进去。已把它的密码重写为初始口令 ${BUILTIN_ADMIN.password}` +
+          `谁都登不进去。已为它重置**一次性口令** ${tmp}（只打印这一次，请立刻抄下）` +
           (isAdmin ? '' : '，并提升为管理员') +
-          '，请立刻登录并在「设置 → 账号设置」里修改。',
+          '；登录后请在「设置 → 账号设置」里改掉。',
       );
       return;
     }

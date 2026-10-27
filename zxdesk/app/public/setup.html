@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>首次设置 · ZXDesk工作台</title>
+    <!-- ⚠️ 资源地址用**相对路径**：飞牛统一网关下应用挂在 `/app/zxdesk`，绝对路径会打到系统根目录。
+         本页永远与 login.css / setup.js 同目录，相对路径在两个挂载点下都成立。 -->
+    <link rel="stylesheet" href="login.css" />
+  </head>
+  <body>
+    <main class="card">
+      <div class="brand">
+        <div class="logo">ZX</div>
+        <h1>首次设置</h1>
+        <p class="sub">当前账号还在使用公开的初始密码，请先换成你自己的用户名与密码。</p>
+      </div>
+
+      <form id="form" novalidate>
+        <label class="field">
+          <span>新用户名</span>
+          <input id="username" name="username" type="text" autocomplete="username" required maxlength="32" />
+        </label>
+
+        <label class="field">
+          <span>新密码</span>
+          <input id="password" name="password" type="password" autocomplete="new-password" required />
+        </label>
+
+        <label class="field">
+          <span>确认新密码</span>
+          <input id="confirm" name="confirm" type="password" autocomplete="new-password" required />
+        </label>
+
+        <p class="hint" id="pwHint"></p>
+        <p class="err" id="err" role="alert" hidden></p>
+
+        <button class="btn" id="submit" type="submit">保存并进入</button>
+      </form>
+
+      <p class="foot">
+        改完之前，本应用只开放这一页<br />
+        用户名与密码以后可在「设置 → 账号设置」里再改
+      </p>
+    </main>
+
+    <script src="setup.js"></script>
+  </body>
+</html>

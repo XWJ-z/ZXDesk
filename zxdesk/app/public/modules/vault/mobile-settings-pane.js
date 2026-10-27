@@ -21,7 +21,7 @@
  *
  * @author zx
  * @date   2026-10-10
- * @since 0.8.34
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/16-密码库.md、docs/公共/架构文档/13-决策记录.md（决策 77）、core/slots.js
  */
 

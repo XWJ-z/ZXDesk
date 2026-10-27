@@ -17,7 +17,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const zlib = require('node:zlib');
-const { currentUser } = require('./routes/auth.js');
+const { currentUser, mustSetupUser } = require('./routes/auth.js');
 // ⭐ 统一网关的挂载前缀：本文件里「我们自己发出的地址」（302 去登录页、目录补斜杠）都要补上它，
 //    否则网关下未登录会被送去**系统根目录**的 /login.html（那是飞牛自己的地盘，不是我们的页面）。
 const { localUrl } = require('./gateway.js');
@@ -243,9 +243,17 @@ function serveStatic(req, res, urlPath) {
       res.end();
       return;
     }
-    if (!PUBLIC_STATIC.has(r.rel) && !currentUser(req)) {
+    const user = currentUser(req);
+    if (!PUBLIC_STATIC.has(r.rel) && !user) {
       // ⚠️ 302 目标要补网关前缀（见文件头 require 处的说明），局域网直连时前缀为空、地址与从前逐字一致
       res.writeHead(302, { Location: localUrl('/login.html') });
+      res.end();
+      return;
+    }
+    /* ⭐ 首登强制（静态页拦截 ②）：内置管理员仍在使用公开初始凭据时，除 setup 页本身之外一律送去
+       `/setup.html`。只拦接口不拦页面的话，用户能进主界面壳子、接口全 403 —— 表现是「白屏 + 红条」。 */
+    if (user && mustSetupUser(user) && r.rel !== '/setup.html' && r.rel !== '/setup.js') {
+      res.writeHead(302, { Location: localUrl('/setup.html') });
       res.end();
       return;
     }

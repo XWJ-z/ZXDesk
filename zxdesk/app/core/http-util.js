@@ -16,7 +16,7 @@
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.8.13
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/01-架构总览.md
  */
 'use strict';
@@ -39,11 +39,27 @@ const { logLine, store } = require('./context.js');
  */
 function readBody(req, res, cb) {
   let body = '';
+  let size = 0;
+  let tooBig = false;
   req.on('data', (c) => {
+    if (tooBig) {
+      /* 已经回过 413：继续把请求体读掉并丢弃，让客户端写完、读到那句响应。
+         ⚠️ 这里**不能**立刻 `req.destroy()` —— 那会让仍在写请求体的客户端收到连接重置，
+         表现是「网络错误」而不是我们刚写下去的 413（`readRawBody` 同一口径）。 */
+      size += c.length;
+      if (size > 16e6) req.destroy();
+      return;
+    }
+    size += c.length;
     body += c;
-    if (body.length > 2e6) req.destroy();
+    if (size > 2e6) {
+      tooBig = true;
+      body = '';
+      json(res, 413, { error: '请求体过大' });
+    }
   });
   req.on('end', () => {
+    if (tooBig) return;
     let parsed = null;
     if (body) {
       try {

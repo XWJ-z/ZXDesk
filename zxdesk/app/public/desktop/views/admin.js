@@ -26,7 +26,7 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.34
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/04-多用户与账号.md
  */
 
@@ -214,7 +214,7 @@ export function openAddMemberModal() {
     `
     <div class="form-group"><label>用户名 *（登录用）</label><input type="text" id="f-m-name" autocomplete="off" placeholder="中文、字母、数字、下划线、点、@ 或减号" /></div>
     <div class="form-group"><label>显示名</label><input type="text" id="f-m-disp" autocomplete="off" placeholder="可选，界面上显示的名字" /></div>
-    <div class="form-group"><label>初始密码 *（至少 6 位）</label><input type="text" id="f-m-pw" autocomplete="off" /></div>
+    <div class="form-group"><label>初始密码 *（至少 8 位）</label><input type="text" id="f-m-pw" autocomplete="off" /></div>
     <div class="sec-note" style="font-size: 12px; color: var(--text-2); line-height: 1.7">
       初始密码在这里是明文显示，方便你抄给成员 —— 请通过私下渠道告诉他，他登录后可以在「设置 → 账号设置」里自己改。
     </div>`,
@@ -291,7 +291,7 @@ export function openResetPwModal(id) {
   openModal(
     '重置密码 · ' + u.username,
     `
-    <div class="form-group"><label>新密码 *（至少 6 位）</label><input type="text" id="f-r-pw" autocomplete="off" /></div>
+    <div class="form-group"><label>新密码 *（至少 8 位）</label><input type="text" id="f-r-pw" autocomplete="off" /></div>
     <div class="sec-note" style="font-size: 12px; color: var(--text-2); line-height: 1.7">
       重置后，<b>「${esc(u.username)}」所有设备上的登录会立即失效</b>，需要用新密码重新登录。
       原密码无法查看、也无法找回，只能这样重置。

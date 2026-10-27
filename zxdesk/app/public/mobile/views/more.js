@@ -420,7 +420,7 @@ export function changePwForm() {
   openSheet(
     '修改密码',
     `<div class="field"><label>当前密码</label><input type="password" id="f-cur" autocomplete="current-password" /></div>
-     <div class="field"><label>新密码（至少 6 位）</label><input type="password" id="f-new" autocomplete="new-password" /></div>
+     <div class="field"><label>新密码（至少 8 位）</label><input type="password" id="f-new" autocomplete="new-password" /></div>
      <div class="field"><label>再输一次新密码</label><input type="password" id="f-new2" autocomplete="new-password" /></div>
      <div class="sec-note" style="line-height:1.6">改完之后，你在<b>其他设备</b>上的登录会立即失效；这台手机不受影响。</div>`,
     `<button class="btn" type="button" data-act="sheet-close">取消</button>
@@ -432,7 +432,7 @@ export function changePwForm() {
    */
   state.sheetSave = async () => {
     const n1 = $('#f-new').value;
-    if (n1.length < 6) return toast('新密码至少 6 位', true);
+    if (n1.length < 8) return toast('新密码至少 8 位', true);
     if (n1 !== $('#f-new2').value) return toast('两次输入的新密码不一致', true);
     await api('POST', '/api/auth/password', { current: $('#f-cur').value, next: n1 });
     closeSheet();
@@ -454,7 +454,7 @@ export function memberAddForm() {
     `<div class="field"><label>用户名 *（登录用）</label>
        <input type="text" id="f-m-name" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="中文、字母、数字、下划线、点、@ 或减号" /></div>
      <div class="field"><label>显示名</label><input type="text" id="f-m-disp" placeholder="可选，界面上显示的名字" /></div>
-     <div class="field"><label>初始密码 *（至少 6 位）</label>
+     <div class="field"><label>初始密码 *（至少 8 位）</label>
        <input type="text" id="f-m-pw" autocapitalize="off" autocorrect="off" spellcheck="false" /></div>
      <div class="sec-note" style="line-height:1.6">初始密码在这里明文显示，方便你抄给成员 —— 请私下告诉他；他登录后可以在「设置 → 账号设置」里自己改。</div>`,
     `<button class="btn" type="button" data-act="sheet-close">取消</button>
@@ -490,7 +490,7 @@ export function memberResetForm(id) {
   if (!u) return;
   openSheet(
     '重置密码 · ' + u.username,
-    `<div class="field"><label>新密码 *（至少 6 位）</label>
+    `<div class="field"><label>新密码 *（至少 8 位）</label>
        <input type="text" id="f-r-pw" autocapitalize="off" autocorrect="off" spellcheck="false" /></div>
      <div class="sec-note" style="line-height:1.6">重置后，「${esc(
        u.username,

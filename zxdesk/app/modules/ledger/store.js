@@ -71,7 +71,7 @@
  *
  * @author zx
  * @date   2026-09-20
- * @since 0.8.61
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/23-记账.md、docs/公共/开发方案/20-记账1期-资产管家.md
  */
 const { badRequest, notFoundErr } = require('../../core/store/helpers.js');

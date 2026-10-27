@@ -30,7 +30,7 @@
  *
  * @author zx
  * @date   2026-09-10
- * @since 0.5.3
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/04-多用户与账号.md
  */
 
@@ -51,7 +51,7 @@ const path = require('node:path');
 const SCRYPT = { N: 32768, r: 8, p: 1, keylen: 64, maxmem: 64 * 1024 * 1024 };
 
 /** 口令最短长度（向导/注册/改密三处共用同一条规则，避免口径不一致） */
-const MIN_PASSWORD_LENGTH = 6;
+const MIN_PASSWORD_LENGTH = 8;
 
 /** 会话 Cookie 名 */
 const COOKIE_NAME = 'zxdesk_sid';
@@ -272,9 +272,11 @@ function readSession(secret, cookieHeader, nowMs) {
 }
 
 /**
- * 功能：生成会话 Cookie 的 `Set-Cookie` 头值（含 Path / HttpOnly / SameSite=Lax）。
+ * 功能：生成会话 Cookie 的 `Set-Cookie` 头值（含 Path / HttpOnly / SameSite=Lax，HTTPS 时加 Secure）。
  *
- * 说明：⚠️ **不加 `Secure`**：应用走 http（端口服务），加了浏览器直接不存这个 Cookie，等于登录失效。
+ * 说明：⚠️ `Secure` **只在 HTTPS 通道加**：应用同时提供 `http://<NAS>:8990` 端口入口，
+ *      那里加 `Secure` 浏览器直接不存这个 Cookie，等于登录失效。走统一网关（https）时加，
+ *      端口通道行为不变。
  *      ⚠️ 加 `HttpOnly`（防 XSS 偷走）与 `SameSite=Lax`（防跨站带上；回调页跳转仍能带上）。
  *      ⭐ **刻意不加 `Max-Age` / `Expires`**：这样它就是**会话级 Cookie** ——
  *      浏览器 / 飞牛 App 一关就没了，下次打开必须重新登录。原因见上面 `SESSION_MS` 的说明：
@@ -282,10 +284,11 @@ function readSession(secret, cookieHeader, nowMs) {
  *      ⚠️ 别「顺手」把 `Max-Age` 加回来换取免登录 —— 那是把数据隔离换成方便。
  *
  * @param {string} token - `issueSession()` 签发的会话令牌
+ * @param {boolean} [secure] - 是否经 HTTPS 通道（`req.socket.encrypted` 或 `x-forwarded-proto: https`）
  * @returns {string} `Set-Cookie` 头值
  */
-function sessionCookie(token) {
-  return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax`;
+function sessionCookie(token, secure) {
+  return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax${secure ? '; Secure' : ''}`;
 }
 
 /**
