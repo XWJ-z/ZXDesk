@@ -250,9 +250,12 @@ function serveStatic(req, res, urlPath) {
       res.end();
       return;
     }
-    /* ⭐ 首登强制（静态页拦截 ②）：内置管理员仍在使用公开初始凭据时，除 setup 页本身之外一律送去
-       `/setup.html`。只拦接口不拦页面的话，用户能进主界面壳子、接口全 403 —— 表现是「白屏 + 红条」。 */
-    if (user && mustSetupUser(user) && r.rel !== '/setup.html' && r.rel !== '/setup.js') {
+    /* ⭐ 首登强制（静态页拦截 ②）：内置管理员还没完成设置时，**页面**一律送去 `/setup.html`。
+       ⚠️ 只拦「页面」，不拦静态资源 —— 早先这里连 `/login.css` 都 302 走了，
+          浏览器拿到一张 HTML 当样式表，设置页直接变成无样式的白底黑字（真机截图即此）。
+       判据用**路径形状**而不是 `Accept` 头：`/`、`/xxx/`、`*.html` 是页面；`.css/.js/.png` 是资源。 */
+    const isPage = r.rel === '/' || r.rel.endsWith('/') || r.rel.endsWith('.html');
+    if (user && mustSetupUser(user) && isPage && r.rel !== '/setup.html') {
       res.writeHead(302, { Location: localUrl('/setup.html') });
       res.end();
       return;
