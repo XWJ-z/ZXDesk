@@ -431,6 +431,7 @@ export async function mountApp(root, host) {
         bar.hidden = false;
         show('main');
         if (isPopup) initForm();
+        else fillTagOptions(); // 侧边栏：不预填当前页（允许手动贴地址），但标签下拉要备好
         loadList(!isPopup);
         return false;
       case 'resolving':
@@ -574,6 +575,10 @@ export async function mountApp(root, host) {
   }
   btnFormToggle.addEventListener('click', () => {
     setFormOpen(true);
+    // ⭐ 侧边栏没有 initForm（那是 popup 的预填路径）⇒ 这里必须自己拉一次标签，
+    //   否则下拉里一个选项都没有（0.1.7 真机反馈「新建网址的标签下拉是空白的」）。
+    // 每次展开都刷：别处新建的标签也能立刻选到。
+    fillTagOptions();
     inUrl.focus();
   });
   setFormOpen(formOpen);
@@ -604,14 +609,17 @@ export async function mountApp(root, host) {
 
   async function fillTagOptions() {
     const r = await send(MSG.bmList, {});
-    if (!(r && r.ok)) return;
+    // ⚠️ 拿不到列表（没连上 / 请求失败）时也要把下拉重置成一句可读的话，
+    //    别留一个空白下拉让人以为功能坏了。
+    const tags = r && r.ok && Array.isArray(r.tags) ? r.tags : [];
     // ⚠️「未分类」是服务端哨兵（id:'none'）不是真标签 ⇒ 不进下拉（照网页端）。
     tagSel.textContent = '';
     const first = el('option');
     first.value = '';
-    first.textContent = r.tags.some((t) => t.id !== 'none') ? '选择' : '还没有用过标签';
+    first.textContent = tags.some((t) => t.id !== 'none') ? '选择' : '还没有用过标签';
     tagSel.appendChild(first);
-    for (const t of r.tags) {
+    if (!(r && r.ok)) return;
+    for (const t of tags) {
       if (t.id === 'none') continue;
       const o = el('option');
       o.value = t.name;
