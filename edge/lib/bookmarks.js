@@ -61,7 +61,7 @@ export async function removeBookmark(base, id) {
 
 /**
  * 功能：编辑一条（0.1.5 E2）—— 只带要改的字段，`tags` 是**整体替换**（服务端 `ensureTag` 自动建新分类）。
- * ⛔ **绝不带 `url`**（任务单 §三.1/§七.2）：带上会被当成「改网址」，撞到同账号下已有的同一网址就 400，
+ * ⛔ **绝不带 `url`**：带上会被当成「改网址」，撞到同账号下已有的同一网址就 400
  *    而编辑标题这个动作跟网址毫无关系。
  * @param {{title?:string, tags?:string[]}} patch
  * @returns {Promise<{ok:true,item:object}|{ok:false, code:string}>} 404 ⇒ `bookmark_gone`（越权与不存在同码）

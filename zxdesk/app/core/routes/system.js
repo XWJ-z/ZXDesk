@@ -3,7 +3,8 @@
  *
  * 功能：`handleHealth` 与 `healthPayload` 给出「装的是哪个包、数据层什么状态」；
  *      `handleBootstrap` 是 0.2.0 的首屏聚合接口（health + me + projects + summary + todayCounts），
- *      把电脑版首屏 6 个请求合成 1 个；`handleDashboard`（0.4.5）是按日期区间取首页看板的独立入口。
+ *      把电脑版首屏 6 个请求合成 1 个；`handleDashboard`（0.4.5）是按日期区间取首页看板的独立入口；
+ *      ⭐ `handleVersions`（0.9.1）是设置页「版本数据」各端最新版本检测（唯一对外联网点）。
  *
  * ⚠️ 拆自 `server.js`（002 报告 §5.1 ①），**只搬家不改逻辑**；运行期单例从 `../context.js` 取。
  * ⚠️ **`/api/health` 的鉴权位置是安全关键**：它必须在 401 闸门**之前**显式分派（登录页要能探活），
@@ -11,7 +12,7 @@
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.7.9
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/01-架构总览.md
  */
 'use strict';
@@ -22,6 +23,8 @@ const { httpError, json, notFound } = require('../http-util.js');
 const { runtime, store } = require('../context.js');
 const { nowInfo, todayStr } = require('../time-util.js');
 const { isRealDate } = require('../validate.js');
+// ⭐ 0.9.1：各端最新版本检测（唯一对外联网点，纯 lib，可注入网络实现）
+const { loadVersions } = require('../version-check.js');
 
 /**
  * 功能：从查询串里读出一个日期参数 —— 空值回落默认值，格式或日期不合法一律 400（**不静默截断**）。
@@ -125,6 +128,33 @@ function handleHealth(req, res, user) {
 }
 
 /**
+ * 功能：处理 `GET /api/versions` —— 各端最新版本检测（0.9.1），**只读展示**，不下载不升级。
+ *
+ * 说明：⭐ 设置页「版本数据」那一栏的数据源：飞牛 / Windows / 安卓 / 浏览器扩展四条最新版本，
+ *      外加「本机这一份相对服务器」的结论（当前版本 > 服务器版本 ⇒ `state:'ahead'`，界面标「测试版」）。
+ *      比较与联网都在 `core/version-check.js`（纯 lib，可注入网络实现），本函数只做分派与出口。
+ *
+ * ⚠️⭐ **一定会出网**：这是本软件唯一的对外联网点，许可协议里写明「只有用户主动点『检查更新』
+ *      才请求一次」。⇒ 前端**只在点按钮时**调这里，⛔ 不许在进设置/进页面时预热调用；
+ *      服务端另有 10 分钟缓存（同一台 NAS 上多个人点不会重复出网）。
+ *      想改成自动检查 = 先改许可协议 §四，属产品口径。
+ *
+ * ⚠️ **失败也回 200**：载荷里 `ok:false` + 一句人话。它只是展示，读不到版本不该让设置页
+ *      弹红条（前端 `api()` 对非 2xx 是抛错的）；`reason` 只用于区分「超时 / 连不上 / 没有记录」。
+ *
+ * @param {Object} ctx - 分派上下文
+ * @param {Object} ctx.res - HTTP 响应对象
+ * @param {string} ctx.method - HTTP 方法，非 GET 一律 404
+ * @returns {void}
+ */
+function handleVersions({ res, method }) {
+  if (method !== 'GET') return notFound(res);
+  return loadVersions({ current: APP_VERSION })
+    .then((payload) => json(res, 200, payload))
+    .catch(() => json(res, 200, { ok: false, current: APP_VERSION, reason: 'network', message: '连不上更新服务器' }));
+}
+
+/**
  * 功能：首屏聚合接口 —— 在一次请求里返回健康状态、当前账号、**模块清单**、项目列表、汇总看板与今日待办数。
  *
  * 说明：⭐ `GET /api/bootstrap` —— **首屏聚合接口**（0.2.0 性能改造）。
@@ -203,4 +233,6 @@ module.exports = {
   handleHealth,
   handleDashboard,
   handleBootstrap,
+  // ⭐ 0.9.1：`GET /api/versions`（设置页「版本数据」那一栏）
+  handleVersions,
 };

@@ -1,6 +1,6 @@
 /* ZXDesk 工作台 · Windows 壳样式
  *
- * 一套浅色令牌（照 fnOS 端 tokens.css 同源，任务单 §8.2）。
+ * 一套浅色令牌（照 fnOS 端 tokens.css 同源）。
  * ⛔ 不用深色、不用透明度凑层级、不引外部字体 / 图片 / CDN。
  * 系统开深色时这里仍然是浅色 —— 壳自带 `color-scheme: light` 覆盖。
  */
@@ -64,6 +64,11 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+/* 菜单组吃掉剩余空间：公告条在最左、菜单紧跟其后、右侧按钮靠右 */
+.menu-group {
+  margin-right: auto;
 }
 
 .menu-actions[hidden] {
@@ -529,4 +534,144 @@ input::placeholder {
 .content.empty {
   display: block;
   padding: 0;
+}
+
+/* ---------------------------------------------------------------- 公告条（0.2.2）
+ *
+ * 位置：菜单栏里「帮助」之后的那一项（与 DSH 同位置）。
+ * 宽度**跟着内容走**，上限 420px；放不下用省略号，⛔ 不做滚动字幕 ——
+ * 菜单栏是静态导航区，会动的字会一直抢注意力，而且鼠标扫过菜单时容易点错。
+ */
+
+.notice-bar {
+  display: inline-flex;
+  align-items: center;
+  width: auto;
+  max-width: 420px;
+  height: 26px;
+  margin-left: 4px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.notice-bar[hidden] {
+  display: none;
+}
+
+.notice-bar:hover {
+  background: var(--primary-soft);
+  color: var(--primary-soft-text);
+}
+
+/* 顶置公告是一条长期横幅，不做「未读」态：未读只看「帮助」上的红点 */
+
+/* min-width: 0 + overflow: hidden 是 flex 子项能出省略号的前提 */
+.notice-bar-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------- 更新提示（0.2.2） */
+
+.update-banner {
+  position: fixed;
+  top: var(--toolbar-height);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: calc(100% - 48px);
+  padding: 8px 14px;
+  background: var(--primary-soft);
+  color: var(--primary-soft-text);
+  border: 1px solid #dbe3ff;
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(31, 36, 48, 0.08);
+  font-size: 13px;
+  z-index: 5;
+}
+
+body.no-toolbar .update-banner {
+  top: 12px;
+}
+
+.update-banner[hidden] {
+  display: none;
+}
+
+.update-banner-text {
+  white-space: nowrap;
+}
+
+/* ⚠️ CSS 里给了 display 就会顶掉 HTML 的 hidden 属性，必须补这一条 */
+.update-banner .link-btn[hidden] {
+  display: none;
+}
+
+/* 提示条是 fixed 不占布局：给内容区补上边距，别让第一行字钻到条子底下 */
+body.has-update-banner .content {
+  padding-top: 64px;
+}
+
+/* 帮助按钮上的未读小点 */
+.menu-btn.has-unread {
+  position: relative;
+}
+
+.menu-btn.has-unread::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--error);
+}
+
+/* ---------------------------------------------------------------- 菜单栏错误提示（0.2.2） */
+
+/*
+ * 浏览模式出错时的唯一落点：菜单栏在远程视图之上，内容区被视图盖住时只有这里看得见。
+ * 原先的「打不开页面」整页错误屏已删除。
+ */
+.menu-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 46%;
+  margin-left: auto;
+  padding: 0 4px 0 10px;
+  border-radius: 6px;
+  background: var(--error-soft);
+  color: var(--error-text);
+  font-size: 12px;
+}
+
+.menu-error[hidden] {
+  display: none;
+}
+
+.menu-error-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu-error .menu-btn {
+  color: var(--error-text);
+  font-weight: 600;
 }

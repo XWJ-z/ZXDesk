@@ -22,11 +22,13 @@
  *
  * @author zx
  * @date   2026-09-10
- * @since 0.8.61
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/07-前端-电脑版与手机版.md
  */
 
 import { api, setNotifier } from '../core/api.js';
+// ⭐ 0.9.1：「关于我们 / 联系与反馈」两份抽屉内容 —— 与电脑版弹窗共用同一份（`core/about.js`）
+import { aboutBodyHtml, contactBodyHtml } from '../core/about.js';
 import { addDays, fmtLong, mondayOf, todayStr, weekName } from '../core/date.js';
 import { $, copyText, esc } from '../core/dom.js';
 import { entryOn, moduleItems, navTabItems } from '../core/modules.js';
@@ -2086,6 +2088,42 @@ const ACTIONS = {
     copyText(p).then((ok) =>
       ok ? toast('数据目录已复制') : toast('这个环境不允许自动复制，请长按路径手动复制', true),
     );
+  },
+  // ⭐ 0.9.1：「关于我们 / 联系与反馈」—— 电脑版是侧栏底部两颗按钮，手机版是「更多」里两张卡。
+  //    两边打开的是**同一份内容**（`core/about.js`），这里只管「怎么弹」。
+  //    ⚠️⚠️ 这两个抽屉**必须用自适应高度**（不传 `fixed`）：
+  //      `fixed:true` 是给「管理」那类**多页共用、每页内部分区滚动**的弹层准备的
+  //      （`app.css` 的 `.sheet.fixed .sheet-body` 会把 `overflow-y` 收成 `hidden`，
+  //      滚动改派给它里面的 `.tag-scroll`）。而这两份正文里**没有** `.tag-scroll` ——
+  //      套上定高就等于「整块不滚、也没有接手的滚动层」⇒ 正文比 80% 高时**完全滑不动**
+  //      （0.9.1 真机报「两个弹窗都滑不了」，就是这么来的）。
+  //      ⇒ 走默认的自适应：`.sheet` 撑到 `max-height:88%` 封顶，`.sheet-body` 自己滚，
+  //      全站只有一个滚动层（⛔ 正文里别再写 `max-height` / `overflow`，
+  //      两层滚一叠会把正文算成 0 高，0.8.54 踩过）。
+  about: () => {
+    openSheet('关于我们', aboutBodyHtml(), '');
+  },
+  contact: () => {
+    openSheet('联系与反馈', contactBodyHtml(), '');
+  },
+  // ⭐ 0.9.1：各端最新版本检测 —— **唯一会对外联网的那一颗按钮**（许可协议 §四：只有主动点
+  //    「检查更新」才请求一次）。⚠️ `state.versionsBusy` 既是防连点闸门、也是按钮的禁用态；
+  //    失败照旧把 `{ok:false,message}` 存下来，界面才说得出「为什么没有」。
+  'check-updates': (_act, _n, _id) => {
+    if (state.versionsBusy) return;
+    state.versionsBusy = true;
+    render();
+    api('GET', '/api/versions')
+      .then((r) => {
+        state.versions = r;
+      })
+      .catch((e) => {
+        state.versions = { ok: false, message: (e && e.message) || '连接失败' };
+      })
+      .finally(() => {
+        state.versionsBusy = false;
+        render();
+      });
   },
   'member-rename': (_act, _n, id) => {
     memberRenameForm(id());

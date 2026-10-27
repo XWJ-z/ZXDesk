@@ -22,11 +22,13 @@
  *
  * @author zx
  * @date   2026-09-10
- * @since 0.8.61
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/07-前端-电脑版与手机版.md
  */
 
 import { setNotifier } from '../core/api.js';
+// ⭐ 0.9.1：「关于我们 / 联系与反馈」两份弹窗内容 —— 与手机端共用同一份（`core/about.js`）
+import { aboutBodyHtml, contactBodyHtml } from '../core/about.js';
 import { addDays, mondayOf, todayStr } from '../core/date.js';
 import { $, skeletonHtml } from '../core/dom.js';
 import {
@@ -40,7 +42,7 @@ import {
   showView,
 } from './shell.js';
 import { state } from './state.js';
-import { closeModal, toast } from './ui.js';
+import { closeModal, openModal, setModalSave, toast } from './ui.js';
 import { loadBoard, openBoard, renderDayStrip, renderTimeline, setBoardPane } from '../modules/tasks/desktop-board.js';
 import { bindTaskCardActions, openDailyModal, openProjectModal } from '../modules/tasks/desktop-forms.js';
 import {
@@ -217,6 +219,33 @@ async function newIdeaEntry() {
   } catch (e) {
     toast('随手记打不开：' + e.message, true);
   }
+}
+
+/**
+ * 功能：打开「关于我们」弹窗（侧栏底部、刷新与设置上面那颗）。
+ *
+ * 说明：⭐ 只读弹层 —— `setModalSave('关闭')` 把「取消」那颗收掉，主按钮接到 `closeModal`
+ *      （0.8.24 的规矩：没有保存语义的弹层不该并排摆两颗都写着「关掉」的键）。
+ *      ⚠️ 内容来自 `core/about.js`，与手机版「更多 → 关于我们」是**同一份** ——
+ *      ⛔ 别在本函数里再拼一段 HTML，那等于让两端从今天开始各说各话。
+ *
+ * @returns {void}
+ */
+function openAbout() {
+  openModal('关于我们', aboutBodyHtml());
+  setModalSave('关闭');
+  $('#modal-save').onclick = closeModal;
+}
+
+/**
+ * 功能：打开「联系与反馈」弹窗（侧栏底部、刷新与设置上面那颗）。
+ * 说明：与 `openAbout()` 同构，只是内容换成交流群与问题反馈。只读弹层，无保存语义。
+ * @returns {void}
+ */
+function openContact() {
+  openModal('联系与反馈', contactBodyHtml());
+  setModalSave('关闭');
+  $('#modal-save').onclick = closeModal;
 }
 
 /**
@@ -495,6 +524,13 @@ export function bindEvents() {
     else if (state.view === 'settings') renderSettings();
     toast('已从数据库重新读取');
   });
+  // ⭐ 0.9.1：「关于我们 / 联系与反馈」—— 侧栏底部、刷新与设置**上面**那两颗。
+  //    两者都是**只读弹窗**（没有保存语义）⇒ `setModalSave('关闭')` 收掉「取消」那颗，
+  //    再把主按钮接到 `closeModal`（与 `views/settings.js` 里那些只读弹层的做法一致）。
+  //    ⚠️ 内容一行请求都不发（`core/about.js` 全是静态文本与本地图片）——
+  //      许可协议承诺除版本检查外不主动联网，这里⛔ 别顺手加「最新公告」之类。
+  $('#btn-about').addEventListener('click', () => openAbout());
+  $('#btn-contact').addEventListener('click', () => openContact());
   // ⭐ 设置（0.2.1）：账号 / 成员 / 导出备份 三个入口收进设置页，侧栏只留「⚙ 设置」一扇门
   //    （导出备份自己也搬进了设置页，见 views/settings.js 的 exportBackup）
   //    ⚠️ 0.4.1 第二轮起「成员管理」也并进了设置页（左菜单的一栏），所以这里不再有

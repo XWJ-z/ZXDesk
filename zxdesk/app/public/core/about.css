@@ -1,0 +1,183 @@
+/* ============================================================================
+ * 【共用】关于我们 / 联系与反馈（0.9.1）
+ *
+ * 这一份样式**两端共用**（电脑版弹窗与手机版底部抽屉里的 HTML 是同一份，
+ * 见 `public/core/about.js`）。放进 `core/` 而不是各自 app.css 的理由：
+ * 内容是同一份，样式再分两份就必然漂 —— 改了电脑版忘了手机版，是这类「信息页」
+ * 最常见也最没人报的毛病。
+ *
+ * 做法：颜色一律取共用令牌（`--zx-*`）；**各端自己那一档**（边框 / 浅底 / 圆角）
+ * 用 `var(--A, var(--B))` 回退 —— 电脑版认 `--border` / `--panel-2` / `--radius-sm`，
+ * 手机版认 `--line` / `--surface-2` / `--r-card`，谁有就用谁的，⛔ 别在这里写死颜色。
+ *
+ * ⚠️ 本文件里的类名一个都不带 `btn`：两端的按钮体系不通用，
+ *    `css-integrity.test.js` 会按「本端 app.css 里有没有定义」判红。
+ * ⚠️ 注释以外不许出现中文字符（同一条门禁），所以文案一律由 JS 给。
+ * ==========================================================================*/
+
+.about {
+  color: var(--zx-ink);
+  line-height: 1.65;
+}
+
+/* ---- 开头那段「这是什么」---- */
+.about-lead {
+  margin: 0;
+  color: var(--zx-ink-2);
+}
+
+/* ---- 小节标题 ---- */
+.about-h {
+  margin: 18px 0 10px;
+  font-size: 1em;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.about-h:first-child {
+  margin-top: 0;
+}
+
+/* ---- 各平台：名称 ＋ 状态 一行，说明另起一行 ---- */
+.about-plats {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* ⚠️⚠️ 状态（绿字「已上线 / 可用」）**必须钉在卡片右端**，不能跟在名称屁股后面。
+   为什么：每个 `<li>` 是一个**独立网格**，列宽只按自己那一行的内容算 ——
+   写 `auto auto` 时「飞牛 fnOS」比「安卓」宽，四行的绿字就一行的位置一个样，
+   看着完全没对齐（0.9.1 真机验收：「这个绿色的要垂直对齐」）。
+   `auto` 列跨行不共享宽度，想对齐只有两条路：
+     ① 把名称列写死 em 宽 —— 字号一缩放（系统大字体 / 桌面端缩放）就溢出，⛔；
+     ② 名称列吃满剩余（`1fr`）、状态列 `auto` 贴右 —— 四行右边界同一条线。
+   取 ②。⛔ 别改回 `auto auto` + `justify-content: start`。 */
+.about-plats li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 0 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--border, var(--line));
+  border-radius: var(--radius-sm, var(--r-card, 12px));
+  background: var(--panel-2, var(--surface-2, transparent));
+}
+
+.about-pname {
+  min-width: 0;
+  font-weight: 600;
+}
+
+/* 状态只有三档：已上线 / 可用 取成功色，规划中取次要灰 */
+.about-pstate {
+  justify-self: end;
+  font-size: 11px;
+  color: var(--zx-ok);
+}
+
+.about-pstate.off {
+  color: var(--zx-ink-2);
+}
+
+.about-pnote {
+  grid-column: 1 / -1;
+  color: var(--zx-ink-2);
+  font-size: 0.92em;
+}
+
+/* ---- 三条外链（点了才跳，不是自动联网）---- */
+.about-links {
+  display: grid;
+  gap: 8px;
+}
+
+.about-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border, var(--line));
+  border-radius: var(--radius-sm, var(--r-card, 12px));
+  background: var(--panel-2, var(--surface-2, transparent));
+  color: inherit;
+  text-decoration: none;
+  transition:
+    border-color var(--zx-dur-2) var(--zx-ease),
+    background var(--zx-dur-2) var(--zx-ease);
+}
+
+.about-link:hover {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.about-lk-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-weight: 600;
+}
+
+.about-lk-main small {
+  font-size: 0.86em;
+  font-weight: 400;
+  color: var(--zx-ink-2);
+}
+
+.about-lk-go {
+  flex: none;
+  color: var(--brand);
+  font-size: 1.1em;
+}
+
+/* ---- 说明文字 ---- */
+.about-note {
+  margin: 0 0 10px;
+  color: var(--zx-ink-2);
+  font-size: 0.92em;
+}
+
+/* 末尾那条「报问题该带什么」：与上面拉开一点，避免被当成二维码的说明 */
+.about-tip {
+  margin: 16px 0 0;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border, var(--line));
+}
+
+/* ---- 二维码 ---- */
+/* 打赏两张并排：`auto-fit` 保证窄屏也能各自占一行，不会被挤成一条缝 */
+.about-qrs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 10px;
+}
+
+.about-qr {
+  margin: 0;
+  text-align: center;
+}
+
+.about-qr img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border, var(--line));
+  border-radius: var(--radius-sm, var(--r-card, 12px));
+  background: #fff;
+}
+
+.about-qr figcaption {
+  margin-top: 6px;
+  font-size: 0.86em;
+  color: var(--zx-ink-2);
+}
+
+/* 竖长的群卡片 / 方形的问卷：单张居中、限宽 —— ⛔ 别塞进上面那个两列网格 */
+.about-qr-wide {
+  max-width: 224px;
+  margin: 0 auto 4px;
+}

@@ -11,7 +11,7 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.33
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/07-前端-电脑版与手机版.md
  */
 
@@ -89,6 +89,12 @@ export const state = {
   allowSelfRegister: true, // 自主注册开关（同一栏）
   storage: null, // 数据位置（/api/admin/storage，仅管理员；0.4.1 起归「设置 → 数据来源」）
   storageError: null, // 数据位置读取失败的原因（⚠️ 同时是「别再自动重试」的闸门，见 settings.js）
+  // ---- ⭐ 0.9.1 各端最新版本（设置 → 版本数据那一栏）----
+  //    `null` = 这次还没检查过（**进页面不自动联网**：许可协议写明只有主动点「检查更新」才请求一次）。
+  //    值是 `GET /api/versions` 的**整份载荷**（成功 `{ok:true, items:[...]}`，失败 `{ok:false, message}`）——
+  //    ⚠️ 失败也存下来：不存就分不清「没查过」与「查了但连不上」，界面只能一直说「还没检查过」。
+  versions: null,
+  versionsBusy: false, // 正在请求中（按钮转「检查中…」并禁用，防连点）
   // ---- ⭐ 0.8.5 日志栏（`views/settings.js` 的 logsPaneHtml）----
   logFile: 'app.log', // 当前在看的日志文件（切走再回来还停在这儿）
   logDir: '', // 日志文件夹的绝对路径（`GET /api/admin/logs` 的 `dir`，「复制路径」用它）

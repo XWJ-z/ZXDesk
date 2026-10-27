@@ -12,8 +12,8 @@ android {
         applicationId = "com.zxdesk.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "0.2.11"
+        versionCode = 15
+        versionName = "0.2.13"
     }
 
     buildFeatures {
@@ -34,6 +34,8 @@ dependencies {
     implementation(project(":core:datasource"))
     implementation(project(":core:connection"))
     implementation(project(":core:tls"))
+    // 版本检测 / 下载 / 校验（0.2.13）：纯 Kotlin/JVM，逻辑与界面分开，单测不用真机
+    implementation(project(":core:update"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

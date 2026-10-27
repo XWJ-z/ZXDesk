@@ -17,7 +17,17 @@
         <button class="menu-btn" type="button" data-menu="view">视图</button>
         <button class="menu-btn" type="button" data-menu="settings">设置</button>
         <button class="menu-btn" type="button" data-menu="help">帮助</button>
+        <!-- 公告条：菜单栏里「帮助」之后的那一项（DSH 同位置）。
+             宽度随内容、有上限，超长省略号；点开公告窗口看历史。 -->
+        <button id="notice-bar" class="notice-bar" type="button" data-action="notice.open" hidden>
+          <span id="notice-bar-text" class="notice-bar-text"></span>
+        </button>
       </nav>
+      <!-- 错误提示位（浏览模式）：视图盖住内容区，只有菜单栏这一条能看见 -->
+      <div id="menu-error" class="menu-error" hidden>
+        <span id="menu-error-text" class="menu-error-text"></span>
+        <button class="menu-btn" type="button" data-action="error.retry">重试</button>
+      </div>
       <div id="access-actions" class="menu-actions" hidden>
         <button class="menu-btn" type="button" data-action="flow.back">返回</button>
         <button class="menu-btn" type="button" data-action="access.reload">刷新</button>
@@ -26,6 +36,13 @@
     </header>
 
     <main id="content" class="content" aria-live="polite"></main>
+
+    <!-- 更新提示条：自动检查发现新版本时出现，点「查看」进更新页，「以后再说」只忽略这一版 -->
+    <div id="update-banner" class="update-banner" hidden>
+      <span id="update-banner-text" class="update-banner-text"></span>
+      <button class="link-btn" type="button" data-action="update.open">查看</button>
+      <button class="link-btn" type="button" data-action="update.skip">以后再说</button>
+    </div>
 
     <div id="toast" class="toast" hidden></div>
 

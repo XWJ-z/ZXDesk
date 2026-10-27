@@ -59,7 +59,7 @@
 
 // ⭐ 0.8.54：图片上传走裸 `fetch`（`api()` 只发 JSON）⇒ 挂载前缀 `BASE` 与 401 跳登录要自己接。
 import { BASE, api, backToLogin } from '../../core/api.js';
-// ⭐ 0.7.1：新建任务统一走共用层那个入口（决策 77 不许跨模块 import 实现，所以它在 `core/`）
+// ⭐ 0.7.1：新建任务统一走共用层那个入口（不许跨模块 import 实现，所以它在 `core/`）
 import { createTask } from '../../core/task-create.js';
 // ⭐ 0.5.2 第二轮：消息转任务的弹窗也能绑网址（「添加消息到任务的弹窗
 //    没有选择网址的能力」）—— 实现与任务表单共用 core 一份（见 core/bookmarks.js 的说明）。
@@ -548,7 +548,7 @@ function applyMessageToConversations(msg) {
   c.last_created_at = msg.createdAt;
   c.last_sender_id = msg.userId;
   // ⭐⭐ 0.7.7 修复（真机报的「我：」闪现）：内置角色（提醒助手）发的消息，`user_id` **就是收件人自己**
-  //    （决策 80 / `teamwork_messages` 建表说明）⇒ 只判发送者会把它当成「我发的」，预览行于是写上「我：」；
+  //    （`teamwork_messages` 建表说明）⇒ 只判发送者会把它当成「我发的」，预览行于是写上「我：」；
   //    下一次 REST 全量刷新时服务端算对了（`store.js` 的 `lastMine()`：发送者是我 **且** 不是内置角色）
   //    ⇒ 「我：」消失 ⇒ 表现为**闪现**。
   //    ⚠️ 口径必须与服务端**逐字对齐**：`Number(uid) === 我 && !senderBuiltin`（见下面未读那一段，

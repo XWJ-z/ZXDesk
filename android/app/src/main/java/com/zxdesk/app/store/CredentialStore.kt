@@ -11,7 +11,7 @@ data class SavedCredential(
 )
 
 /**
- * 「记住密码」的存取（任务单 AND-008 §三.2）。
+ * 「记住密码」的存取。
  *
  * 复用 [SecureStore]（Android Keystore AES-256-GCM）：整条 JSON 密文落盘，
  * ⛔ 明文不落盘、⛔ 进日志、⛔ 进诊断文本 —— 本类不打印任何内容。

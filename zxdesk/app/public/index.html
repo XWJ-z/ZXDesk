@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ZXDesk工作台</title>
     <script>
-      /* 入口分流（电脑版页面）—— 手机版就是手机版，电脑版就是电脑版，界面上没有切换入口
- 。这里只做一件事：看着像手机就送去 /mobile/。
+      /* 入口分流（电脑版页面）—— 手机版就是手机版，电脑版就是电脑版，界面上没有切换入口。
+         这里只做一件事：看着像手机就送去 /mobile/。
 
          1) ?view=desktop  应急出口：强制留在电脑版（设备判定万一出错时用，界面上不出现）
          2) ?view=mobile   应急出口：强制去 /mobile/（想在电脑上预览手机版时用）
@@ -70,6 +70,28 @@
         var coarse = !!(mm && mm('(pointer: coarse)').matches);
         var fine = !!(mm && mm('(pointer: fine)').matches);
         var fingers = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
+        /* ⭐⭐ 手机 UA 兜底（2026-10-26 现场：飞牛 App 里打开应用，落在电脑版）：
+           飞牛 App 的内置 WebView 把指针报成 `pointer: fine`（桌面模式），
+           `coarse || (fingers && !fine)` 整条就失效 —— 手机上进的是电脑版，
+           搜索框与 7 列日历全挤在窄屏里、右边直接被裁掉。
+           ⚠️ 这一条**只认 UA、不看任何触摸 API** —— 实测那种 WebView 连
+           `navigator.maxTouchPoints` 都可能给 0，靠触摸特征判不出来。
+           触屏笔记本的 UA 是 Windows / macOS，不含 `Mobile`，不会被抢走；
+           Android 平板 UA 里没有 `Mobile`，仍给电脑版。 */
+        var ua = navigator.userAgent || '';
+        var phoneUa = /Android.+Mobile|iPhone|iPod|Windows Phone/i.test(ua);
+        if (phoneUa) {
+          location.replace(base + '/mobile/' + carrySearch() + location.hash);
+          return;
+        }
+        /* 再兜一层：**窄屏就是手机**（768 以下）。
+           ⚠️ 这一条**故意不看任何触摸特征** —— 实测飞牛 App 的 WebView 连
+           `navigator.maxTouchPoints` 都给 0，带 `fingers` 就等于没兜底（上一版就是这么漏的）。
+           代价是「电脑浏览器窗口拉到 768 以下」也会进手机版，那种情况用 `?view=desktop` 出来。 */
+        if (window.innerWidth <= 768) {
+          location.replace(base + '/mobile/' + carrySearch() + location.hash);
+          return;
+        }
         var isPhone = coarse || (fingers && !fine);
         if (isPhone && window.innerWidth <= 1024) {
           location.replace(base + '/mobile/' + carrySearch() + location.hash);
@@ -80,6 +102,10 @@
          ⚠️ 资源地址**一律相对路径**（网关挂载前缀下绝对路径会打到系统根）—— 见上方引导脚本里的说明 -->
     <link rel="stylesheet" href="core/tokens.css" />
     <link rel="stylesheet" href="desktop/app.css" />
+    <!-- ⭐ 0.9.1：「关于我们 / 联系与反馈」两份弹窗的样式。**两端共用一份**（`core/about.css`），
+         所以放在 app.css 之后 —— 它要用本文件的 `--border` / `--panel-2` 等别名，
+         变量是运行期解析的，顺序不影响取值，排在后面只为「就近覆盖」时不用再提优先级。 -->
+    <link rel="stylesheet" href="core/about.css" />
   </head>
   <body>
     <div id="app" class="app">
@@ -156,6 +182,18 @@
         </nav>
         <!-- 手机版没有入口按钮：手机打开本页会被上面的引导脚本直接送去 /mobile/，电脑用户用不到 -->
         <div class="sidebar-foot">
+          <!-- ⭐ 0.9.1：两颗信息入口，放在「刷新 / 设置」**上面**（老大指定的位置）——
+               它们与那两颗不是一类东西：刷新与设置是「操作这一屏」，关于与联系是「这一屏之外的事」，
+               所以排在更上面、用的是次级按钮的描边样式，不抢主操作的注意力。
+               ⚠️ 弹窗内容两端共用一份（`core/about.js`），⛔ 别把文案抄到这里来。 -->
+          <div class="foot-about">
+            <button id="btn-about" class="btn btn-line foot-btn" title="关于我们（各端介绍 / 下载地址 / 打赏）">
+              ⓘ 关于我们
+            </button>
+            <button id="btn-contact" class="btn btn-line foot-btn" title="联系与反馈（交流群 / 问题反馈）">
+              ✉ 联系与反馈
+            </button>
+          </div>
           <button id="btn-refresh" class="btn btn-line foot-btn" title="重新读取数据库的数据">↻ 刷新</button>
           <!-- ⭐ 0.2.1：账号 / 成员 / 导出备份 三个入口全部收进「设置」，侧栏底部只留这一扇门 -->
           <button id="btn-settings" class="btn btn-primary foot-btn" title="设置（账号 / 成员 / 备份 / 课表）">
@@ -927,6 +965,7 @@
     <link rel="modulepreload" href="modules/time/home-desktop.js" />
     <link rel="modulepreload" href="modules/time/home-shared.js" />
     <link rel="modulepreload" href="modules/time/pomodoro-shared.js" />
+    <link rel="modulepreload" href="core/about.js" />
     <link rel="modulepreload" href="core/api.js" />
     <link rel="modulepreload" href="core/backup.js" />
     <link rel="modulepreload" href="core/bookmarks.js" />

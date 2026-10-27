@@ -16,7 +16,7 @@ import com.zxdesk.app.ui.theme.ZxDeskTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 状态栏 / 导航栏全透明，页面底色透出来（登录页 #F5F7FB、浏览页 #EEF1F6，任务单 AND-008 §4.4/§六）
+        // 状态栏 / 导航栏全透明，页面底色透出来（登录页 #F5F7FB、浏览页 #EEF1F6）
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.auto(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT),
@@ -29,7 +29,7 @@ class MainActivity : ComponentActivity() {
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.isNavigationBarContrastEnforced = false
-            // 左边缘 32dp 排除系统返回手势（任务单 AND-009 §2.1，AND-010 §2.7 加宽到 32dp）：
+            // 左边缘 32dp 排除系统返回手势（加宽到 32dp）：
             // 手势导航机型上屏幕左边缘那条是系统返回的地盘，不排除的话触摸被系统先吃掉，
             // WebViewScreen 的抽屉热区永远收不到事件。⚠️ 部分 ROM（MIUI/HyperOS）不认这个声明，
             // 所以抽屉另有可见手柄兜底（WebViewScreen.EdgeHandle），不能只押这一条。

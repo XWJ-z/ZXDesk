@@ -39,12 +39,17 @@
  *    ⚠️ 记账库打不开**不拦**本脚本：它只写账号行（住在主库），把人挡在门外解决不了任何问题 ——
  *    但会**如实告警一行**，免得「记账功能整天 503」被当成另一件事去查。
  *
- * 环境变量（与 server.js 一致）：
- *   DATA_DIR     数据目录（优先）      TRIM_PKGVAR  应用 var 目录（兜底）
+ * 环境变量：
+ *   DATA_DIR     数据目录（**唯一**来源，由 `cmd/reset-admin` 算好传进来）
+ *
+ * ⚠️⚠️ 0.9.1 修：**不再拿 `TRIM_PKGVAR` 兜底**。它是「当前进程所属应用」的运行时目录
+ *    （只放 `app.log` / `app.pid`）；在飞牛的 Web 终端（fntermx）里执行本脚本时，
+ *    TRIM_PKGVAR 指向的是**那个终端应用** ⇒ 兜过去＝拿别人的目录当数据目录，报「这里没有
+ *    zxdesk.db」，而且看起来像「库丢了」，最难查。⛔ 别加回兜底链。
  *
  * @author zx
  * @date   2026-09-10
- * @since 0.8.1
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/04-多用户与账号.md
  */
 const fs = require('node:fs');
@@ -63,11 +68,19 @@ function die(msg) {
   process.exit(1);
 }
 
-const dataDir = process.env.DATA_DIR || process.env.TRIM_PKGVAR || path.join(__dirname, '..', '..', 'var');
+const dataDir = String(process.env.DATA_DIR || '').trim();
 const wanted = String(process.argv[2] || '').trim();
 
+if (!dataDir) {
+  die(
+    '没有拿到数据目录（DATA_DIR 为空）。\n' +
+      '     飞牛应用中心启动时会注入它；手工执行请显式给一个：\n' +
+      '     DATA_DIR=<你抄到的目录> node reset-admin.js <用户名>',
+  );
+}
+
 if (!fs.existsSync(dataDir)) {
-  die(`数据目录不存在：${dataDir}\n     请用 DATA_DIR=/你的/data-share/zxdesk/data 指定正确的目录。`);
+  die(`数据目录不存在：${dataDir}\n     请用 DATA_DIR=<数据目录> 指定（位置每台机器不同）。`);
 }
 // 先确认这里真的是数据目录 —— `new Store()` 会 mkdir，指错了地方就会**凭空造一个空库**，
 // 然后告诉你「没有账号」，用户还以为数据丢了。宁可在这里停下。
@@ -83,8 +96,9 @@ if (!foundFiles.length) {
   die(
     `在 ${dataDir} 里既没有 zxdesk.db 也没有 zxdesk.json（也没有记账库的 zxdesk-ledger.db / zxdesk-ledger.json），` +
       '这看起来不是 ZXDesk 的数据目录。\n' +
-      '     请在飞牛的应用设置里确认数据目录，然后这样运行：\n' +
-      '     DATA_DIR=/volume1/.../zxdesk/data node reset-admin.js <用户名>',
+      '     请从 飞牛「应用中心 → ZXDesk → 应用设置」里抄出「数据目录」（每台机器的位置都不一样，\n' +
+      '     所以这里不写死），然后带上它运行：\n' +
+      '     DATA_DIR=<你抄到的目录> node reset-admin.js <用户名>',
   );
 }
 if (!hasMain) {

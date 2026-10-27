@@ -20,7 +20,7 @@
  *
  * @author zx
  * @date   2026-09-29
- * @since 0.8.18
+ * @since 0.9.1
  * 相关：docs/公共/开发方案/28-任务与随手记合并屏.md、docs/公共/架构文档/19-灵感库.md、core/slots.js
  */
 

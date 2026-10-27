@@ -11,9 +11,12 @@
  *   窄屏可用性靠 login.css 解决（16px 输入框防 iOS 聚焦缩放、44px 触摸目标、安全区留白）。
  *
  * 页面形态由 `/api/auth/state` 决定：
- *   - 库里已有账号（**正常情况**：启动时已内置管理员 `admin`）→ 登录；管理员开着自主注册时额外给一个「注册一个」入口
+ *   - 库里已有账号（**正常情况**：启动时已内置管理员 `admin`）→ 登录；管理员开着自主注册时额外给一颗「新用户注册」按钮
  *   - 库里连一个账号都没有（极端情况：只读降级导致内置管理员没建成）→ 直接进注册形态，至少让人能进门
  *   - 已登录 → 直接回 `/`
+ *
+ * 表单下面固定是两颗次级按钮（一左一右）：左「新用户注册／返回登录」、右「忘记密码」——
+ * 0.9.1 之前它们是小灰字链接，触屏上不好点，而且「注册一个」那半句套在「还没有账号？」里读着像说明文字。
  *
  * ⚠️ 自己注册出来的一律是**普通成员**；管理员是出厂内置的 `admin`（见 server.js 的 ensureBuiltinAdmin）。
  *
@@ -26,7 +29,7 @@
  *
  * @author zx
  * @date   2026-09-10
- * @since 0.8.34
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/07-前端-电脑版与手机版.md、docs/公共/开发方案/07-统一网关入口.md
  */
 
@@ -66,10 +69,12 @@
   const sub = $('sub');
   const err = $('err');
   const pwHint = $('pwHint');
-  const switchEl = $('switch');
-  const help = $('help');
+  const aux = $('aux');
+  const altBtn = $('alt');
+  const auxNote = $('auxNote');
   const forgot = $('forgot');
-  const tip = $('resetTip');
+  const resetModal = $('resetModal');
+  const resetClose = $('resetClose');
   const submit = $('submit');
   const usernameEl = $('username');
   const passwordEl = $('password');
@@ -90,35 +95,21 @@
   }
 
   /**
-   * 功能：造一个「看起来像链接」的 `<a>`，点击时执行回调而不跳转。
-   * @param {string} text - 链接文案
-   * @param {Function} onclick - 点击回调；已在内部 `preventDefault()`
-   * @returns {HTMLAnchorElement} 建好的链接元素
-   */
-  function makeLink(text, onclick) {
-    const a = document.createElement('a');
-    a.href = '#';
-    a.textContent = text;
-    a.addEventListener('click', (e) => {
-      e.preventDefault();
-      onclick();
-    });
-    return a;
-  }
-
-  /**
-   * 功能：重设辅助入口区 —— 把给定内容依次放进去；传空数组则整块隐藏。
-   * @param {Array.<(string|HTMLElement)>} parts - 要展示的内容（纯字符串会被当成文本节点）
+   * 功能：重设表单下方的两颗次级按钮与它们下面那行说明。
+   *
+   * 版式：一左一右并排（`login.css` 的 `.aux` 是两列网格）—— 左边那颗是「换形态」（新用户注册／返回登录），
+   *      右边那颗固定是「忘记密码」。左按钮传空串时整颗不出现（管理员关了自主注册），
+   *      此时 `one` 类让右边那颗占满整行，否则它会缩成半宽贴左边。
+   * @param {string} altLabel - 左边按钮的文案；空串表示这颗不出现
+   * @param {string} [note] - 说明行文案；空值表示不显示（关了自主注册时用它写「请向管理员申请账号」）
    * @returns {void}
    */
-  function setSwitch(parts) {
-    switchEl.textContent = '';
-    if (!parts.length) {
-      switchEl.hidden = true;
-      return;
-    }
-    switchEl.hidden = false;
-    parts.forEach((p) => switchEl.append(p));
+  function setAux(altLabel, note) {
+    altBtn.textContent = altLabel || '';
+    altBtn.hidden = !altLabel;
+    aux.classList.toggle('one', !altLabel);
+    auxNote.textContent = note || '';
+    auxNote.hidden = !note;
   }
 
   /**
@@ -134,23 +125,20 @@
     pwHint.textContent = `密码至少 ${minLen} 位`;
 
     // 库里连一个账号都没有时（注册形态）谈不上「忘记密码」，整块不出现
-    help.hidden = !hasUsers;
+    aux.hidden = !hasUsers;
     if (!hasUsers) {
-      tip.hidden = true;
-      forgot.setAttribute('aria-expanded', 'false');
-      forgot.textContent = '忘记密码？';
+      closeReset(true);
+      return setAux('');
     }
 
     if (registering) {
-      // 首个账号必须建出来，没得切
-      if (!hasUsers) return setSwitch([]);
-      return setSwitch(['已有账号？', makeLink('去登录', () => ((mode = 'login'), applyMode()))]);
+      // 注册形态下左按钮反过来用于回登录页
+      return setAux('返回登录');
     }
-    if (!hasUsers) return setSwitch([]);
     if (allowSelfRegister) {
-      return setSwitch(['还没有账号？', makeLink('注册一个', () => ((mode = 'register'), applyMode()))]);
+      return setAux('新用户注册');
     }
-    return setSwitch(['管理员已关闭自主注册，请向管理员申请账号']);
+    return setAux('', '管理员已关闭自主注册，请向管理员申请账号');
   }
 
   /**
@@ -176,17 +164,45 @@
   }
 
   /**
-   * 功能：展开 / 收起「忘记密码」的说明面板，并同步按钮文案与 `aria-expanded`。
+   * 功能：打开「重置密码」弹窗 —— 焦点移到关闭按钮，并锁住背景滚动（否则弹窗后面还能跟着滑）。
    *
-   * ⚠️ 这里**只有说明文字**，没有任何在线重置通道 —— 忘记密码只能由人在 NAS 本机上
+   * ⚠️ 弹窗里**只有说明文字**，没有任何在线重置通道 —— 忘记密码只能由人在 NAS 本机上
    *    用 `cmd/reset-admin` 重置。⛔ 别在这里挂接口，那等于给所有人一个后门。
    * @returns {void}
    */
-  forgot.addEventListener('click', () => {
-    const open = tip.hidden;
-    tip.hidden = !open;
-    forgot.setAttribute('aria-expanded', String(open));
-    forgot.textContent = open ? '收起' : '忘记密码？';
+  function openReset() {
+    resetModal.hidden = false;
+    document.body.style.overflow = 'hidden';
+    resetClose.focus();
+  }
+
+  /**
+   * 功能：关闭「重置密码」弹窗。
+   * @param {boolean} [silent] - 为真时不把焦点还回触发按钮（整块被隐藏时还焦点会落到不可见元素上）
+   * @returns {void}
+   */
+  function closeReset(silent) {
+    if (resetModal.hidden) return;
+    resetModal.hidden = true;
+    document.body.style.overflow = '';
+    if (!silent) forgot.focus();
+  }
+
+  forgot.addEventListener('click', openReset);
+
+  // 左按钮：登录形态 →「新用户注册」；注册形态 →「返回登录」。文案由 applyMode 定，动作只认当前 mode
+  altBtn.addEventListener('click', () => {
+    mode = mode === 'register' ? 'login' : 'register';
+    applyMode();
+  });
+
+  // 遮罩与「知道了」带 data-close，右上角那个 × 单独判 —— 三种关法都走同一个出口
+  resetModal.addEventListener('click', (e) => {
+    if (e.target === resetClose || e.target.hasAttribute('data-close')) closeReset();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeReset();
   });
 
   form.addEventListener('submit', async (e) => {
@@ -241,6 +257,8 @@
       sub.textContent = hasUsers ? '登录后继续' : '先创建一个账号';
       form.hidden = false;
       applyMode();
+      // 页脚三行（出厂账号 / 改密码提醒 / 多用户说明）恒显示，这里**不再有开关** ——
+      // 它服务的对象就是第一次进来的人，「库里有没有账号」不该是它的显隐条件。
       usernameEl.focus();
     } catch (_e) {
       sub.textContent = '无法连接服务，请刷新重试';

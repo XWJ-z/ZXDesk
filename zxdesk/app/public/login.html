@@ -33,19 +33,45 @@
         <button class="btn" id="submit" type="submit">登录</button>
       </form>
 
-      <p class="switch" id="switch" hidden></p>
-
-      <!-- 忘记密码：只给「怎么自救」的说明，页面上没有任何重置通道。
-           ⚠️ 别在这里加输入框或发送验证码之类的入口 —— 那等于给所有人一个后门，
+      <!-- 辅助入口：两颗并排的次级按钮（左「新用户注册」／右「忘记密码」），一左一右。
+           ⚠️ 左按钮在注册形态下变成「返回登录」，管理员关掉自主注册时整颗不出现（只剩右边的忘记密码）。
+           ⚠️ 忘记密码点开是**说明弹窗**，页面上没有任何重置通道 ——
+              别在弹窗里加输入框或发送验证码之类的入口，那等于给所有人一个后门，
               重置只能在 NAS 本机用 cmd/reset-admin 做。 -->
-      <div class="help" id="help" hidden>
-        <button class="forgot" id="forgot" type="button" aria-expanded="false" aria-controls="resetTip">
-          忘记密码？
+      <div class="aux" id="aux" hidden>
+        <button class="aux-btn" id="alt" type="button" hidden></button>
+        <button class="aux-btn" id="forgot" type="button" aria-haspopup="dialog" aria-controls="resetModal">
+          忘记密码
         </button>
+      </div>
 
-        <section class="tip" id="resetTip" hidden>
-          <h2>重置密码</h2>
+      <p class="aux-note" id="auxNote" hidden></p>
 
+      <!-- 页脚三行说明：**恒显示**，且没有任何 JS 开关（0.9.1 修正）。
+           ⭐ 这三行是给**第一次用的人**看的 —— 那时库里刚建出管理员、甚至还没建，
+              不写着「初始账号是什么」他们无从下手，只能去翻文档。
+           ⚠️ 所以「库里有没有账号」不再是显隐条件：登录形态要看到，注册形态（极端降级：
+              内置管理员没建成）更要看到，那正是最需要这句话的时候。 -->
+      <p class="foot">
+        内置管理员 <b>admin</b> 密码 <b>admin123</b><br />
+        登录过后请修改用户名和密码<br />
+        支持多用户，账号间数据独立使用
+      </p>
+    </main>
+
+    <!-- 重置密码：点「忘记密码」弹出的说明弹窗。
+         遮罩、右上角 ×、「知道了」三处都带 `data-close`，闭包在 login.js 里统一处理。
+         ⭐ 窄屏（手机）上它从底部抽屉式升起，见 login.css 的 `@media (max-width: 600px)`。 -->
+    <div class="modal" id="resetModal" hidden>
+      <div class="modal-mask" data-close></div>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="resetTitle">
+        <div class="modal-grip" aria-hidden="true"></div>
+        <div class="modal-head">
+          <h2 id="resetTitle">重置密码</h2>
+          <button class="modal-x" id="resetClose" type="button" aria-label="关闭">×</button>
+        </div>
+
+        <div class="modal-body">
           <p class="who">管理员：在 NAS 的终端里重置</p>
           <ol class="steps">
             <li>用 SSH 登录这台 NAS。</li>
@@ -62,14 +88,15 @@
           </ol>
 
           <p class="who">普通成员：联系管理员重置</p>
-          <p class="note">
-            每个人的密码只有自己知道，成员自己也改不了别人的。为了不给任何人留后门，页面上没有在线找回通道，重置只能在 NAS 本机做。
-          </p>
-        </section>
-      </div>
+          <p class="note">为了数据安全，管理员密码找回只能在NAS终端中进行</p>
+        </div>
 
-      <p class="foot">各账号的数据彼此独立，管理员也看不到成员的任务。</p>
-    </main>
+        <div class="modal-foot">
+          <button class="modal-ok" type="button" data-close>知道了</button>
+        </div>
+      </div>
+    </div>
+
 
     <script src="login.js"></script>
   </body>

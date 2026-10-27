@@ -41,13 +41,13 @@
  *
  * @author zx
  * @date   2026-09-10
- * @since 0.8.71
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md
  */
 const { makeStore } = require('./store/index.js');
 const { today } = require('./store/helpers.js');
 
-const APP_VERSION = '0.8.72';
+const APP_VERSION = '0.9.1';
 
 /** ⭐ 存储层装配：两个后端 + 六个业务模块 + 加载时的后端契约自检 */
 const Store = makeStore(APP_VERSION);

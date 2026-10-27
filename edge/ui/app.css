@@ -3,6 +3,71 @@
  * 组件样式见 base.css，颜色/字号见 tokens.css。
  */
 
+/* ---- 0.1.6：新版本气泡（视图最上方，压在连接条之上） ---- */
+.update-bubble {
+  flex: none;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--brand);
+  border-radius: var(--radius-card);
+  background: var(--brand-weak);
+}
+/* 弹窗形态给一个小尾巴指向工具栏图标，读起来才像「从图标冒出来的气泡」；侧边栏没有锚点，不加 */
+html[data-host='popup'] .update-bubble::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  right: 16px;
+  width: 10px;
+  height: 10px;
+  background: var(--brand-weak);
+  border-left: 1px solid var(--brand);
+  border-top: 1px solid var(--brand);
+  transform: rotate(45deg);
+}
+.ub-text {
+  flex: 1;
+  min-width: 0;
+}
+.ub-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--brand-ink);
+}
+.ub-sub {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.ub-go {
+  flex: none;
+  padding: 3px 10px;
+  font-size: 12px;
+  border-color: var(--brand);
+  border-radius: var(--radius-chip);
+  background: var(--brand);
+  color: #fff;
+}
+.ub-go:hover {
+  filter: brightness(1.08);
+}
+.ub-x {
+  flex: none;
+  border: 0;
+  background: none;
+  color: var(--brand-ink);
+  font-size: 12px;
+  padding: 4px;
+}
+.ub-x:hover {
+  color: var(--ink);
+}
+
 /* ---- 连接条（吸顶） ---- */
 .bar {
   position: sticky;
@@ -162,6 +227,17 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 关于：版本说明与「检查更新」同一行（⛔ 不用 .row —— 那条 flex:1 会把按钮拉成整行长条） */
+.about-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.about-line .hint {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
 }
 .danger-btn {
   color: var(--danger);
@@ -436,4 +512,94 @@
   margin: 10px 0 0;
   padding-top: 8px;
   border-top: 1px solid var(--line);
+}
+
+/* ---- 0.1.6：许可协议面板（首次启动的同意门槛 / 设置里的重新阅读） ---- */
+/* 遮罩不吃半透明：正文要能看清，也避免「还能点到底下」的错觉 */
+.eula-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  padding: 12px;
+  box-sizing: border-box;
+  background: var(--bg);
+}
+.eula-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  box-sizing: border-box;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+}
+.eula-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.eula-head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 14px;
+}
+/* 正文区自己滚（协议有几十段，⛔ 让整页跟着滚） */
+.eula-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-input);
+  font-size: 12px;
+  line-height: 1.75;
+  color: var(--ink-2);
+}
+.eula-body p {
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+}
+.eula-body p:last-child {
+  margin-bottom: 0;
+}
+/* 正文第一行是文档标题（与面板标题同义，但它是协议原文的一部分，照原样显示） */
+.eula-body p:first-child {
+  color: var(--ink);
+  font-weight: 600;
+}
+.eula-body .eula-sec {
+  margin: 14px 0 6px;
+  color: var(--ink);
+  font-weight: 600;
+}
+.eula-body .eula-sec:first-child {
+  margin-top: 0;
+}
+.eula-foot {
+  flex: none;
+  padding-top: 10px;
+}
+.eula-agree {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.eula-agree input {
+  flex: none;
+  margin: 2px 0 0;
+}
+.eula-accept {
+  width: 100%;
+}
+.eula-foot .hint {
+  margin: 6px 0 0;
 }

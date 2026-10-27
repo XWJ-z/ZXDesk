@@ -32,7 +32,9 @@ test('打包态：不可写 ⇒ 回落 LOCALAPPDATA 并给提示（别放 Progra
     canWrite: CANNOT,
   });
   assert.equal(result.mode, 'fallback');
-  assert.equal(result.dir, path.join('C:\\Users\\x\\AppData\\Local', 'ZXDesk'));
+  // 0.2.2 起兜底口径统一成 …\ZXDesk\data（与安装程序默认值一致；以前是上一级，install.ini
+  // 一丢就会换到另一个空目录，用户看着像「数据没了」）
+  assert.equal(result.dir, path.join('C:\\Users\\x\\AppData\\Local', 'ZXDesk', 'data'));
   assert.match(result.warning, /LOCALAPPDATA/);
 });
 
@@ -65,10 +67,11 @@ test('canWriteDir：真实目录可写', () => {
   assert.equal(canWriteDir(dir), true);
 });
 
-test('dataFiles：四个文件名固定', () => {
+test('dataFiles：六个文件名固定', () => {
   const files = dataFiles('/data');
-  assert.deepEqual(Object.keys(files).sort(), ['bootLog', 'credential', 'prefs', 'session', 'tofu']);
+  assert.deepEqual(Object.keys(files).sort(), ['bootLog', 'credential', 'notices', 'prefs', 'session', 'tofu']);
   assert.equal(files.bootLog, path.join('/data', 'logs', 'boot.log'));
+  assert.equal(files.notices, path.join('/data', 'notices-cache.json'));
 });
 
 test('prefs 归一：窗口最小 1100x720，其余给默认值', () => {

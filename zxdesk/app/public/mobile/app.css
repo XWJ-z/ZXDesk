@@ -2245,6 +2245,53 @@ svg {
   line-height: 1.6;
 }
 
+/* ---------- 版本数据 · 各端最新版本（0.9.1） ---------- */
+.ver-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 9px;
+  font-size: 13.5px;
+}
+.ver-note {
+  margin-top: 9px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+.ver-note-bad {
+  color: var(--zx-warn-ink);
+}
+.ver-date {
+  color: var(--ink-2);
+  font-size: 11.5px;
+}
+.ver-empty {
+  color: var(--ink-2);
+}
+.ver-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.ver-badge.test {
+  border-color: var(--zx-warn-line);
+  background: var(--zx-warn-soft);
+  color: var(--zx-warn-ink);
+}
+.ver-badge.new {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+.ver-badge.same {
+  background: var(--bg);
+  color: var(--ink-2);
+}
+
 /* ============================================================================
  * 【组件】FAB（拇指区主操作）
  * ==========================================================================*/
@@ -8157,7 +8204,7 @@ textarea.ai-composer-input {
    手机端按钮换行、卡片竖排。 */
 /* ⭐⭐ 0.8.14 修订（第五轮）：「把**未归档、已归档和全部**变成一个下拉列表选择，
    这个字段叫**状态**」—— 三颗胶囊撤掉，这一行就是**三枚下拉**（状态 / 排序 / 标签）。
-    ⚠️⚠️ 第五轮顺手修掉前几轮的**真根因**（「依然是这样」，我上一轮判成「缓存」是**判错**了）：
+    ⚠️⚠️ 第五轮顺手修掉前几轮的**真根因**（症状是「依然是这样」，真根因不是缓存）：
    `modules/idea/mobile.js` 里那行写的是 `<div class="idea-top-row">`，而本文件定义的是
    `.idea-seg-row` —— **类名两端对不上** ⇒ 下面这段 flex **从来没生效过**，那几件其实落在一个
    **普通块级 div** 里、按行内流自然换行（`.idea-tagsel` 自己那份还带 `width:100%` ⇒

@@ -53,7 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * 统一设计语言（任务单 AND-008 §4.3，色板与 tokens.css 同源）。
+ * 统一设计语言（色板与 tokens.css 同源）。
  *
  * 四步流程共用同一个容器与同一套字号：**只有一套数字**，⛔ 别在单个页面里临时改。
  * ⛔ 不引入第二个强调色、⛔ 不靠透明度凑层级；组件级常量只许出现在这里。

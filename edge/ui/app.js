@@ -10,8 +10,9 @@
  * `need_settings`，这里切到内嵌的设置视图（0.1.4 起：设置不再是整页标签）。
  */
 import { LINK_LABEL } from '../lib/address.js';
-import { MSG, BM_TEXT, UI_TEXT, VAULT_TEXT, errText, statusText } from '../lib/messages.js';
+import { MSG, BM_TEXT, UI_TEXT, VAULT_TEXT, UPDATE_TEXT, EULA_UI, errText, statusText } from '../lib/messages.js';
 import { send, connectFlow, authorizeAndConnect, pollWhile } from './conn-ui.js';
+import { createEulaPanel, isEulaAccepted } from './eula-view.js';
 
 /** el helper */
 function el(tag, cls, text) {
@@ -33,6 +34,56 @@ export async function mountApp(root, host) {
   const isPopup = host === 'popup';
   let stopPoll = null;
   let lastInput = '';
+
+  // ================= 0.1.6：许可协议门槛（首次启动 / 协议改版后） =================
+  // ⚠️ 先判后挂：未同意前既不建视图也不发任何请求（连接与版本检测都在后面）。
+  if (!(await isEulaAccepted())) {
+    createEulaPanel(root, { mode: 'gate', onAccept: () => location.reload() });
+    return;
+  }
+
+  // ================= 0.1.6：新版本气泡（启动时检测，结果由 SW 读给了这里） =================
+  const bubble = el('div', 'update-bubble');
+  bubble.hidden = true;
+  bubble.setAttribute('role', 'status');
+  const ubText = el('div', 'ub-text');
+  const ubTitle = el('p', 'ub-title');
+  const ubSub = el('p', 'ub-sub');
+  ubText.append(ubTitle, ubSub);
+  const ubGo = el('button', 'ub-go', UPDATE_TEXT.go);
+  ubGo.type = 'button';
+  ubGo.title = UPDATE_TEXT.goTitle;
+  const ubX = el('button', 'ub-x', '✕');
+  ubX.type = 'button';
+  ubX.title = UPDATE_TEXT.close;
+  ubX.setAttribute('aria-label', UPDATE_TEXT.close);
+  bubble.append(ubText, ubGo, ubX);
+  root.appendChild(bubble);
+  let updateShown = null; // 当前气泡对应的那条检测结果（点「去下载」用它）
+
+  ubGo.addEventListener('click', () => {
+    if (updateShown) chrome.tabs.create({ url: updateShown.url });
+  });
+  ubX.addEventListener('click', () => {
+    bubble.hidden = true;
+    if (updateShown) send(MSG.updateDismiss, { version: updateShown.latest }).catch(() => {});
+  });
+
+  /** 功能：取一次「要不要提示」的结论；没有新版/查不到就保持隐藏（⛔ 不占位、不报错）。 */
+  async function loadUpdate() {
+    let r;
+    try {
+      r = await send(MSG.updateInfo);
+    } catch (_e) {
+      return; // SW 不可达 ⇒ 不提示，下次启动再试
+    }
+    if (!r || !r.ok || !r.update) return;
+    updateShown = r.update;
+    ubTitle.textContent = UPDATE_TEXT.title(r.update.latest);
+    ubSub.textContent = UPDATE_TEXT.sub(r.update.current, r.update.code);
+    bubble.hidden = false;
+    send(MSG.updateSeen).catch(() => {}); // 看到了 ⇒ 撤角标
+  }
 
   // ================= 连接条（已连接才出现） =================
   const bar = el('header', 'bar');
@@ -267,10 +318,78 @@ export async function mountApp(root, host) {
   const gMode = el('section', 'group');
   gMode.append(el('h2', null, UI_TEXT.secOpen), modeBox);
 
-  // -- 关于组（版本取 manifest，不手写） --
+  // -- 关于组（版本取 manifest，不手写；0.1.6 起可手动检查更新） --
   const sAbout = el('p', 'hint', UI_TEXT.aboutLine(chrome.runtime.getManifest().version));
+  const btnCheck = el('button', 'btn-subtle', UI_TEXT.check);
+  btnCheck.type = 'button';
+  const sAboutRow = el('div', 'about-line');
+  sAboutRow.append(sAbout, btnCheck);
+  const sCheckMsg = el('p', 'hint');
+  sCheckMsg.hidden = true;
+  const sEula = el('button', 'ghost', EULA_UI.link);
+  sEula.type = 'button';
+  sEula.addEventListener('click', () => createEulaPanel(root, { mode: 'read' }));
   const gAbout = el('section', 'group');
-  gAbout.append(el('h2', null, UI_TEXT.secAbout), sAbout);
+  gAbout.append(el('h2', null, UI_TEXT.secAbout), sAboutRow, sCheckMsg, sEula);
+
+  /**
+   * 功能：写清失败原因；拿得到接口地址时再给一条自测入口（点开就是那段 JSON，一眼分得清是网络还是扩展）。
+   * @param {string} code - SW 回的失败码
+   * @param {string} [api] - 版本接口地址
+   */
+  function showCheckFail(code, api) {
+    sCheckMsg.className = 'hint bad';
+    sCheckMsg.textContent = UI_TEXT.checkFail(code);
+    if (!api) return;
+    sCheckMsg.append(' · ');
+    const a = el('a', null, UI_TEXT.checkSelfTest);
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      chrome.tabs.create({ url: api });
+    });
+    sCheckMsg.appendChild(a);
+  }
+
+  /**
+   * 功能：手动检查更新 —— 结果就地写清楚（有新版本给网盘入口），⛔ 不依赖顶部那枚气泡。
+   * ⚠️ 手动查必须如实：用户以前关掉过的那一版，这里也要报「有新版本」。
+   */
+  btnCheck.addEventListener('click', async () => {
+    btnCheck.disabled = true;
+    btnCheck.textContent = UI_TEXT.checking;
+    sCheckMsg.className = 'hint';
+    sCheckMsg.textContent = UI_TEXT.checking;
+    sCheckMsg.hidden = false;
+    let r = null;
+    try {
+      r = await send(MSG.updateCheck);
+    } catch (_e) {
+      r = null; // SW 不可达 ⇒ 与「查不到」同一种收场，但原因写清楚
+    }
+    btnCheck.disabled = false;
+    btnCheck.textContent = UI_TEXT.check;
+    if (!r || !r.ok) {
+      showCheckFail((r && (r.code || r.error)) || 'exception', r && r.api);
+      return;
+    }
+    if (!r.fresh) {
+      showCheckFail(r.code, r.api);
+      return;
+    }
+    if (!r.newer) {
+      sCheckMsg.className = 'hint ok';
+      sCheckMsg.textContent = UI_TEXT.checkNewest(chrome.runtime.getManifest().version);
+      return;
+    }
+    sCheckMsg.className = 'hint';
+    sCheckMsg.textContent = UI_TEXT.checkNewer(r.update.latest) + ' · ';
+    const go = el('a', null, UI_TEXT.checkGo);
+    go.addEventListener('click', (e) => {
+      e.preventDefault();
+      chrome.tabs.create({ url: r.update.url });
+    });
+    sCheckMsg.appendChild(go);
+  });
 
   cardSettings.append(sHead, gConn, gTheme, gMode, gAbout);
 
@@ -950,7 +1069,7 @@ export async function mountApp(root, host) {
       const tagNames = picker.tags();
       let r;
       try {
-        // ⛔ 只发 id/title/tags —— url 一个字都不带（任务单 §七.2）
+        // ⛔ 只发 id/title/tags —— url 一个字都不带
         r = await send(MSG.bmUpdate, { id: it.id, title, tags: tagNames });
       } catch (_e) {
         r = { ok: false, code: 'network' };
@@ -1007,7 +1126,7 @@ export async function mountApp(root, host) {
     vaultCard.append(vaultHead('密码库'), el('p', bad ? 'hint bad' : 'hint', text));
   }
 
-  /** 功能：锁定态 —— 引导去网页解锁，回来自助重试（任务单 §4.3 第 2 步）。 */
+  /** 功能：锁定态 —— 引导去网页解锁，回来自助重试。 */
   function paintVaultLocked(text) {
     vaultCard.textContent = '';
     const go = el('button', 'primary', VAULT_TEXT.goUnlock);
@@ -1332,6 +1451,7 @@ export async function mountApp(root, host) {
   // R4 红线：SW 每次真握手，重启后不会假装已连接
   const st0 = await send(MSG.status);
   render(st0);
+  loadUpdate(); // 0.1.6：新版本气泡，不 await —— 检测慢也不挡界面
   // 自动识别：只在 popup（activeTab 随图标点击授予；侧边栏没有手势，探了也白探）
   if (isPopup) {
     send(MSG.detect).then((d) => {

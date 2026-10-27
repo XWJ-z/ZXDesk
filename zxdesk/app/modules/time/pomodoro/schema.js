@@ -101,7 +101,7 @@ module.exports = {
      *      运行参数，跨模块改表属越界。
      *      ⚠️ 区间校验（`focus_min` 5~120 / `break_min` 1~30 / `long_break_min` 5~60 /
      *      `rounds_before_long` 2~8）**不在 DDL 里**，而在 `routes.js` 的入参层 ——
-     *      越界一律 400、⛔ 不静默截断（决策 36；照 `ai` 模块 `checkCtxTurns` 的做法）。
+     *      越界一律 400、⛔ 不静默截断（照 `ai` 模块 `checkCtxTurns` 的做法）。
      *      这里给 DEFAULT 只是「新库建行时的形状」，读侧的默认值常量住在 `store.js`。
      *
      * @param {string} n - 表名（重建时是临时名）

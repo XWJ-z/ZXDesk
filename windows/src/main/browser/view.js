@@ -1,5 +1,5 @@
 /**
- * 远程内容视图（`WebContentsView`，任务单 §5.1 / §9.2）。
+ * 远程内容视图（`WebContentsView`）。
  *
  * 为什么单独一个视图而不是塞进壳的 webContents：`WebContentsView` 永远画在窗口 DOM 之上，
  * 塞一起远程页面就会拿到壳的 preload / IPC。拆开后远程视图**没有 preload、没有 node**。

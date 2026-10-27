@@ -14,7 +14,7 @@ export const PRIMARY_ENDPOINT = 'https://5ddd.com';
 export const FALLBACK_ENDPOINT = 'https://fnos.net';
 export const TIMEOUT_MS = 8000;
 
-/** 实测（2026-10-23）：FNID 的 `port` 回 64999/64888；社区文档的 5666/5667 在本机不通。 */
+/** 实测：FNID 的 `port` 回 64999/64888；社区文档的 5666/5667 在本机不通。 */
 export const DEFAULT_HTTPS_PORT = 64999;
 export const DEFAULT_HTTP_PORT = 64888;
 

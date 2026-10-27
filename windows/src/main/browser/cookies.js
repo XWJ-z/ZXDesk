@@ -1,5 +1,5 @@
 /**
- * Cookie 注入（移植自 `FnSession.cookies()`，任务单 §7.4）。
+ * Cookie 注入（移植自 `FnSession.cookies()`）。
  *
  * 名字照 fnOS 前端 bundle：会话 `fnos-token`（SameSite=Strict、**不设过期**）、
  * 长期 `fnos-long-token`（30 天）、入口 `entry-token`（写到 `.<relayHost>` 域）、中继再加 `mode=relay`。
@@ -58,7 +58,7 @@ export function cookieSpecs(session, target) {
 
   if (session.entryToken) {
     const spec = { url: baseUrl, name: 'entry-token', value: session.entryToken, path: '/', secure: true };
-    // 同一个 set 里同时给 url 与 domain（任务单 §11 坑 6）
+    // 同一个 set 里同时给 url 与 domain
     if (relayHost) spec.domain = `.${relayHost}`;
     specs.push(spec);
   }

@@ -46,7 +46,7 @@ import com.zxdesk.core.connection.TargetKind
 import com.zxdesk.core.datasource.DataSourceKind
 
 /**
- * 引导流程（任务单 AND-007）：① 选模式 → ② 填连接信息 → ③ 两步验证 → ④ 访问码 → ⑤ 应用。
+ * 引导流程：① 选模式 → ② 填连接信息 → ③ 两步验证 → ④ 访问码 → ⑤ 应用。
  *
  * 排版规则全在 [Ui] / [StepPage] 里，四步共用：一个 420dp 居中容器、28/16/14sp 三级字号、48dp 主按钮。
  * 状态全在 [AppViewModel]，切后台/旋转不丢。

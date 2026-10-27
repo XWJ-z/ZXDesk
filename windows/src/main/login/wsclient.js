@@ -1,7 +1,7 @@
 /**
  * 最小 WebSocket 客户端（RFC 6455 子集，`node:tls` / `node:net` 手写）。
  *
- * 为什么手写（任务单 §四.2 允许的兜底，也是本机的唯一可行解）：
+ * 为什么手写（允许的兜底，也是本机的唯一可行解）：
  * 1. 需求只有「发文本帧、按 reqid 收文本帧」，不需要子协议协商、扩展、压缩；
  * 2. Node 内置 `WebSocket` 带 `{ headers }` 是 undici 扩展；而**本机（NAS 沙箱）undici 的 llhttp
  *    WASM 实例分配失败**（`Out of memory: Cannot allocate Wasm memory`）⇒ 无法在此验证内置实现，

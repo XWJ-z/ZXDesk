@@ -13,6 +13,12 @@ const el = {
   content: document.getElementById('content'),
   toast: document.getElementById('toast'),
   accessActions: document.getElementById('access-actions'),
+  banner: document.getElementById('update-banner'),
+  bannerText: document.getElementById('update-banner-text'),
+  noticeBar: document.getElementById('notice-bar'),
+  noticeBarText: document.getElementById('notice-bar-text'),
+  menuError: document.getElementById('menu-error'),
+  menuErrorText: document.getElementById('menu-error-text'),
 };
 
 let state = null;
@@ -104,6 +110,11 @@ function render(next) {
     .concat(`screen-${screen}`)
     .join(' ');
 
+  renderUpdateBanner(state.update);
+  renderMenuError(state.browsing);
+  renderNoticeBadge(state.notices);
+  renderNoticeBar(state.notices);
+
   if (browsingLike) {
     // 远程视图盖在内容区上；访问码屏把文字菜单换成「返回 / 刷新 / 已输入完成」
     if (el.menuGroup) el.menuGroup.hidden = screen === 'access';
@@ -119,7 +130,6 @@ function render(next) {
   else if (screen === 'connect') el.content.innerHTML = viewConnect();
   else if (screen === 'twofa') el.content.innerHTML = viewTwofa();
   else if (screen === 'cert') el.content.innerHTML = viewCert();
-  else if (screen === 'error') el.content.innerHTML = viewError();
   else el.content.innerHTML = viewConnect();
 }
 
@@ -276,19 +286,58 @@ function viewCert() {
     </div>`;
 }
 
-function viewError() {
-  const e = state.error || {};
-  // 只给人话：⛔ 不显示日志路径、不列试过的地址、不露内部主机名（细节走「复制诊断」）
-  return `
-    <div class="wrap">
-      <h1 class="error-title">${esc(e.title || '出错了')}</h1>
-      <p class="subtitle" style="white-space:pre-wrap">${esc(e.message || '')}</p>
-      <div class="row" style="margin-top:16px">
-        <button class="ghost-btn" type="button" data-action="error.changeAddress">换个地址</button>
-        <button class="ghost-btn" type="button" data-action="diag.copy">复制诊断</button>
-        <button class="primary-btn" style="margin:0" type="button" data-action="error.retry">重试</button>
-      </div>
-    </div>`;
+/**
+ * 更新提示条（只在连接页这类常规屏幕出现）。
+ * 浏览模式没有提示条：那一屏的「有新版本」信号在「帮助 → 检查更新（有新版本）…」上。
+ */
+function renderUpdateBanner(update) {
+  const showBanner = Boolean(update && update.banner);
+
+  el.banner.hidden = !showBanner;
+  document.body.classList.toggle('has-update-banner', showBanner);
+  if (!showBanner) return;
+  el.bannerText.textContent = `有新版本 ${update.latest}（当前 ${update.current}）`;
+  const skip = el.banner.querySelector('[data-action="update.skip"]');
+  if (skip) skip.hidden = Boolean(update.mustUpdate);
+}
+
+/**
+ * 菜单栏上的错误提示（浏览 / 访问码屏）。
+ *
+ * 原来这类错误会整屏跳成「打不开页面」—— 一次网络抖动就把整窗刷白，还把正在做的事打断。
+ * 现在只在这里出一条红字，菜单照常可用，点「重试」原页重载。
+ */
+function renderMenuError(browsing) {
+  const message = String((browsing && browsing.error) || '');
+  el.menuError.hidden = !message;
+  if (!message) return;
+  el.menuErrorText.textContent = message;
+  el.menuError.title = message;
+}
+
+/**
+ * 菜单栏公告条：紧跟「帮助」之后，显示**顶置公告**（服务端 `app_notice_marquee` 那一行）。
+ *
+ * 它不是「最新一条公告」——顶置公告是长期挂着的横幅（「0.2.3 已发布」这类），
+ * 和公告列表/已读无关；列表在公告窗口里看。
+ * 宽度**随内容**、有上限（CSS `max-width`），放不下就省略号 —— ⛔ 不做滚动字幕：
+ * 菜单栏是静态导航区，动的字会一直抢注意力。悬停看全文，点开窗口看全部公告。
+ */
+function renderNoticeBar(notices) {
+  const marquee = String(notices?.marquee || '').trim();
+  el.noticeBar.hidden = !marquee;
+  if (!marquee) return;
+  el.noticeBarText.textContent = marquee;
+  el.noticeBar.title = marquee;
+}
+
+/** 顶栏「帮助」按钮上的未读小点：公告在原生菜单里，壳这边只能提示「有东西」。 */
+function renderNoticeBadge(notice) {
+  const help = el.menuGroup?.querySelector('[data-menu="help"]');
+  if (!help) return;
+  const hasUnread = Boolean(notice && notice.hasUnread);
+  help.classList.toggle('has-unread', hasUnread);
+  help.setAttribute('aria-label', hasUnread ? '帮助（有未读公告）' : '帮助');
 }
 
 function renderPanel() {
@@ -395,6 +444,13 @@ el.content.addEventListener('click', (event) => {
   const target = event.target.closest('[data-action="connect.submit"]');
   if (!target || !form) return;
   send('connect.submit', { ...form });
+});
+
+// 更新提示条：壳自己只有「查看 / 以后再说」两个动作，判定都在主进程
+el.banner.addEventListener('click', (event) => {
+  const target = event.target.closest('[data-action]');
+  if (!target) return;
+  send(target.dataset.action, {});
 });
 
 el.menubar.addEventListener('click', (event) => {

@@ -26,13 +26,13 @@
  *
  * @author zx
  * @date   2026-09-15
- * @since 0.8.61
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/18-ai辅助任务.md、docs/公共/开发方案/11-AI辅助任务-1期.md、
  *      docs/公共/开发方案/14-AI辅助任务-2期.md、core/slots.js
  */
 
 import { api, BASE } from '../../core/api.js';
-// ⭐ 0.7.1：新建任务统一走共用层那个入口（决策 77 不许跨模块 import 实现，所以它在 `core/`）
+// ⭐ 0.7.1：新建任务统一走共用层那个入口（不许跨模块 import 实现，所以它在 `core/`）
 import { createTask } from '../../core/task-create.js';
 // ⭐ 0.8.4：记一笔账同理 —— 记账确认卡点「同意」时逐条落库，走共用层那个唯一入口
 import { createBookmark } from '../../core/bookmark-create.js';

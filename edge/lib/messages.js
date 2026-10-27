@@ -1,7 +1,7 @@
 /**
  * 功能：消息名与错误码文案的**唯一出处**（分层纪律 3：UI 与 SW 都从这里取，⛔ 字符串各写一遍）。
  *
- * ⛔ 各屏自拼中文是退回条件（任务单 §七.2 / §十）——文案只住在本文件 `ERR_TEXT`。
+ * ⛔ 各屏自拼中文是退回条件——文案只住在本文件 `ERR_TEXT`。
  */
 
 /** UI→SW 消息名（方案 §3.1） */
@@ -22,6 +22,11 @@ export const MSG = {
   bmUpdate: 'bm:update', //    {id, title?, tags?}      ⇒ {ok:true,item} | {ok:false,code}      （E2）
   vaultStatus: 'vault:status', // {}                  ⇒ {ok, initialized, unlocked}           （E3）
   vaultEntry: 'vault:entry', //  {id}                 ⇒ {ok:true, entry:{title,username,password}} | {ok:false, code:'vault_locked'|'vault_gone'}（E3）
+  // ---- 0.1.6 ----
+  updateInfo: 'update:info', //  {}                    ⇒ {ok:true, update:{current,latest,url,code}|null}
+  updateCheck: 'update:check', // {}                   ⇒ {ok, fresh, newer?, update?}（设置里手动查一次）
+  updateSeen: 'update:seen', //  {}                    ⇒ {ok:true}（气泡已展示 ⇒ 撤角标）
+  updateDismiss: 'update:dismiss', // {version}        ⇒ {ok:true}（这一版不再提示）
 };
 
 /** 错误码 → 文案（一期 §4.6 + 二期 §六） */
@@ -146,6 +151,52 @@ export const UI_TEXT = {
   mMore: '更多',
   // 双形态
   viewAllInPanel: '在侧边栏看全部',
+  // 关于：版本与手动检查（0.1.6）
+  check: '检查更新',
+  checking: '检查中…',
+  checkNewest: (v) => `已是最新版本（${v}）`,
+  checkNewer: (v) => `有新版本 ${v}`,
+  checkGo: '去网盘下载',
+  checkSelfTest: '用浏览器打开接口自测',
+  /**
+   * 功能：失败原因说清楚 —— ⛔ 不再一律「连不上」（断网、被拦、服务器 5xx、后台还是旧版，
+   * 四件事的处置完全不同，混成一句话等于让人干瞪眼）。
+   * @param {string} code - SW 回的 `code`（见 lib/update.js 的 checkForUpdate）
+   */
+  checkFail: (code) => {
+    const c = String(code || '');
+    if (c === 'timeout') return '更新服务器响应超时，网络慢或被拦';
+    if (c === 'network') return '连不上更新服务器：DNS、网络或防火墙拦了 api.zxdesk.xwjznh.cn';
+    if (c === 'bad_json' || c === 'bad_data') return '更新服务器返回的内容不对，稍后重试';
+    if (c === 'storage') return '检测结果存不下来，检查浏览器存储权限';
+    if (c === 'eula_pending') return '请先同意许可协议';
+    if (c === 'unknown_message') return '扩展后台还是旧版，去 edge://extensions 重新加载';
+    if (c === 'exception') return '扩展后台处理失败，重新加载扩展后重试';
+    if (c.startsWith('http_')) return `更新服务器返回 ${c.slice(5)}`;
+    return '检查失败，稍后重试';
+  },
+};
+
+/** 0.1.6 新版本气泡文案（启动时检测到新版才出现） */
+export const UPDATE_TEXT = {
+  title: (v) => `有新版本 ${v}`,
+  /** 有提取码时一并给出；服务端换成别的下载地址就没有码，文案跟着变，⛔ 不写死 */
+  sub: (cur, code) => (code ? `当前 ${cur} · 提取码 ${code}` : `当前 ${cur} · 下载最新版安装`),
+  go: '去网盘下载',
+  goTitle: '打开百度网盘，下载最新版安装包',
+  close: '关闭提示',
+};
+
+/** 0.1.6 许可协议面板文案（首次启动的同意门槛 / 设置里的重新阅读） */
+export const EULA_UI = {
+  title: '许可协议',
+  agree: '我已阅读并同意本许可协议',
+  accept: '同意并继续',
+  saving: '记录中…',
+  saveFail: '同意没能记下来，请重试',
+  decline: '不同意请移除本扩展（edge://extensions）',
+  close: '关闭',
+  link: '查看许可协议',
 };
 
 /**

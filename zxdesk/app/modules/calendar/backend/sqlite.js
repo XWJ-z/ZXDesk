@@ -45,7 +45,7 @@ const PREF_KEYS = ['layer_course', 'layer_task', 'layer_holiday', 'layer_ledger'
  *      （SQL 侧靠 `ON CONFLICT … DO UPDATE SET` 只更新 SET 里那几个；见下面两条原语），
  *      于是「改图层开关」与「改人生设置」互不覆盖。
  *      ⚠️ 合并成一份的下场是「改图层开关时把出生日期当成没传而清空」——
- *      而且**不报任何错**（同一类事故的既有记录见 `11-踩坑与说明.md` 第 20 条）。
+ *      而且**不报任何错**（同一类事故的既有记录见 `11-踩坑与说明.md` 第 28b 条）。
  * @type {Array.<string>}
  */
 const LIFE_KEYS = ['birth_date', 'expect_years'];

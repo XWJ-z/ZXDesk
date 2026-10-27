@@ -4,11 +4,11 @@
 # 背景：界面上没有、也不应该有「找回管理员密码」的通道（那等于给所有人一个后门），
 #       所以自救只能在这台 NAS 上、以 root 或应用用户身份做。
 #
-# 用法（SSH 到 NAS 上执行）：
-#   /var/apps/zxdesk/cmd/reset-admin --list              # 只列出账号，并标出谁是管理员（先看这个）
-#   /var/apps/zxdesk/cmd/reset-admin <用户名>            # 重置指定账号的密码
-#   /var/apps/zxdesk/cmd/reset-admin                     # （不带参数）重置唯一的管理员密码
-#   /var/apps/zxdesk/cmd/reset-admin --make-admin <用户名>  # 把某个账号**提升为管理员**（不用密码）
+# 用法（SSH 到 NAS 上执行；`<安装目录>` 就是 cmd 的上一级，各机器可能不同）：
+#   <安装目录>/cmd/reset-admin --list              # 只列出账号，并标出谁是管理员（先看这个）
+#   <安装目录>/cmd/reset-admin <用户名>            # 重置指定账号的密码
+#   <安装目录>/cmd/reset-admin                     # （不带参数）重置唯一的管理员密码
+#   <安装目录>/cmd/reset-admin --make-admin <用户名>  # 把某个账号**提升为管理员**（不用密码）
 #
 # 卡住了怎么选：
 #   · 知道账号名、忘了密码   → 用 <用户名> 那条
@@ -27,8 +27,11 @@ set -u
 CMD_DIR="$(cd "$(dirname "$0")" && pwd)"
 PKG_DIR="$(cd "$CMD_DIR/.." && pwd)"
 
-# node：飞牛的 node 不在默认 PATH 里
-export PATH=/var/apps/nodejs_v24/target/bin:$PATH
+# node：飞牛的 node 不在默认 PATH 里。
+# ⚠️ 这里的 /var/apps/nodejs_v24 是**运行时**位置，由 manifest 的 install_dep_apps 声明、
+#    由飞牛装到那个路径下（`ttt/test/cmd-dir.test.js` 钉住三处同号）—— 它不是数据路径，
+#    ⛔ 与「数据目录不能写死」是两回事：数据目录一律靠 data-share / 运行中进程 / 唯一命中来找。
+export PATH=/var/apps/nodejs_v24/target/bin:/usr/local/bin:/usr/bin:/bin:$PATH
 
 # 应用代码目录：优先用飞牛注入的环境变量，手工执行时按脚本位置推断
 # ⚠️ 0.5.0 批次 6a：目录名由 `server` 改成 `core`。三个候选必须与 `fnos/zxdesk/app/` 下的真实目录名一致
@@ -37,10 +40,53 @@ APP_DIR="${TRIM_APPDEST:-}/core"
 [ -d "$APP_DIR" ] || APP_DIR="$PKG_DIR/target/core"
 [ -d "$APP_DIR" ] || APP_DIR="$PKG_DIR/app/core"
 
-# 数据目录：data-share 的第一个路径
+# 数据目录：**只认** data-share（DATA_DIR / TRIM_DATA_SHARE_PATHS）。
+# ⚠️⚠️ 0.9.1 修：这里原来还兜到 `TRIM_PKGVAR`，那是错的 ——
+#    PKGVAR 是「**当前进程所属应用**」的运行时目录，里面只有 app.log / app.pid。
+#    在飞牛自带的 Web 终端（fntermx 那个）里执行本脚本时，TRIM_PKGVAR 指向的正是**那个终端应用**
+#    （实测：指向了那个终端应用自己的 @appdata 目录）⇒ 兜过去＝拿别人的目录当数据目录，
+#    表现就是「既没有 zxdesk.db 也没有 zxdesk.json」，紧接着 `main stop` 写 app.log 报 Permission denied。
+#    ⛔ 别再把它加回兜底链：这个错**不报错、只是看起来像「库丢了」**，最难查。
 DATA_DIR="${DATA_DIR:-${TRIM_DATA_SHARE_PATHS:-}}"
 DATA_DIR="${DATA_DIR%%:*}"
-DATA_DIR="${DATA_DIR:-${TRIM_PKGVAR:-}}"
+
+# 拿不到就自己找。两步，**都不写死卷名 / 安装路径 / 挂载点**（每台机器的安装位置都不一样）：
+#   ① 正在运行的 ZXDesk 进程，它自己的环境变量里就有 DATA_DIR —— 最准，且与装在哪无关；
+#   ② 退一步：在**本机所有真实挂载点**下按库文件名找（深度 4，够覆盖 <卷>/…/zxdesk/data/）。
+#   只在**唯一命中**时才敢用；多命中或零命中都交回人工决定（⛔ 别按顺序取第一个，那是猜）。
+if [ -z "$DATA_DIR" ] && command -v pgrep >/dev/null 2>&1; then
+  # ⚠️ 进程名只能宽着匹配（`cmd/main` 是 `cd` 到应用目录后跑 `node server.js`，命令行里没有 zxdesk 字样），
+  #    所以**真正的判据在目录上**：那个进程的 DATA_DIR 里必须有 zxdesk.db / zxdesk.json。
+  #    这样即使误认了别的 node 服务，也只会被第二道校验挡掉，不会拿别人的目录。
+  for p in $(pgrep -f 'node .*server\.js' 2>/dev/null); do
+    [ -r "/proc/$p/environ" ] || continue
+    D="$(tr '\0' '\n' 2>/dev/null < "/proc/$p/environ" | sed -n 's/^DATA_DIR=//p' | head -n 1)"
+    if [ -n "$D" ] && [ -d "$D" ] && { [ -f "$D/zxdesk.db" ] || [ -f "$D/zxdesk.json" ]; }; then
+      DATA_DIR="$D"
+      echo "已从正在运行的 ZXDesk 进程读到数据目录：$DATA_DIR"
+      break
+    fi
+  done
+fi
+
+if [ -z "$DATA_DIR" ]; then
+  MOUNTS="$(awk '$3 ~ /^(ext2|ext3|ext4|xfs|btrfs|zfs|fuse\..*)$/ {print $2}' /proc/mounts 2>/dev/null | sort -u)"
+  # 回收站 / 备份产物 / 依赖目录里也会躺着一堆 zxdesk.json，先排掉再谈「唯一」
+  ALL="$(printf '%s\n' "$MOUNTS" | while IFS= read -r m; do
+    [ -n "$m" ] && [ -d "$m" ] &&
+      find "$m" -maxdepth 5 -type f \( -name 'zxdesk.db' -o -name 'zxdesk.json' \) \
+        -not -path '*/.Trash-*' -not -path '*/@Recycle/*' -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null
+  done | sed 's#/[^/]*$##' | sort -u)"
+  # ⭐ 真数据目录的末两级一定是 `zxdesk/data` —— `config/resource` 声明的 data-share 名字，
+  #    与 `cmd/uninstall_callback` 的删除守卫**同一个判据**。先用它收窄，能排除「用户解压过的备份」。
+  PICK="$(printf '%s\n' "$ALL" | grep -E '/zxdesk/data$' | sort -u)"
+  [ -n "$PICK" ] || PICK="$ALL"
+  if [ "$(printf '%s\n' "$PICK" | grep -c . || true)" = "1" ]; then
+    DATA_DIR="$PICK"
+    echo "已自动定位数据目录：$DATA_DIR"
+    echo "（如果不对，用 DATA_DIR=/你的目录 重新执行）"
+  fi
+fi
 
 show_help() {
   sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
@@ -49,14 +95,20 @@ show_help() {
 if [ ! -f "$APP_DIR/reset-admin.js" ]; then
   echo "错误：找不到应用代码 $APP_DIR/reset-admin.js"
   echo "     如果这个包是手工解开的，请用 APP_DIR=... 指定，或改用："
-  echo "     DATA_DIR=/你的/data-share/zxdesk/data node \$APP_DIR/reset-admin.js <用户名>"
+  echo "     DATA_DIR=<数据目录> node \$APP_DIR/reset-admin.js <用户名>"
   exit 1
 fi
 
 if [ -z "$DATA_DIR" ]; then
-  echo "错误：不知道数据目录（手工执行时飞牛不会注入 DATA_DIR / TRIM_DATA_SHARE_PATHS）。"
-  echo "     请在飞牛「应用设置」里确认数据目录，然后这样运行："
-  echo "     DATA_DIR=/你的/data-share/zxdesk/data $0 $*"
+  echo "错误：不知道该在哪个目录里找账号。"
+  echo "     已经试过三处：飞牛注入的 data-share、正在运行的 ZXDesk 进程、各存储卷（按 zxdesk.db 找），"
+  echo "     都没拿到**唯一**的一个目录 —— 这一步不猜，宁可问你。"
+  echo "     两个办法任选："
+  echo "       ① 打开 飞牛「应用中心 → ZXDesk → 应用设置」，把里面的「数据目录」抄下来（最省事）；"
+  echo "       ② 在终端里找一下（可能跑十几秒）："
+  echo "          find / -maxdepth 6 -name 'zxdesk.db' 2>/dev/null"
+  echo "     然后带上这个目录再运行（--list 是只读的，先看账号最稳）："
+  echo "       DATA_DIR=/你查到的目录 $CMD_DIR/reset-admin --list"
   exit 1
 fi
 
@@ -67,7 +119,7 @@ fi
 
 # --list 是只读操作：不需要停应用，也不需要输密码
 if [ "$1" = "--list" ] || [ "$1" = "-l" ]; then
-  DATA_DIR="$DATA_DIR" TRIM_PKGVAR="${TRIM_PKGVAR:-}" node "$APP_DIR/reset-admin.js" --list
+  DATA_DIR="$DATA_DIR" node "$APP_DIR/reset-admin.js" --list
   exit $?
 fi
 
@@ -78,7 +130,7 @@ if [ "$1" = "--make-admin" ] || [ "$1" = "-a" ]; then
     echo "     （不确定用哪个名字就先跑 $0 --list）"
     exit 1
   fi
-  DATA_DIR="$DATA_DIR" TRIM_PKGVAR="${TRIM_PKGVAR:-}" node "$APP_DIR/reset-admin.js" --make-admin "$2"
+  DATA_DIR="$DATA_DIR" node "$APP_DIR/reset-admin.js" --make-admin "$2"
   RC=$?
   if [ $RC -eq 0 ]; then
     echo "请重新启动应用后使用（登录后侧栏会出现「⚙ 成员」）。"
@@ -106,8 +158,16 @@ fi
 
 # 停掉应用：避免两个进程同时写库（JSON 后端尤其怕这个）。
 # 手工执行时 fnOS 的环境变量可能不全，停不掉就明确提示，不要装作停过了。
+# ⚠️⚠️ 0.9.1：**只有 PKGVAR 确实属于 ZXDesk 时**才敢用 `main stop`。
+#    在别人的应用环境里（飞牛 Web 终端 fntermx）TRIM_PKGVAR 指向那个应用 —— 照着跑 main
+#    只会把 app.log 写到无权写入的地方（一串 Permission denied），还可能去动别人的 pid 文件。
+PKGVAR_IS_OURS=0
+case "${TRIM_PKGVAR:-}" in
+  *zxdesk*) PKGVAR_IS_OURS=1 ;;
+esac
+
 STOPPED=0
-if [ -x "$CMD_DIR/main" ] && [ -n "${TRIM_PKGVAR:-}" ]; then
+if [ -x "$CMD_DIR/main" ] && [ "$PKGVAR_IS_OURS" = "1" ]; then
   if "$CMD_DIR/main" stop; then
     STOPPED=1
   else
@@ -115,11 +175,11 @@ if [ -x "$CMD_DIR/main" ] && [ -n "${TRIM_PKGVAR:-}" ]; then
     exit 1
   fi
 else
-  echo "提示：无法自动停止应用（缺少 TRIM_PKGVAR 等环境变量）。"
+  echo "提示：无法自动停止应用（当前 shell 不是 ZXDesk 的应用环境，缺少 TRIM_PKGVAR）。"
   echo "      请先在飞牛的应用中心里把 ZXDesk 停掉，再执行本脚本。"
 fi
 
-printf '%s' "$PW1" | DATA_DIR="$DATA_DIR" TRIM_PKGVAR="${TRIM_PKGVAR:-}" node "$APP_DIR/reset-admin.js" "$@"
+printf '%s' "$PW1" | DATA_DIR="$DATA_DIR" node "$APP_DIR/reset-admin.js" "$@"
 RC=$?
 unset PW1 PW2
 

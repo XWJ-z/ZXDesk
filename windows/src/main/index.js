@@ -5,7 +5,7 @@
  * ① 参数判定（`--diagnose` / `--smoke`）→ ② 绿色路径（`app.setPath`，必须在 ready 之前）
  * → ③ 单实例 → ④ 壳窗口 → ⑤ 远程视图 → ⑥ 导航。
  *
- * 三条不可退让的边界（任务单 §9.2）：
+ * 三条不可退让的边界：
  * - 远程视图：独立 partition、无 preload、无 node、`sandbox:true`；
  * - 壳：`sandbox:true` + preload，IPC 只走白名单 + 来源校验；
  * - 凭据只在主进程，日志一律脱敏。
@@ -38,6 +38,7 @@ import { runDiagnose } from './diagnose.js';
 import { registerIpc } from './ipc.js';
 import { createBootSequence } from './boot.js';
 import { Logger } from './log.js';
+import { DEFAULT_NOTICE_URL, NoticeService } from './notice.js';
 import { CredentialStore } from './store/credentials.js';
 import { dataFiles, resolveDataDir } from './store/paths.js';
 import { PrefsStore } from './store/prefs.js';
@@ -46,9 +47,22 @@ import { SessionStore } from './store/session.js';
 import { shortcutNeedsRepair, shortcutOperation, shortcutOptions, shortcutPaths } from './store/shortcuts.js';
 import { TofuStore } from './store/tofuStore.js';
 import { describeCertificate } from './tls/cert.js';
+import { DEFAULT_API_URL } from './update/client.js';
+import { createNetTransport } from './update/net-transport.js';
+import { UpdateService, packageTypeOf } from './update/service.js';
 
 const REMOTE_PARTITION = 'persist:zxdesk';
 const SMOKE_TIMEOUT_MS = 15_000;
+
+/**
+ * 版本检测接口。默认线上正式地址；`ZXDESK_UPDATE_URL` 只用于联调与自检，
+ * 指向本地假接口时不必重新打包（指向 http 也只放行 127.0.0.1）。
+ */
+const UPDATE_API_URL = String(process.env.ZXDESK_UPDATE_URL || DEFAULT_API_URL).trim();
+const UPDATE_CHANNEL = process.env.ZXDESK_UPDATE_CHANNEL === 'beta' ? 'beta' : 'stable';
+
+/** 公告接口（Windows 专属）。同样可用环境变量指向本地假接口做联调。 */
+const NOTICE_API_URL = String(process.env.ZXDESK_NOTICE_URL || DEFAULT_NOTICE_URL).trim();
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const shellDir = path.join(here, '..', 'shell');
@@ -120,6 +134,24 @@ function fatal(where, error) {
   app.exit(1);
 }
 
+/**
+ * 调一个「可能是异步、也可能同步」的主进程动作，并把异常收进日志。
+ *
+ * ⛔ 不要在这种地方对动作的返回值直接接 `.catch(`：
+ * `openNotice()` 是同步方法，返回 null ⇒ `null.catch` 抛 TypeError，
+ * 用户看到的是点一下菜单就弹「ZXDesk 出错了」（0.2.2 真机第一次跑就踩到了）。
+ */
+function fire(action, label) {
+  try {
+    const result = action();
+    if (result && typeof result.then === 'function') {
+      result.catch((error) => logger.error(label, error));
+    }
+  } catch (error) {
+    logger.error(label, error);
+  }
+}
+
 process.on('uncaughtException', (error) => fatal('未捕获异常', error));
 process.on('unhandledRejection', (reason) =>
   fatal('未处理的 Promise 拒绝', reason instanceof Error ? reason : new Error(String(reason))),
@@ -147,11 +179,181 @@ function initPrefs() {
   return prefs;
 }
 
+/**
+ * 公告历史窗口（单例）。
+ *
+ * 为什么单独开窗而不是在壳里画：公告要能滚动看全部历史，壳的 `WebContentsView` 会盖住 DOM，
+ * 自绘列表要么藏视图（背后空白），要么被网页盖住。独立窗口没有这个矛盾，也和 Windows 程序的习惯一致。
+ */
+let noticeWin = null;
+
+function openNoticeWindow() {
+  if (noticeWin && !noticeWin.isDestroyed()) {
+    if (noticeWin.isMinimized()) noticeWin.restore();
+    noticeWin.show();
+    noticeWin.focus();
+    return;
+  }
+  noticeWin = new BrowserWindow({
+    width: 560,
+    height: 680,
+    minWidth: 420,
+    minHeight: 420,
+    parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
+    modal: false,
+    show: false,
+    title: '公告',
+    backgroundColor: '#F5F7FB',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(shellDir, 'preload.cjs'),
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: false,
+      spellcheck: false,
+    },
+  });
+
+  const wc = noticeWin.webContents;
+  wc.on('will-navigate', (event, url) => {
+    if (!url.startsWith(shellBase)) {
+      event.preventDefault();
+      logger.warn(`公告窗口尝试导航到 ${url}，已阻止`);
+    }
+  });
+  wc.on('will-attach-webview', (event) => event.preventDefault());
+
+  noticeWin.once('ready-to-show', () => noticeWin.show());
+  noticeWin.on('closed', () => {
+    noticeWin = null;
+    // 看过就标已读：窗口只有「关闭」与「全部标为已读」两个出口
+    controller?.markNoticesRead();
+    logger.info('公告窗口已关闭，公告标为已读');
+  });
+
+  noticeWin.loadFile(path.join(shellDir, 'notice.html'));
+  logger.info('公告窗口已打开');
+}
+
+/**
+ * 检查更新窗口（单例）。
+ *
+ * 为什么是独立窗口而不是 `dialog.showMessageBox`：更新要展示版本号、更新说明、**下载进度**，
+ * 还要在下载完之后把按钮换成「立即安装」—— 原生消息框是一次性问答，撑不住这个过程。
+ * 也不能画在壳里：`WebContentsView` 永远盖在 DOM 之上，自绘弹层要么藏视图（背后白屏）、
+ * 要么被网页盖住。独立窗口两头都不占。
+ */
+let updateWin = null;
+
+function openUpdateWindow() {
+  if (updateWin && !updateWin.isDestroyed()) {
+    if (updateWin.isMinimized()) updateWin.restore();
+    updateWin.show();
+    updateWin.focus();
+    return;
+  }
+  updateWin = new BrowserWindow({
+    width: 560,
+    height: 640,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
+    modal: true,
+    show: false,
+    title: '检查更新',
+    backgroundColor: '#F5F7FB',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(shellDir, 'preload.cjs'),
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: false,
+      spellcheck: false,
+    },
+  });
+
+  const wc = updateWin.webContents;
+  wc.on('will-navigate', (event, url) => {
+    if (!url.startsWith(shellBase)) {
+      event.preventDefault();
+      logger.warn(`更新窗口尝试导航到 ${url}，已阻止`);
+    }
+  });
+  wc.on('will-attach-webview', (event) => event.preventDefault());
+
+  updateWin.once('ready-to-show', () => updateWin.show());
+  updateWin.on('closed', () => {
+    updateWin = null;
+    // 关窗不等于放弃更新：下载在主进程继续，下次打开窗口能看到最新进度
+    logger.info('更新窗口已关闭');
+  });
+
+  updateWin.loadFile(path.join(shellDir, 'update.html'));
+  logger.info('更新窗口已打开');
+}
+
+/**
+ * 打开已校验的更新包。
+ * - 安装包（.exe）：交给系统运行安装向导（由用户自己点「下一步」，⛔ 不静默安装）；
+ * - 绿色包（.zip）：只定位到文件夹 —— 覆盖解压会替换程序目录，必须由用户自己决定。
+ */
+async function openDownloadedPackage(filePath) {
+  try {
+    if (packageTypeOf(path.basename(filePath)) === 'installer') {
+      // 安装向导会先把本程序关掉（安装包里调的 taskkill，见 build/installer.nsi 的
+      // CloseRunningApp）—— 关之前先把窗口最小化，别让向导被我们挡在后面、
+      // 用户以为「点了立即安装没反应」。
+      try {
+        mainWindow?.minimize?.();
+      } catch {
+        /* 窗口可能已经销毁，忽略 */
+      }
+      const message = await shell.openPath(filePath);
+      return { ok: !message, message: message || '' };
+    }
+    shell.showItemInFolder(filePath);
+    return { ok: true };
+  } catch (e) {
+    logger.error('打开更新包失败', e);
+    return { ok: false, message: e.message || String(e) };
+  }
+}
+
 function buildController() {
   const secure = new SecureStore({ safeStorage, logger: (m) => logger.warn(m) });
   const sessions = new SessionStore(secure, files.session, (m) => logger.warn(m));
   const credentials = new CredentialStore(secure, files.credential, (m) => logger.warn(m));
   const tofu = new TofuStore(files.tofu, (m) => logger.warn(m));
+
+  // 更新服务：网络走 `net.fetch` / `net.request`（Chromium 网络栈，系统 CA 与代理都生效）
+  const updater = new UpdateService({
+    currentVersion: app.getVersion(),
+    apiUrl: UPDATE_API_URL,
+    channel: UPDATE_CHANNEL,
+    dir: path.join(dataPaths.dir, 'updates'),
+    fetchImpl: (input, init) => net.fetch(input, init),
+    transport: createNetTransport(net),
+    log: (level, message) => (level === 'warn' ? logger.warn(message) : logger.info(message)),
+    // 检查/下载是异步的：此刻 controller 一定已经建好（构造期间不会触发回调）
+    onState: () => controller?.push(),
+  });
+
+  // 公告：启动先读缓存（菜单立刻有内容），网络回来再刷新
+  const notices = new NoticeService({
+    apiUrl: NOTICE_API_URL,
+    fetchImpl: (input, init) => net.fetch(input, init),
+    file: files.notices,
+    readIds: prefs.get().noticeReadIds,
+    log: (level, message) => (level === 'warn' ? logger.warn(message) : logger.info(message)),
+    onState: () => controller?.push(),
+  });
+  const cachedNotices = notices.loadCache();
+  if (cachedNotices) logger.info(`公告缓存已载入：${cachedNotices} 条`);
 
   remoteView = new RemoteView({
     // session 一定要一起注入：RemoteView.session 在视图未建时要靠它拿 `persist:zxdesk` 分区
@@ -160,11 +362,11 @@ function buildController() {
     partition: REMOTE_PARTITION,
     logger,
     onProbe: (page) => {
-      controller?.onProbe(page).catch((e) => logger.error('探针处理失败', e));
+      fire(() => controller?.onProbe(page), '探针处理失败');
     },
     onLoadFail: ({ code, description, url }) => {
       // 界面只给一句人话；错误码与地址进 detail（只出现在「复制诊断」里）
-      controller?.showError('打不开页面', '页面没有加载出来，检查网络后点「重试」。', { code, description, url });
+      controller?.notifyError('打不开页面', '页面没有加载出来，检查网络后点「重试」。', { code, description, url });
     },
     onTitleChange: (title) => {
       if (title) mainWindow?.setTitle('ZXDesk 工作台');
@@ -172,7 +374,7 @@ function buildController() {
     // 远程视图有焦点时壳收不到 keydown ⇒ 快捷键在主进程截完再转成动作
     onShortcut: (name) => {
       const map = { reload: 'toolbar.reload', back: 'toolbar.back', forward: 'toolbar.forward' };
-      controller?.action(map[name]).catch((e) => logger.error('快捷键动作失败', e));
+      fire(() => controller?.action(map[name]), '快捷键动作失败');
     },
   });
 
@@ -183,6 +385,28 @@ function buildController() {
     tofu,
     view: remoteView,
     logger,
+    updater,
+    notices,
+    openUpdateWindow,
+    openNoticeWindow,
+    setProgress: (value) => {
+      try {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setProgressBar(value);
+      } catch {
+        /* 窗口不在时忽略 */
+      }
+    },
+    revealPackage: openDownloadedPackage,
+    // 网盘兜底：地址只来自版本清单（client.js 已校验 http/https），这里只负责交给系统浏览器
+    openExternal: async (url) => {
+      try {
+        await shell.openExternal(String(url));
+        return { ok: true };
+      } catch (error) {
+        logger.warn(`打开网盘地址失败：${error.message}`);
+        return { ok: false, message: '打不开浏览器，请手动复制地址访问。' };
+      }
+    },
     // `/app/ticket` 与 FNID 解析都走 `net.fetch`：它走 **Chromium 网络栈**，
     // 于是自签证书确认（setCertificateVerifyProc）对原生请求同样生效（任务书 §7.5「两条路共用一份判定」）。
     fetcher: (input, init) => net.fetch(input, init),
@@ -213,6 +437,9 @@ function buildController() {
     },
     notify: (state) => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('zxdesk:state', state);
+      // 公告 / 更新窗口订阅同一份状态：已读、下载进度都要立刻反映到它们自己的界面上
+      if (noticeWin && !noticeWin.isDestroyed()) noticeWin.webContents.send('zxdesk:state', state);
+      if (updateWin && !updateWin.isDestroyed()) updateWin.webContents.send('zxdesk:state', state);
     },
   });
   controller.logPath = files.bootLog;
@@ -296,6 +523,8 @@ function createWindow({ smoke = false } = {}) {
     if (isQuitting || !prefs?.get().closeToTray) return;
     event.preventDefault();
     mainWindow.hide();
+    // 主窗口收进托盘时，公告窗口也一起收起来，别留一个孤零零的窗口
+    if (noticeWin && !noticeWin.isDestroyed()) noticeWin.hide();
     ensureTray();
     logger.info('已隐藏到托盘（「关闭到托盘」开着；托盘菜单可退出）');
   });
@@ -483,17 +712,21 @@ function attachShellHandlers({ smoke = false } = {}) {
       logger.info('状态机就绪');
     } catch (e) {
       logger.error('初始化失败', e);
-      controller.showError('初始化失败', e.message || String(e));
+      controller.notifyError('初始化失败', e.message || String(e));
     }
   });
   wc.once('did-fail-load', (_event, code, description, url, isMainFrame) => {
     if (!isMainFrame || code === -3) return;
     logger.error(`壳加载失败：${code} ${description} ${url}`);
-    controller.showError('界面加载失败', '界面没有加载起来，请重启应用；一直这样请把「复制诊断」发给管理员。', {
-      code,
-      description,
-      url,
-    });
+    // 壳本身没加载起来 ⇒ 没有界面可以显示提示，只能交给系统错误框
+    try {
+      dialog.showErrorBox(
+        'ZXDesk 界面没加载起来',
+        `请重启应用；一直这样请把日志发回：${files.bootLog}\n（${code} ${description}）`,
+      );
+    } catch {
+      /* 无 GUI 环境：日志里已经有了 */
+    }
   });
 }
 
@@ -642,6 +875,15 @@ function settingsMenuTemplate() {
         }
       },
     },
+    {
+      label: '启动时检查更新',
+      type: 'checkbox',
+      checked: prefs?.get().updateAutoCheck !== false,
+      click: (item) => {
+        prefs.patch({ updateAutoCheck: Boolean(item.checked) });
+        logger.info(`启动时检查更新：${item.checked ? '开' : '关'}`);
+      },
+    },
     { type: 'separator' },
     { label: '打开启动文件夹', click: () => openStartupFolder(dirs.startupDir) },
     { label: '退出 ZXDesk', click: () => quitApp() },
@@ -766,6 +1008,18 @@ function setAutoStart(enabled) {
   }
 }
 
+/** 帮助菜单里的公告条目：有未读就把条数写进菜单文字。 */
+function noticeMenuLabel() {
+  const unread = controller?.getState()?.notices?.unread || 0;
+  return unread > 0 ? `公告（${unread} 条未读）` : '公告';
+}
+
+/** 「帮助 → 检查更新」是否要标「有新版本」：菜单是点开时现构建的，读的是最新状态。 */
+function hasUpdate() {
+  const updater = controller?.getState()?.update;
+  return Boolean(updater && updater.available && !updater.skipped);
+}
+
 /**
  * 顶栏文字菜单（连接 / 视图 / 帮助）。
  *
@@ -775,7 +1029,7 @@ function setAutoStart(enabled) {
 function showMenu(which) {
   const win = mainWindow;
   if (!win || win.isDestroyed()) return;
-  const act = (type) => () => controller?.action(type).catch((e) => logger.error(`菜单动作失败：${type}`, e));
+  const act = (type) => () => fire(() => controller?.action(type), `菜单动作失败：${type}`);
   const zoom = (delta) => {
     try {
       const wc = remoteView?.webContents;
@@ -806,6 +1060,17 @@ function showMenu(which) {
       { label: '重置缩放', click: () => zoom(0) },
     ],
     help: [
+      {
+        // 菜单是点开时现构建的，所以未读条数能实时读到
+        label: noticeMenuLabel(),
+        // openNotice 是同步方法（只负责开窗），走 fire 兜住，别在这写 .catch
+        click: () => fire(() => controller?.openNotice(), '打开公告失败'),
+      },
+      {
+        // DSH 同款：有新版本就在菜单项上标出来（浏览网页时没有提示条，这里是唯一信号）
+        label: `检查更新${hasUpdate() ? '（有新版本）' : ''}…`,
+        click: () => fire(() => controller?.openUpdate(), '检查更新失败'),
+      },
       {
         label: `关于 ZXDesk（${app.getVersion()}）`,
         click: () =>

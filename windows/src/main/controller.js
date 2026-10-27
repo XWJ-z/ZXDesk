@@ -1,7 +1,7 @@
 /**
  * 壳的状态机（主进程侧）。
  *
- * 一句话：**所有网络与凭据都在这里**，壳只负责显示与转发动作（任务单 §5.1）。
+ * 一句话：**所有网络与凭据都在这里**，壳只负责显示与转发动作。
  *
  * 四步引导（F1）：mode → connect →（twofa）→（access）→ browsing。
  * 证书确认（F7）、连接面板（F10）、错误页（F16）都是「隐藏远程视图 → 壳整窗显示」，
@@ -19,7 +19,7 @@ import { WsClient } from './login/wsclient.js';
 import { SavedSession } from './store/session.js';
 import { TRUST, decideTrust } from './tls/tofu.js';
 
-export const APP_VERSION = '0.2.1';
+export const APP_VERSION = '0.2.2';
 
 const LINK_RELAY = '飞牛中继';
 const LINK_LAN = '局域网直连';
@@ -60,6 +60,24 @@ export class Controller {
     this.notify = deps.notify || (() => {});
     this.fetcher = deps.fetcher;
     this.rpcFactory = deps.rpcFactory;
+    /** 更新服务（`UpdateService`）。没注入时界面不显示更新入口，其余功能不受影响。 */
+    this.updater = deps.updater || null;
+    /** 公告服务（`NoticeService`）。 */
+    this.notices = deps.notices || null;
+    /**
+     * 打开「更新 / 公告」窗口（主进程实现）。
+     * ⛔ 不用原生消息框：更新要展示进度与按钮切换，公告要能滚动看历史，都不是一次性问答能表达的。
+     */
+    this.openUpdateWindow = deps.openUpdateWindow || null;
+    this.openNoticeWindow = deps.openNoticeWindow || null;
+    /** 下载 / 打开安装包的失败文案：显示在更新窗口状态行。 */
+    this.updateActionError = null;
+    /** 用系统浏览器打开外链（网盘兜底）。注入后「前往网盘下载」按钮才有反应。 */
+    this.openExternal = deps.openExternal || null;
+    /** 任务栏进度（0~1，-1 清除，2 不确定）。 */
+    this.setProgress = deps.setProgress || null;
+    this.lastProgress = null;
+    this.revealPackage = deps.revealPackage || null;
 
     this.state = this.baseState();
     this.flow = null;
@@ -108,6 +126,7 @@ export class Controller {
   // ---------------------------------------------------------------- 状态广播
 
   push() {
+    this.syncProgress();
     try {
       this.notify(this.snapshot());
     } catch (e) {
@@ -115,8 +134,33 @@ export class Controller {
     }
   }
 
+  /**
+   * 任务栏进度：下载中显示百分比（拿不到总量时用不确定态），其余时候清掉。
+   * 只在值变化时调用 —— 每次状态推送都写一遍任务栏没有意义。
+   */
+  syncProgress() {
+    if (!this.setProgress) return;
+    const state = this.updater?.snapshot();
+    let value = -1;
+    if (state?.phase === 'downloading') {
+      const percent = Number(state.progress?.percent);
+      value = Number.isFinite(percent) && percent > 0 ? percent / 100 : 2;
+    }
+    if (value === this.lastProgress) return;
+    this.lastProgress = value;
+    try {
+      this.setProgress(value);
+    } catch {
+      /* 窗口不在时忽略 */
+    }
+  }
+
   snapshot() {
-    return JSON.parse(JSON.stringify(this.state));
+    const base = JSON.parse(JSON.stringify(this.state));
+    base.update = this.updateUi();
+    // ⚠️ 字段名必须是 notices（复数）：state.notice 是「一次性提示文案」，两者不能同名
+    base.notices = this.noticeUi();
+    return base;
   }
 
   getState() {
@@ -143,6 +187,8 @@ export class Controller {
 
   /** 冷启动：有会话快照就直接进 ZXDesk，否则回到第 ① 步（地址/账号预填）。 */
   async boot() {
+    this.scheduleUpdateCheck();
+    this.scheduleNoticeCheck();
     const saved = await this.sessions.load();
     if (!saved || !saved.baseUrl) {
       this.showMode();
@@ -283,9 +329,25 @@ export class Controller {
           return this.view.goForward();
         case 'toolbar.reload':
           return this.view.reload();
+        case 'update.open':
+          return await this.openUpdate();
+        case 'update.check':
+          return await this.checkUpdate();
+        case 'update.download':
+          return await this.downloadUpdate();
+        case 'update.run':
+          return await this.openUpdateFile();
+        case 'update.pan':
+          return await this.openFallback();
+        case 'update.skip':
+          return this.skipUpdate();
+        case 'notice.open':
+          return await this.openNotice();
+        case 'notice.read':
+          return this.markNoticesRead();
         case 'error.retry':
-          // 0.1.5：不再是「回连接页让用户再点一次」，而是拿上次的表单**原样重跑**
-          //（FNID 会重新解析，DNS 恢复后能直接连上）
+          // 浏览中原页重载；连接阶段拿上次表单原样重跑（FNID 会重新解析，DNS 恢复后能直接连上）
+          if (this.state.screen === 'browsing' || this.state.screen === 'access') return this.retryBrowsing();
           if (this.lastForm?.address) return await this.connect(this.lastForm);
           return this.showConnect(this.state.connect.notice);
         case 'error.changeAddress':
@@ -296,7 +358,7 @@ export class Controller {
       }
     } catch (e) {
       this.logError(`动作 ${type} 失败`, e);
-      this.showError('操作失败', e.message || '未知错误');
+      this.notifyError('操作失败', e.message || '未知错误');
       return null;
     }
   }
@@ -325,7 +387,6 @@ export class Controller {
       return;
     }
     if (screen === 'cert') return this.decideCert(false);
-    if (screen === 'error') return this.showConnect();
     return null;
   }
 
@@ -527,7 +588,7 @@ export class Controller {
   /**
    * 登录失败 → **留在登录页**，按钮下方一行红字「登录失败」。
    *
-   * ⚠️ 0.1.6 初版把登录失败也走 `showError()` 整页跳走 —— 那是「页面打不开」的画法，
+   * ⚠️ 0.1.6 初版把登录失败也走整页错误屏 —— 那是「页面打不开」的画法，
    * 结果表单、密码、用户刚敲的地址一起没了，用户会以为客户端崩了。
    * 现在：连不上 / 账号错 / 2FA 错 都留在屏上，具体原因只进日志与「复制诊断」。
    * 整页错误只留给**页面加载 / 导航失败 / 未知异常**（`loadSafely`、`index.js` 的 onLoadFail）。
@@ -835,7 +896,7 @@ export class Controller {
     // 但**页面打不开是整页错误**（与登录失败区分：那个留在登录页），这里必须报出来，
     // 否则就是「进了浏览模式却一直白屏」。
     if (!ok) {
-      this.showError('打不开页面', '页面没有加载出来，检查网络后点「重试」。', { url: entry.startUrl() });
+      this.notifyError('打不开页面', '页面没有加载出来，检查网络后点「重试」。', { url: entry.startUrl() });
     }
   }
 
@@ -912,7 +973,7 @@ export class Controller {
       this.logError(`加载页面失败：${url}`, e);
       // ⚠️ `e.message` 里带 `ERR_… loading 'https://…'` ⇒ 会直接把内部地址露在界面上。
       // 界面上只留人话，地址与错误码进 detail（「复制诊断」里才有）。
-      this.showError('打不开页面', '页面没有加载出来，检查网络后点「重试」。', { url, error: e.message || String(e) });
+      this.notifyError('打不开页面', '页面没有加载出来，检查网络后点「重试」。', { url, error: e.message || String(e) });
       return false;
     }
   }
@@ -1120,18 +1181,220 @@ export class Controller {
     return null;
   }
 
+  // ---------------------------------------------------------------- 更新（独立窗口）
+
+  /**
+   * 给更新窗口与壳的更新状态。`banner` 只在「连接页 / 浏览页这类常规屏幕」为真 ——
+   * 证书确认与两步验证是必须当场做完的事，⛔ 不在那两屏上叠更新提示。
+   */
+  updateUi() {
+    if (!this.updater) return null;
+    const state = this.updater.snapshot();
+    const skipped = Boolean(state.latest) && this.prefs.get().updateSkippedVersion === state.latest;
+    // 浏览模式不放提示条：远程视图盖住内容区，条子会被它挡住；那一屏的信号在「帮助」菜单上
+    const bannerScreens = ['mode', 'connect'];
+    return {
+      ...state,
+      skipped,
+      /**
+       * 错误翻成人话：窗口只负责画，⛔ 不让它自己认 error.kind。
+       * ⚠️ 只有「检查」阶段的错误才走这张表；give-up 是下载停手，它的 message 是
+       * 「哪个源、哪一步不对」，被盖成「检查更新失败」会把排查线索抹掉。
+       */
+      error: state.error
+        ? {
+            ...state.error,
+            message: state.error.kind === 'give-up' ? state.error.message : updateFailureText(state.error),
+          }
+        : null,
+      /** 下载 / 打开安装包时的失败文案：显示在更新窗口的状态行里，⛔ 不另开系统弹窗。 */
+      actionError: this.updateActionError || '',
+      banner: Boolean(state.available) && !skipped && bannerScreens.includes(this.state.screen),
+    };
+  }
+
+  /**
+   * 启动后延迟静默检查一次。
+   * 用延迟而不是启动即查：先让页面/登录跑起来，别让一个可选功能占住启动时的网络。
+   */
+  scheduleUpdateCheck(delayMs = 10_000) {
+    if (!this.updater) return;
+    if (this.prefs.get().updateAutoCheck === false) return;
+    const timer = setTimeout(() => {
+      this.checkUpdate({ silent: true }).catch((e) => this.logError('自动检查更新失败', e));
+    }, delayMs);
+    timer.unref?.();
+  }
+
+  async checkUpdate({ silent = false } = {}) {
+    if (!this.updater) return null;
+    this.updateActionError = null;
+    await this.updater.check({ silent });
+    this.push();
+    return null;
+  }
+
+  /**
+   * 「帮助 → 检查更新…」与壳上的提示：打开**独立更新窗口**，检查在后台跑。
+   *
+   * 为什么不是 `dialog.showMessageBox`：更新要展示版本号、更新说明、下载进度，下载完按钮还要
+   * 从「下载更新」换成「立即安装」—— 原生消息框是一次性问答，撑不住这个过程；
+   * 画在壳里也不行（`WebContentsView` 永远盖在 DOM 之上，藏视图就白屏）。
+   */
+  async openUpdate() {
+    if (!this.updater) return null;
+    this.openUpdateWindow?.();
+    // 不 await：窗口要先亮起来显示「正在检查…」，结果再推回来
+    this.checkUpdate({ silent: false }).catch((e) => this.logError('检查更新失败', e));
+    return null;
+  }
+
+  /** 下载并校验。进度经状态推送进更新窗口与任务栏，⛔ 不弹窗打断。 */
+  async downloadUpdate() {
+    if (!this.updater) return null;
+    this.updateActionError = null;
+    await this.updater.download();
+    const state = this.updater.snapshot();
+    if (state.phase !== 'ready') this.updateActionError = downloadFailureText(state.error);
+    this.push();
+    return null;
+  }
+
+  /** 打开已校验的包：安装版直接运行安装程序，绿色包只定位到文件夹（覆盖解压由用户决定）。 */
+  async openUpdateFile() {
+    const file = this.updater?.downloadedFile();
+    if (!file) {
+      this.updateActionError = '安装包不见了，请重新下载。';
+      this.push();
+      return null;
+    }
+    if (!this.revealPackage) {
+      this.updateActionError = '这个版本不能自动打开安装包，请到数据目录的 updates 文件夹里找。';
+      this.push();
+      return null;
+    }
+    const result = await this.revealPackage(file);
+    this.updateActionError = result?.ok === false ? result.message || '打不开安装包' : '';
+    this.push();
+    return null;
+  }
+
+  /**
+   * 「前往百度网盘下载」：自动下载连续失败后的出口。
+   * 只打开清单里带的那个地址（http/https 已在 client.js 校验过），⛔ 不接受界面传入的任意 URL。
+   */
+  async openFallback() {
+    const url = this.updater?.snapshot()?.fallbackUrl || '';
+    if (!url) {
+      this.updateActionError = '服务器没有配网盘地址，请稍后再试或联系管理员。';
+      this.push();
+      return null;
+    }
+    if (!this.openExternal) {
+      this.updateActionError = '这个版本打不开外部链接，请手动复制地址访问。';
+      this.push();
+      return null;
+    }
+    const result = await this.openExternal(url);
+    this.updateActionError = result?.ok === false ? result.message || '打不开浏览器' : '';
+    this.push();
+    return null;
+  }
+
+  /** 「以后再说」：只忽略这一版，下次发新版会重新提示。 */
+  skipUpdate() {
+    const state = this.updater?.snapshot();
+    if (!state || !state.latest) return null;
+    if (state.mustUpdate) {
+      this.log('强制更新：不允许忽略');
+      return null;
+    }
+    this.prefs.patch({ updateSkippedVersion: state.latest });
+    this.push();
+    return null;
+  }
+
+  // ---------------------------------------------------------------- 公告（独立窗口）
+
+  noticeUi() {
+    if (!this.notices) return null;
+    const state = this.notices.snapshot();
+    return { ...state, hasUnread: state.unread > 0 };
+  }
+
+  /**
+   * 启动后延迟拉一次公告。
+   * 拉完只更新「公告条 + 帮助上的未读标记」，⛔ 不自动弹窗 —— 公告不该打断用户正在做的事。
+   */
+  scheduleNoticeCheck(delayMs = 12_000) {
+    if (!this.notices) return;
+    const timer = setTimeout(() => {
+      this.checkNotices({ silent: true }).catch((e) => this.logError('自动检查公告失败', e));
+    }, delayMs);
+    timer.unref?.();
+  }
+
+  async checkNotices({ silent = false } = {}) {
+    if (!this.notices) return null;
+    await this.notices.check({ silent });
+    this.push();
+    return null;
+  }
+
+  /** 「帮助 → 公告」与点公告条：都打开**公告窗口**（历史列表在窗口里滚）。 */
+  openNotice() {
+    this.openNoticeWindow?.();
+    return null;
+  }
+
+  /** 全部标为已读：公告窗口关闭、启动弹窗关闭、窗口里的「全部标为已读」都走这里。 */
+  markNoticesRead() {
+    if (!this.notices) return null;
+    const ids = this.notices.markAllRead();
+    this.prefs.patch({ noticeReadIds: ids });
+    this.push();
+    return null;
+  }
+
   // ---------------------------------------------------------------- 错误与诊断
 
-  showError(title, message, detail = null) {
+  /**
+   * 出错时只**提示**，不换屏、不藏视图。
+   *
+   * 删掉「打不开页面」那个整页错误屏：一次网络抖动就把整窗刷成白底
+   * ＋三个按钮，比错误本身更吓人，还把正在做的事（浏览 / 连接）全打断了。
+   * 现在的落点：
+   * - 浏览 / 访问码：视图还在，错误写到**菜单栏**右侧那一条（菜单栏在视图之上，看得见），带「重试」；
+   * - 连接 / 模式等屏：写进该屏已有的内联提示（`state.notice`）。
+   * 细节（错误码、地址、原始 message）只进 `state.error`，供「复制诊断」用，⛔ 不上屏。
+   */
+  notifyError(title, message, detail = null) {
     this.state = {
       ...this.state,
-      screen: 'error',
-      // 界面只吃 title / message；detail（错误码、地址）留给「复制诊断」，⛔ 不上屏
+      // ⚠️ screen 不变：这就是「删掉整页错误」的全部意思
       error: { title, message, detail },
       connect: { ...this.state.connect, busy: false, progress: null },
     };
+    this.log(`${title}：${message}`);
+    if (this.state.screen === 'browsing' || this.state.screen === 'access') {
+      this.state = { ...this.state, browsing: { ...this.state.browsing, error: message } };
+    } else {
+      this.state = { ...this.state, notice: message };
+    }
     this.push();
-    this.view.setVisible(false);
+  }
+
+  /** 菜单栏「重试」：页面还在就重载，不重新走一遍连接（省一次登录）。 */
+  retryBrowsing() {
+    if (this.state.screen !== 'browsing' && this.state.screen !== 'access') return null;
+    this.state = { ...this.state, browsing: { ...this.state.browsing, error: null } };
+    this.push();
+    try {
+      this.view.reload();
+    } catch (e) {
+      this.logError('重载页面失败', e);
+    }
+    return null;
   }
 
   /** 复制诊断（脱敏后的纯文本，⛔ 不含 token / 密码 / Cookie）。 */
@@ -1156,6 +1419,43 @@ export class Controller {
 
 /** 局域网网关默认用 64999（实测值；`ConnectionPlanner` 的默认 https 端口没用，因为这里要强制端口）。 */
 const DEFAULT_HTTPS_PORT_FOR_GATEWAY = 64999;
+
+/** 检查失败的一句话（弹窗用）：⛔ 不把接口地址与原始错误抛给用户。 */
+function updateFailureText(error) {
+  switch (error?.kind) {
+    case 'not-published':
+      return '服务器上还没有这个版本的发布记录。';
+    case 'timeout':
+      return '更新服务响应超时，检查网络后再试。';
+    case 'network':
+      return '连不上更新服务，检查网络后再试。';
+    case 'http':
+      return '更新服务暂时不可用，稍后再试。';
+    case 'invalid':
+      return '服务器返回的更新信息不完整，暂不能更新。';
+    case 'config':
+      return '更新地址配置有误，请联系管理员。';
+    default:
+      return '检查更新失败，稍后再试。';
+  }
+}
+
+/** 下载失败的一句话；hash 不符单独说清楚（那是「包不可信」，不是网络问题）。 */
+function downloadFailureText(error) {
+  if (String(error?.message || '').includes('SHA256')) return '安装包校验没通过，已删除，请重新下载。';
+  switch (error?.kind) {
+    case 'unreachable':
+      return '连不上任何一个下载源（GitHub 与镜像都没响应），换个网络再试。';
+    case 'disk':
+      return '写不进下载目录，检查磁盘空间与权限。';
+    case 'hash':
+      return '安装包校验没通过，已删除，请重新下载。';
+    case 'download':
+      return '下载没有完成，检查网络后再试一次。';
+    default:
+      return '下载失败，稍后再试。';
+  }
+}
 
 /** 地址归一：去空格、去尾部斜杠、转小写（只用于比较，不用于连接）。 */
 function normalizeAddress(value) {

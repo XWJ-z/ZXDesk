@@ -62,6 +62,9 @@
          ⚠️ 资源地址一律**相对路径**，且本页深一层 ⇒ `core/` 要写成 `../core/`（见上方脚本里的说明） -->
     <link rel="stylesheet" href="../core/tokens.css" />
     <link rel="stylesheet" href="app.css" />
+    <!-- ⭐ 0.9.1「关于我们 / 联系与反馈」两份底部抽屉的样式 —— 与电脑版**共用同一份**
+         （`core/about.css`），本页深一层所以写 `../core/`。 -->
+    <link rel="stylesheet" href="../core/about.css" />
   </head>
   <body>
     <div class="phone" id="phone">
@@ -568,6 +571,7 @@
     <link rel="modulepreload" href="../modules/time/home-shared.js" />
     <link rel="modulepreload" href="../modules/time/pomodoro-shared.js" />
     <link rel="modulepreload" href="../modules/time/timetable-mobile-edit.js" />
+    <link rel="modulepreload" href="../core/about.js" />
     <link rel="modulepreload" href="../core/api.js" />
     <link rel="modulepreload" href="../core/backup.js" />
     <!-- ⭐ 0.5.2：「绑定网址」下拉的唯一实现（任务表单与对话弹窗共用） -->

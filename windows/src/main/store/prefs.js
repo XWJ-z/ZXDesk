@@ -17,6 +17,12 @@ export const DEFAULT_PREFS = Object.freeze({
   autoLogin: true,
   /** 关闭到托盘：点窗口 X 只隐藏，托盘常驻。默认关（保持「关掉就是关掉」的习惯）。 */
   closeToTray: false,
+  /** 启动后静默检查一次更新（发现新版只提示，不打断）。 */
+  updateAutoCheck: true,
+  /** 用户点过「以后再说」的版本号：同一版不再提示，发新版重新提示。 */
+  updateSkippedVersion: '',
+  /** 已读公告的 id（只留最近 100 条）：换机/重装后不会再弹老公告。 */
+  noticeReadIds: [],
   deviceId: '',
   window: { width: 1280, height: 820, x: null, y: null, maximized: false },
 });
@@ -32,6 +38,11 @@ export function normalizePrefs(raw) {
     rememberPassword: value.rememberPassword !== false,
     autoLogin: value.autoLogin !== false,
     closeToTray: value.closeToTray === true,
+    updateAutoCheck: value.updateAutoCheck !== false,
+    updateSkippedVersion: typeof value.updateSkippedVersion === 'string' ? value.updateSkippedVersion : '',
+    noticeReadIds: Array.isArray(value.noticeReadIds)
+      ? value.noticeReadIds.filter((id) => typeof id === 'string').slice(-100)
+      : [],
     deviceId: typeof value.deviceId === 'string' ? value.deviceId : '',
     window: {
       width: Math.max(1100, num(window.width, 1280)),

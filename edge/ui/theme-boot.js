@@ -2,10 +2,10 @@
  * 0.1.4 theme-boot —— 三屏（popup / sidepanel / settings）`<head>` 里最先跑的同步脚本。
  *
  * 顺序：先按系统偏好同步设 `data-theme`（防闪白）⇒ 异步读 `pref:theme` 覆盖 ⇒
- * 之后 `storage.onChanged` 热更新（设置页切主题，三屏立刻变——任务单 §4.3/§六）。
+ * 之后 `storage.onChanged` 热更新（设置页切主题，三屏立刻变——）。
  *
  * ⚠️ 本文件是 classic script（⛔ module）：必须在渲染前同步执行，import 会把它变异步。
- * ⚠️ 直接读 `chrome.storage.local` 是任务单 §4.3 的明文授权（「设置页写、两个壳读」）；
+ * ⚠️ 直接读 `chrome.storage.local` 是 的明文授权（「设置页写、两个壳读」）；
  *    分层纪律 2 管的是连接数据，偏好（pref:*）不在此列。
  */
 (function () {

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'; font-src 'self'"
+    />
+    <title>公告</title>
+    <link rel="stylesheet" href="notice.css" />
+  </head>
+  <body>
+    <header class="head">
+      <div>
+        <h1>公告</h1>
+        <p class="sub" id="summary">加载中…</p>
+      </div>
+      <span class="mark" id="mark" hidden></span>
+    </header>
+
+    <!-- 顶置公告（菜单栏公告条那条）：窗口里给全文，公告条只显示开头 -->
+    <div class="pinned" id="pinned" hidden>
+      <span class="pinned-tag">顶置公告</span>
+      <span id="pinned-text"></span>
+    </div>
+
+    <main class="list" id="list" aria-live="polite"></main>
+
+    <footer class="foot">
+      <button class="ghost" type="button" id="read-all">全部标为已读</button>
+      <button class="primary" type="button" id="close">关闭</button>
+    </footer>
+
+    <!-- 与主壳一样用经典脚本：file:// 下 type=module 会被 CORS 拦掉 -->
+    <script src="notice.js" defer></script>
+  </body>
+</html>

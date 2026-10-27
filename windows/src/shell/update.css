@@ -1,0 +1,294 @@
+/* 检查更新窗口样式
+ *
+ * 与主壳、公告窗口同一套浅色令牌（照 fnOS 端 tokens.css 同源）。
+ * ⛔ 不用深色、不引外部字体 / 图片 / CDN；尺寸固定 560×640，布局按 flex 列撑满。
+ */
+
+:root {
+  color-scheme: light;
+  --primary: #4f46e5;
+  --primary-soft: #eef2ff;
+  --primary-soft-text: #312e81;
+  --background: #f5f7fb;
+  --surface: #ffffff;
+  --text: #1f2430;
+  --muted: #5c6470;
+  --border: #e4e9f1;
+  --ok: #15803d;
+  --ok-soft: #dcfce7;
+  --error: #dc2626;
+  --error-soft: #fee2e2;
+  --error-text: #991b1b;
+  --radius: 12px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--background);
+  color: var(--text);
+  font-family: 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.7;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.sub {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.card {
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+}
+
+.row + .row {
+  margin-top: 2px;
+}
+
+.label {
+  flex: 0 0 68px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.value {
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 徽章三态：检测中（灰）/ 有新版本（主色）/ 已是最新（绿） */
+.badge {
+  flex: 0 0 auto;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #eceff5;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 20px;
+}
+
+.badge.available {
+  background: var(--primary-soft);
+  color: var(--primary-soft-text);
+}
+
+.badge.latest {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.badge.error {
+  background: var(--error-soft);
+  color: var(--error-text);
+}
+
+.notes-title {
+  margin: 14px 0 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.notes {
+  padding: 10px 12px;
+  background: #f7f9fc;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 132px;
+  overflow-y: auto;
+}
+
+.notes[hidden],
+.notes-title[hidden],
+.progress[hidden] {
+  display: none;
+}
+
+.progress {
+  margin-top: 14px;
+}
+
+.bar {
+  height: 6px;
+  border-radius: 999px;
+  background: #eceff5;
+  overflow: hidden;
+}
+
+.bar > span {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: var(--primary);
+  transition: width 0.15s ease;
+}
+
+.progress-text {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.status {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.status.error {
+  color: var(--error-text);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+/* ⚠️ 给了 display 就会顶掉 hidden 属性，必须补这一条 */
+.actions[hidden] {
+  display: none;
+}
+
+/* 连续失败后的网盘出口：视觉上从「行内提示」升级成一块可点的卡片 */
+.fallback {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(220, 38, 38, 0.28);
+  border-radius: 10px;
+  background: #fff7f7;
+}
+
+.fallback[hidden] {
+  display: none;
+}
+
+.fallback-text {
+  margin: 0;
+  color: var(--error-text);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.fallback-url {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-all;
+  user-select: text;
+}
+
+.fallback-url[hidden] {
+  display: none;
+}
+
+.hint {
+  margin: 0;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+button {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+button[hidden] {
+  display: none;
+}
+
+.primary {
+  border: none;
+  background: var(--primary);
+  color: #fff;
+}
+
+.primary:hover {
+  background: #4338ca;
+}
+
+.primary:disabled {
+  background: #c7cede;
+  cursor: default;
+}
+
+.ghost {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.ghost:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}

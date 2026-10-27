@@ -88,7 +88,7 @@ test('主进程与壳的每个相对 import 都指向真实文件（node --check
 test('package.json：type/mode/版本/依赖纪律', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   assert.equal(pkg.type, 'module');
-  assert.equal(pkg.version, '0.2.1');
+  assert.equal(pkg.version, '0.2.2');
   assert.equal(pkg.productName, 'ZXDesk');
   assert.equal(pkg.main, 'src/main/index.js');
   assert.deepEqual(pkg.dependencies, {}, 'dependencies 必须为空（零运行时依赖）');
@@ -331,23 +331,29 @@ test('快捷方式图标指 exe 自己（不再用 asar 里的 icon.ico）', () 
   assert.match(shortcuts, /iconIndex = 0/);
 });
 
-// ---------------------------------------------------------------- 0.1.6 收尾：错误页只说人话
+// ---------------------------------------------------------------- 2026-10-27：整页错误屏已删除
 
-test('错误页只给人话：不渲染日志路径 / 已尝试 / 具体地址', () => {
+test('没有「打不开页面」整页错误屏了：错误只走菜单栏提示', () => {
   const app = fs.readFileSync(path.join(shellDir, 'app.js'), 'utf8');
-  const start = app.indexOf('function viewError');
-  const body = app.slice(start, app.indexOf('function renderPanel'));
-  assert.ok(body.includes('data-action="error.retry"'), '要有「重试」');
-  assert.ok(body.includes('data-action="error.changeAddress"'), '要有「换个地址」');
-  assert.ok(body.includes('data-action="diag.copy"'), '要有「复制诊断」');
-  for (const leak of ['logPath', '已尝试', 'boot.log', '192.168.']) {
-    assert.ok(!body.includes(leak), `错误页不该出现「${leak}」（细节走复制诊断）`);
-  }
-  // 主进程也不再往界面状态里塞日志路径
+  const html = fs.readFileSync(path.join(shellDir, 'index.html'), 'utf8');
   const controller = fs.readFileSync(path.join(root, 'src', 'main', 'controller.js'), 'utf8');
+
+  assert.ok(!/function viewError\(/.test(app), '⛔ 壳里不该再有整页错误视图');
+  assert.ok(!/screen === 'error'/.test(app), '⛔ 不该再有 error 屏分支');
+
+  // 提示位在菜单栏里，带「重试」
+  assert.match(html, /id="menu-error"/);
+  assert.match(html, /data-action="error\.retry"/);
+  assert.match(app, /function renderMenuError\(/);
+
+  // 主进程：错误不再换屏
+  assert.match(controller, /notifyError\(title, message, detail = null\)/);
+  assert.ok(!/screen: 'error'/.test(controller), '⛔ notifyError 里不能再写 screen');
+  assert.ok(!/showError\(/.test(controller), '旧名字已改名');
+
+  // 细节（日志路径 / 地址 / 错误码）仍然只进诊断
   assert.ok(!/error: \{[^}]*logPath/.test(controller), 'state.error 不该带 logPath');
   assert.ok(!controller.includes('已尝试'), '⛔ 不再拼「已尝试」列表');
-  assert.ok(!controller.includes('withRouteHint'), '⛔ 路由提示已删');
 });
 
 // ---------------------------------------------------------------- 0.1.6 收尾 2：登录失败内联 / 密码回填

@@ -45,7 +45,7 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.34
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/04-多用户与账号.md、07-前端-电脑版与手机版.md、13-决策记录.md（决策 67 / 76）、
  *      docs/公共/开发方案/21-记账2期-记账.md（§7.6 /）
  */
@@ -243,6 +243,88 @@ export function adminSectionHtml() {
 }
 
 /**
+ * 功能：从「各端最新版本」的响应里挑出飞牛那一条（没查过 / 查失败了都是 null）。
+ *
+ * 说明：⚠️ 判据只看**服务端算好的** `state` / `stateLabel` —— 「当前版本 > 服务器版本 = 测试版」
+ *      这条口径只许有一份（`app/core/version-check.js` 的 `stateOf()`），前端⛔ 不自己比版本号。
+ *      ⚠️ 与电脑端 `desktop/views/settings.js` 的同名函数是**同一份判据的两处渲染**：
+ *      改口径改服务端那份，这里与那边都跟着变。
+ *
+ * @returns {?Object} 飞牛那一条 `{platform,label,version,publishedAt,state,stateLabel,listLabel}`；没有则 null
+ */
+function fnosVersionItem() {
+  const v = state.versions;
+  if (!v || !v.ok || !Array.isArray(v.items)) return null;
+  return v.items.find((it) => it.platform === 'fnos') || null;
+}
+
+/**
+ * 功能：「应用版本」后面那一小枚状态标 —— 比服务器新标「测试版」，服务器更新标「有新版本」。
+ *
+ * 说明：⭐ 0.9.1（口径）：「当前版本 > 服务器版本 则提示 测试版」。
+ *      ⚠️ 这一颗**只挂在「应用版本」后面**，用 `stateLabel`。「各端最新版本」那四行用 `listLabel`
+ *      —— 那里的版本号都来自服务器、已经发布过，不可能是测试版（口径修正）。
+ *      ⚠️ 没检查过 / 读不到 / 不可比时什么都不标（⛔ 不写「未知」，那会让人以为版本有问题）。
+ *
+ * @returns {string} 一枚 `<span>` 或空串
+ */
+function versionBadgeHtml() {
+  const it = fnosVersionItem();
+  if (!it || !it.stateLabel) return '';
+  const cls = it.state === 'ahead' ? 'test' : it.state === 'behind' ? 'new' : 'same';
+  return ` <span class="ver-badge ${cls}">${esc(it.stateLabel)}</span>`;
+}
+
+/**
+ * 功能：渲染「各端最新版本」这一小段 —— 四行最新版本 ＋ 一颗「检查更新」。
+ *
+ * 说明：⭐⭐ **进页面不联网**（0.9.1）：许可协议 §四.2/3 写明「只有主动点『检查更新』才请求一次，
+ *      不点就不通信」⇒ 这里只画状态，请求由 `app.js` 的动作表 `check-updates` 在点击时发出。
+ *      ⚠️ 三种状态的话各不相同：**没查过**（引导去点）、**查失败**（说清是连不上，并声明不影响使用）、
+ *      **有结果**（四行 ＋ 检查时刻）。⛔ 别把失败画成空白，那与「还没查」长得一样。
+ *
+ * @returns {string} 该小段的 HTML
+ */
+function versionBlockHtml() {
+  const v = state.versions;
+  const busy = !!state.versionsBusy;
+  const btn = `<button class="btn sm" type="button" data-act="check-updates"${busy ? ' disabled' : ''}>${
+    busy ? '检查中…' : '检查更新'
+  }</button>`;
+  let body;
+  if (!v) {
+    body = `<div class="ver-note">
+        还没检查过。点「检查更新」向更新服务器要一次各端最新版本 —— 只发本机的版本号与平台，不发任何账号与数据。
+      </div>`;
+  } else if (!v.ok) {
+    body = `<div class="ver-note ver-note-bad">暂时读不到：${esc(v.message || '连接失败')}。不影响使用，需要时再点一次。</div>`;
+  } else {
+    const rows = v.items
+      .map((it) => {
+        const date = it.publishedAt ? String(it.publishedAt).slice(0, 10) : '';
+        const val = it.version
+          ? `v${esc(it.version)}${date ? ` <small class="ver-date">${esc(date)}</small>` : ''}`
+          : '<span class="ver-empty">暂无发布记录</span>';
+        // ⚠️ 列表里读的是 `listLabel`，不是 `stateLabel`（0.9.1 口径修正）：
+        //    这四行版本号**都来自服务器、已经发布过**，已发布就不可能是测试版
+        //    ⇒ 这里只可能出现「有新版本」。`stateLabel` 留给上面「应用版本」旁那一颗。
+        const badge = it.listLabel
+          ? ` <span class="ver-badge ${it.state === 'behind' ? 'new' : 'same'}">${esc(it.listLabel)}</span>`
+          : '';
+        return `<dt>${esc(it.label)}</dt><dd>${val}${badge}</dd>`;
+      })
+      .join('');
+    body = `<dl class="kv">${rows}</dl>
+      <div class="ver-note">检查于 ${esc(v.checkedAt || '—')}${
+        v.fromCache ? '（10 分钟内再点不会重复联网）' : ''
+      }</div>`;
+  }
+  return `
+        <div class="ver-head" style="margin-top:12px"><b>各端最新版本</b>${btn}</div>
+        ${body}`;
+}
+
+/**
  * 功能：渲染「数据来源」区块 —— 只读信息：应用版本、服务端口、数据存放方式（所有人），
  *      管理员另有数据目录（可复制）、数据文件与大小、读写方式、自动清理、数据结构版本、升级自动备份。
  *
@@ -278,7 +360,7 @@ export function dataSectionHtml() {
       ${secHeadFold('data', '版本数据', '#0ea5e9', '', isFolded('data', true))}
       <div class="card sec-flat">
         <dl class="kv">
-          <dt>应用版本</dt><dd>v${esc(h.version || '—')}</dd>
+          <dt>应用版本</dt><dd>v${esc(h.version || '—')}${versionBadgeHtml()}</dd>
           <dt>服务端口</dt><dd>${esc(h.port == null ? '—' : h.port)}</dd>
           <dt>数据存放方式</dt><dd>${backend}</dd>
           ${
@@ -314,6 +396,7 @@ export function dataSectionHtml() {
             : ''
         }
         ${warn.map((w) => `<div class="storage-warn">${w}</div>`).join('')}
+        ${versionBlockHtml()}
       </div>
       <button class="mrow" type="button" data-act="refresh" style="width:100%;font:inherit;text-align:left;margin-top:9px">
         <span class="mtxt">重新读取数据</span>
@@ -605,7 +688,9 @@ function navBoxHtml(me) {
  *      ① **模块进入** —— ⚠️ **只列底部导航栏上没有的那些**（「注意这里只显示导航栏没有的，
  *         在导航栏的不要显示」）；判据就是 `navTabItems()` 那一份（`hubRowsHtml()` 里做的）。
  *      ② **设置** —— 11 栏的全部配置（底栏放不下，所以从这儿进）。
- *      ③ **导航栏** —— 挑哪几个模块摆到底栏、长按 ⠿ 排序（⭐ 本轮从设置页搬回来，
+ *      ③ **关于我们 / 联系与反馈** —— ⭐ 0.9.1：两张卡，点开是从底部升起的抽屉
+ *         （内容与电脑版侧栏底部那两颗按钮**共用一份**，见 `core/about.js`）。
+ *      ④ **导航栏** —— 挑哪几个模块摆到底栏、长按 ⠿ 排序（⭐ 本轮从设置页搬回来，
  *         「设置中的首页导航栏移动到更多中」）。
  *
  * 说明：⚠️ ②③ 各自是一张卡、① 是一列入口行 —— 三层都是「点一下就去某处」，没有开关，
@@ -639,6 +724,22 @@ export function renderMore() {
       <button class="mrow" type="button" data-act="dash-goto" data-tab="settings" style="width:100%;font:inherit;text-align:left">
         <span class="mtxt">设置<small>版本数据 · 账号 · 备份 · 每个模块的开关</small></span>
         <span class="mval">进入 ›</span>
+      </button>
+    </div>
+    <div class="sec sec-card">
+ <!-- ⭐ 0.9.1：与电脑版侧栏底部那两颗「关于我们 / 联系与反馈」是**同一件事的两处入口**
+           （老大指定：手机端放这里，两个卡片）。内容两端共用 core/about.js，
+           所以这里只管动作名，⛔ 不许在这一页把文案再写一遍。
+           ⚠️⚠️ 这段注释住在模板串里面 ⇒ 里面⛔一个反引号都不能写（会截断整个串）。 -->
+      <button class="mrow" type="button" data-act="about" style="width:100%;font:inherit;text-align:left">
+        <span class="mtxt">关于我们<small>各平台介绍 · 官网与下载 · 打赏</small></span>
+        <span class="mval">查看 ›</span>
+      </button>
+    </div>
+    <div class="sec sec-card">
+      <button class="mrow" type="button" data-act="contact" style="width:100%;font:inherit;text-align:left">
+        <span class="mtxt">联系与反馈<small>交流群 · 问题反馈</small></span>
+        <span class="mval">查看 ›</span>
       </button>
     </div>
     ${navBoxHtml(me)}`;

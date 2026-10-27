@@ -63,6 +63,12 @@ if (rtIcons < 7 || groups.length !== 1) {
 }
 console.log(`✓ 应用目录就绪：${path.relative(root, srcDir)}（图标 ${rtIcons} 个尺寸）`);
 
+// 许可协议：每次编译前由 `build/eula.txt` 重新生成 `build/eula.rtf`（安装向导里嵌的是 rtf）
+const eula = spawnSync(process.execPath, [path.join(root, 'build', 'make-eula.js')], { stdio: 'inherit' });
+if (eula.error) die(`许可协议生成脚本起不来：${eula.error.message}`);
+if (eula.status !== 0) die('许可协议生成失败（先修 build/eula.txt）');
+if (!fs.existsSync(path.join(root, 'build', 'eula.rtf'))) die('缺 build/eula.rtf');
+
 // ---------------------------------------------------------------- 编译
 
 fs.mkdirSync(releaseDir, { recursive: true });
@@ -103,5 +109,5 @@ console.log(`
   大小   ${buf.length.toLocaleString('en-US')} 字节（${mb.toFixed(1)} MiB）
   校验   ${shaFile}
   sha256 ${hash}
-  版本   ${version}（安装目录 / 数据目录两页齐全；卸载默认保留数据）
+  版本   ${version}（许可协议 / 安装目录 / 数据目录三页齐全；卸载默认保留数据）
 `);

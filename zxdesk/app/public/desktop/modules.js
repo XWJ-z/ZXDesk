@@ -266,7 +266,7 @@ export const MODULES_UI = {
     //    ⚠️ 图标用 `💰` —— 它与前后的 `📆`（日历）/ `🔐`（密码库）都不同形，侧栏上分得清。
     //    ⚠️ `defaultEnabled: true`：它是普适工具、**零出网**、零风险，默认该在；
     //    关掉的是入口（⛔ 账户与净值历史一行不删 —— 关的是看它的门，不是账本本身）。
-    //    ⚠️ 文案与手机端**逐字一致**（决策 67 ④，`module-ui.test.js` 逐字比对 desc / tip）。
+    //    ⚠️ 文案与手机端**逐字一致**（`module-ui.test.js` 逐字比对 desc / tip）。
     //    ⭐ 0.8.10：界面显示名改「**生活记账**」—— 模块名 / 目录 / 表 / 接口 / 独立库 /
     //    开关 / AI 授权项**一个字没动**（照「灵感库 → 随手记」的先例）。
     //    ⚠️⭐ 显示名走**顶层 `title`**（侧栏入口与设置页那张卡都读它）——
@@ -325,7 +325,7 @@ export const MODULES_UI = {
     //    「开」必须是用户亲手做的选择；关掉的是入口与插槽，配置数据一行不动。
     //    ⚠️⭐ `slots` 与手机端**逐字一致**（`module-ui.test.js` 钉着）——
     //    `teamwork-page` / `teamwork-thread` 是「对话页问 AI」那条真功能，⛔ 别跟着一起撤。
-    //    ⚠️ `settingsPane.label` 两端逐字一致（决策 67 ④，`module-ui.test.js` 比对）。
+    //    ⚠️ `settingsPane.label` 两端逐字一致（`module-ui.test.js` 比对）。
     slots: ['teamwork-page', 'teamwork-thread', 'settings-pane'],
     settingsPane: { id: 'ai', ico: '🤖', label: 'AI 设置' },
     card: {

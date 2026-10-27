@@ -151,7 +151,7 @@ export async function openHome() {
   //    容器里的那块 DOM（上次停在列表视图时就是列表），等 `/api/dashboard` 回来
   //    `renderHome()` 才翻到日历 —— 那一次"翻"就是闪。`init()` 首屏本来就是这么做的（先铺骨架）。
   //    ⚠️ 这里⛔ **不调 `renderHome()`**：它会先把模块视图挂一趟，紧接着 `loadHome()` 里又挂一趟，
-  //    两趟**并发**挂载会在容器里留下两个根节点（方案 26 踩过；`mountModuleSlot()` 只清空"自己那一趟"）。
+  //    两趟**并发**挂载会在容器里留下两个根节点（`mountModuleSlot()` 只清空"自己那一趟"）。
   const body = $('#home-body');
   if (body) body.innerHTML = skeletonHtml(3);
   // ⭐ 0.8.61：概览住在固定段（`#home-stats`）⇒ 清骨架时**一并清掉**。

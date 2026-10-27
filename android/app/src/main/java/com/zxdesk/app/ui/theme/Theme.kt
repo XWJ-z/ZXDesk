@@ -8,7 +8,7 @@ import androidx.compose.material3.LocalContentColor
 import androidx.compose.ui.graphics.Color
 
 /**
- * 壳只做浅色（任务单 AND-008 §四）。
+ * 壳只做浅色。
  *
  * 为什么不跟系统深色：WebView 里的网页（`mobile/app.css`）**没有深色方案**，
  * 深色壳套浅色网页怎么调都是拼接感（0.2.10 的真机截图就是「深控件 + 浅底 + 黑标题」）。

@@ -15,7 +15,9 @@ import { MSG, BM_TEXT } from './lib/messages.js';
 import { connect, status, disconnect, onCookieChanged } from './lib/connect.js';
 import { createBookmark, listBookmarks, removeBookmark, updateBookmark } from './lib/bookmarks.js';
 import { vaultStatus, vaultEntry } from './lib/vault.js';
-import { getConn, clearCache, getCache, setCache, getLastConn, setLastConn, takePending } from './lib/store.js';
+import { checkForUpdate, readUpdate, dismissUpdate, isNewer, promptOf, VERSION_API } from './lib/update.js';
+import { hasAccepted } from './lib/eula.js';
+import { getConn, getEula, clearCache, getCache, setCache, getLastConn, setLastConn, takePending } from './lib/store.js';
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   route(msg)
@@ -59,6 +61,14 @@ async function route(msg) {
     case MSG.bmCacheSet:
       await setCache(payload);
       return { ok: true };
+    case MSG.updateInfo:
+      return updateInfo(); // 0.1.6
+    case MSG.updateCheck:
+      return updateCheckNow(); // 设置里的「检查更新」
+    case MSG.updateSeen:
+      return clearBadge();
+    case MSG.updateDismiss:
+      return dismissUpdateMsg(payload);
     default:
       return { ok: false, code: 'unknown_message', type: msg && msg.type };
   }
@@ -140,7 +150,7 @@ async function bmRemove(p) {
   return r;
 }
 
-/** 功能：0.1.5 E2 编辑 —— ⛔ 不透传 `url`（任务单 §七.2），只放行 title / tags。 */
+/** 功能：0.1.5 E2 编辑 —— ⛔ 不透传 `url`，只放行 title / tags。 */
 async function bmUpdate(p) {
   const base = await requireBase();
   if (!base) return { ok: false, code: 'not_connected' };
@@ -172,7 +182,7 @@ async function vaultEntryMsg(p) {
 
 // ---- 右键菜单 + 快捷键（共用 quickSave，角标反馈）----
 
-/** 功能：连接后才建菜单（任务单 §五.4）；重复 create 会报错，先 removeAll 再建。 */
+/** 功能：连接后才建菜单；重复 create 会报错，先 removeAll 再建。 */
 async function ensureMenus() {
   try {
     await chrome.contextMenus.removeAll();
@@ -198,12 +208,12 @@ getConn()
   })
   .catch(() => {});
 
-/** 角标：成功 `✓` 2 s 清空；失败 `!` 2 s 清空（任务单 §五.5）。 */
+/** 角标：成功 `✓` 2 s 复原；失败 `!` 同样 —— 复原成「有新版本」标（0.1.6 起角标兼职两件事）。 */
 function badge(ok) {
   const t = ok ? '✓' : '!';
   chrome.action.setBadgeText({ text: t });
   chrome.action.setBadgeBackgroundColor({ color: ok ? '#1a7f37' : '#cf222e' });
-  setTimeout(() => chrome.action.setBadgeText({ text: '' }), 2000);
+  setTimeout(paintUpdateBadge, 2000);
 }
 
 /** 功能：统一收藏入口 —— 发请求、判重复（重复也是「已收藏」，不报错）。 */
@@ -239,7 +249,7 @@ chrome.cookies.onChanged.addListener(({ cookie }) => {
   onCookieChanged(cookie.name);
 });
 
-// ================= 0.1.4：授权一次过（任务单 §2.3 硬规则 3） =================
+// ================= 0.1.4：授权一次过（硬规则 3） =================
 
 /**
  * 功能：拿到新 host 权限 ⇒ 有 pendingConnect 就自动续跑连接——**与任何页面是否还活着无关**
@@ -300,3 +310,87 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes['pref:openMode']) applyOpenMode(changes['pref:openMode'].newValue);
 });
 bootOpenMode(); // SW 冷启动兜底（onInstalled/onStartup 不保证每次都醒）
+
+// ================= 0.1.6：版本检测（只在浏览器启动与安装/更新时各跑一次） =================
+
+/** 功能：同意过许可协议没有 —— 没同意就一次都不发（协议 §四.4 的承诺）。读不到也当没同意。 */
+async function eulaAccepted() {
+  try {
+    return hasAccepted(await getEula());
+  } catch (_e) {
+    return false;
+  }
+}
+
+/**
+ * 功能：把「要不要提示」的结论交给界面（比不比、关没关过，判据都在 `lib/update.js`）。
+ * @returns {Promise<{ok:boolean, update?:object|null}>}
+ */
+async function updateInfo() {
+  if (!(await eulaAccepted())) return { ok: true, update: null };
+  try {
+    return { ok: true, update: await readUpdate() };
+  } catch (e) {
+    return { ok: false, code: 'storage', detail: String((e && e.message) || e) };
+  }
+}
+
+/**
+ * 功能：设置里手动点「检查更新」—— 真查一次（与启动时同一条路径），把这一次的结果直接交回界面。
+ * ⚠️ 不能用 `readUpdate()` 的结论：它会把「用户关掉过的那一版」藏起来，而手动检查必须如实回答；
+ *    查不到要把 **断在哪一步**（`code`）一并带回，界面才能说人话，而不是一句「连不上」。
+ * @returns {Promise<{ok:boolean, fresh:boolean, code?:string, newer?:boolean, update?:object, api?:string}>}
+ */
+async function updateCheckNow() {
+  if (!(await eulaAccepted())) return { ok: false, code: 'eula_pending' };
+  const r = await checkForUpdate();
+  if (!r.ok) return { ok: true, fresh: false, code: r.code, api: VERSION_API };
+  await paintUpdateBadge();
+  return { ok: true, fresh: true, newer: isNewer(r.rec.latest, r.rec.current), update: promptOf(r.rec) };
+}
+
+/** 功能：气泡已经展示 ⇒ 撤掉角标（用户看到了，不必在图标上一直催）。 */
+async function clearBadge() {
+  try {
+    await chrome.action.setBadgeText({ text: '' });
+  } catch (_e) {
+    /* action 不可用 ⇒ 无所谓，气泡照常 */
+  }
+  return { ok: true };
+}
+
+/** 功能：用户关掉气泡 ⇒ 记住这一版不再提示，同时撤角标。 */
+async function dismissUpdateMsg(p) {
+  try {
+    await dismissUpdate(p && p.version);
+  } catch (_e) {
+    /* 存不下就下次启动再说，⛔ 不让提示流程报错 */
+  }
+  return clearBadge();
+}
+
+/** 功能：按已存的检测结果画「NEW」角标 —— 收藏动作的 ✓/! 反馈过后由它复原。 */
+async function paintUpdateBadge() {
+  let has = false;
+  try {
+    has = !!(await readUpdate());
+  } catch (_e) {
+    has = false;
+  }
+  try {
+    await chrome.action.setBadgeText({ text: has ? 'NEW' : '' });
+    if (has) await chrome.action.setBadgeBackgroundColor({ color: '#4f46e5' });
+  } catch (_e) {
+    /* action 不可用 ⇒ 放弃角标，气泡照常 */
+  }
+}
+
+/** 功能：跑一次检测并刷新角标（检测自身已兜住所有异常，⛔ 不再套一层 try）。 */
+async function runUpdateCheck() {
+  if (!(await eulaAccepted())) return; // 还没同意协议 ⇒ 不联网，等同意之后的下一次启动
+  await checkForUpdate();
+  await paintUpdateBadge();
+}
+
+chrome.runtime.onStartup.addListener(runUpdateCheck);
+chrome.runtime.onInstalled.addListener(runUpdateCheck);

@@ -9,7 +9,7 @@
  *    移动到全局设置中**」）：这一枚下拉原先长在密码库那一屏的**状态层**里
  *    （`mobile.js` 的 `.vault-status`，跟着列表一起滚），与倒计时挤在一行。
  *    ⚠️ 用的是现成的**模块贡献分栏**机制—— ⛔ 别另写一套「设置页里塞个特例」。
- *    ⚠️ `settingsPane.label` 与电脑端**逐字一致**（决策 67 ④，`module-ui.test.js` 比对）。
+ *    ⚠️ `settingsPane.label` 与电脑端**逐字一致**（`module-ui.test.js` 比对）。
  *
  * ⚠️⭐ **改锁定时长要求「已解锁」**（服务端 `PUT /api/vault/settings` 的 `vaultAssertUnlocked`：
  *    009 报告 S2 修的提权口子）。⇒ ⛔ 不要为了「设置页能改」去松服务端那道闸。

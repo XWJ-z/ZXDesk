@@ -17,4 +17,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "ZXDesk-Android"
-include(":app", ":core:datasource", ":core:connection", ":core:tls")
+include(":app", ":core:datasource", ":core:connection", ":core:tls", ":core:update")

@@ -11,10 +11,11 @@
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 
-import { decideDataDir, parseIni, readInstallConfig } from '../src/main/store/paths.js';
+import { decideDataDir, hasExistingData, parseIni, readInstallConfig } from '../src/main/store/paths.js';
 
 const root = path.resolve(import.meta.dirname, '..');
 
@@ -85,14 +86,45 @@ test('decideDataDir：安装指定的数据目录不可写 ⇒ 回落 LOCALAPPDA
     installDataDir: 'Z:\\只读',
     canWrite: (dir) => dir !== 'Z:\\只读',
   });
-  assert.equal(d.dir, path.join('C:\\LA', 'ZXDesk'));
+  assert.equal(d.dir, path.join('C:\\LA', 'ZXDesk', 'data'), '兜底口径与安装程序默认值一致（…\\ZXDesk\\data）');
   assert.equal(d.mode, 'fallback');
   assert.match(d.warning, /安装时选的数据目录不可写/);
 });
 
+test('decideDataDir：兜底时旧位置（…\\ZXDesk）里有数据就用旧的，别让用户像换了台机器', () => {
+  const base = { isPackaged: true, exeDir: 'C:\\Apps', devDir: 'dev', localAppData: 'C:\\LA', canWrite: () => false };
+  const oldWithData = path.join('C:\\LA', 'ZXDesk');
+  const d = decideDataDir({ ...base, hasData: (dir) => dir === oldWithData });
+  assert.equal(d.dir, oldWithData, '0.2.1 及以前的数据在上一级，必须接着用');
+  assert.equal(d.mode, 'fallback');
+
+  const newWithData = path.join('C:\\LA', 'ZXDesk', 'data');
+  const d2 = decideDataDir({ ...base, hasData: (dir) => dir === newWithData });
+  assert.equal(d2.dir, newWithData, '新口径位置有数据就用新口径');
+});
+
+test('hasExistingData：只认程序自己写的标志文件（与安装脚本的判据一致）', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zxdesk-data-'));
+  try {
+    assert.equal(hasExistingData(dir), false, '空目录不算有数据');
+    fs.writeFileSync(path.join(dir, 'prefs.json'), '{}', 'utf8');
+    assert.equal(hasExistingData(dir), true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'zxdesk-data2-'));
+  try {
+    fs.mkdirSync(path.join(dir2, 'profile'), { recursive: true });
+    assert.equal(hasExistingData(dir2), true, 'profile 子目录也算（Electron 会话数据）');
+  } finally {
+    fs.rmSync(dir2, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------- 安装脚本
 
-test('installer.nsi：两页都要有（安装路径 + 数据路径），且数据页在目录页之后', () => {
+test('installer.nsi：数据路径页在目录页之后（页序不能反）', () => {
   const nsi = fs.readFileSync(path.join(root, 'build', 'installer.nsi'), 'utf8');
   const dirPage = nsi.indexOf('MUI_PAGE_DIRECTORY');
   const dataPage = nsi.indexOf('Page custom DataPageCreate DataPageLeave');
@@ -102,6 +134,62 @@ test('installer.nsi：两页都要有（安装路径 + 数据路径），且数�
   assert.match(nsi, /nsDialogs::SelectFolderDialog/, '要有「浏览…」');
   assert.match(nsi, /MUI_LANGUAGE "SimpChinese"/, '中文界面');
   assert.match(nsi, /RequestExecutionLevel admin/, '写 Program Files 需要管理员');
+});
+
+// ---------------------------------------------------------------- 0.2.2：自动识别旧数据目录
+//
+// 实际问题：装 0.2.2 时默认值写死成 %LOCALAPPDATA%\ZXDesk\data
+// 明明机器上有在用的数据也不认，装完像「全新的一样」。锁死下面几条。
+
+test('installer.nsi：默认值不再写死 —— .onInit 走 DetectDataDir', () => {
+  const nsi = fs.readFileSync(path.join(root, 'build', 'installer.nsi'), 'utf8');
+  assert.match(nsi, /Function \.onInit\s+Call DetectDataDir/, '.onInit 必须调识别函数');
+  assert.ok(
+    !/Function \.onInit\s+StrCpy \$DataDir "\$LOCALAPPDATA\\ZXDesk\\data"\s+FunctionEnd/.test(nsi),
+    '⛔ 不能只写死默认值（这是被指出的那个 bug）',
+  );
+  assert.match(nsi, /Function DetectDataDir/, '要有识别函数');
+});
+
+test('installer.nsi：识别顺序 = 注册表 → install.ini → 常见位置 → 默认值', () => {
+  const nsi = fs.readFileSync(path.join(root, 'build', 'installer.nsi'), 'utf8');
+  const reg = nsi.indexOf('ReadRegStr $LastDataDir HKCU "${APP_KEY}" "DataDir"');
+  const ini = nsi.indexOf('ReadINIStr $1 "$0\\install.ini" "install" "data"');
+  const local = nsi.indexOf('TryDataCandidate "$LOCALAPPDATA\\ZXDesk\\data"');
+  const def = nsi.indexOf('StrCpy $DataDir "$DefaultDir"');
+  assert.ok(reg > 0, '要读上次安装写的数据目录');
+  assert.ok(ini > reg, '注册表之后再看上一个版本的 install.ini');
+  assert.ok(local > ini, '再看常见位置');
+  assert.ok(def > local, '最后才回默认值');
+});
+
+test('installer.nsi：每个候选都要先验证「里面确实有数据」', () => {
+  const nsi = fs.readFileSync(path.join(root, 'build', 'installer.nsi'), 'utf8');
+  for (const mark of ['prefs.json', 'session.bin', 'credential.bin', 'tofu.json', 'notices-cache.json']) {
+    assert.ok(nsi.includes(`$ProbeDir\\${mark}`), `判据要有 ${mark}（与 paths.js 的 dataFiles 对齐）`);
+  }
+  assert.match(nsi, /Function ProbeDataDir/, '要有探测函数');
+  assert.match(nsi, /!macro TryDataCandidate/, '候选要能复用（避免四份重复逻辑）');
+
+  const probe = nsi.slice(nsi.indexOf('Function ProbeDataDir'), nsi.indexOf('Function .onInit'));
+  assert.ok(!/zxdProbeSession:[\s\S]{0,400}zxdProbeSession:/.test(probe), '标签不能重复');
+});
+
+test('installer.nsi：页面要告诉用户默认值是怎么来的（认到 / 没认到）', () => {
+  const nsi = fs.readFileSync(path.join(root, 'build', 'installer.nsi'), 'utf8');
+  assert.match(nsi, /\$DataDirHasData == 1/, '要按「有没有数据」区分文案');
+  assert.match(nsi, /已自动填入：\$DataSource/, '要说清楚是从哪认出来的');
+  assert.match(nsi, /安装后直接接着用/, '要让用户知道数据不会丢');
+  assert.match(nsi, /没有找到已有数据，这是首次安装的默认位置/, '首次安装也要说明');
+  // 绿色版的数据在解压目录，安装器按注册表 / 常见位置都找不到 ⇒ 必须给出指引
+  assert.match(nsi, /数据在解压目录的 data 文件夹里/, '要告诉绿色版用户去哪找自己的数据');
+});
+
+test('installer.nsi：路径规范化与目录校验（尾斜杠 / 安装目录子目录）', () => {
+  const nsi = fs.readFileSync(path.join(root, 'build', 'installer.nsi'), 'utf8');
+  assert.match(nsi, /StrCpy \$DataDir \$DataDir -1/, '要去掉结尾反斜杠，否则比较与 install.ini 都多一字符');
+  assert.match(nsi, /StrLen \$3 \$DataDir/, '盘根（D:\\）不能砍成 D:');
+  assert.match(nsi, /数据目录不能放在安装目录里/, '任何子目录都不许（不只是 …\\data）');
 });
 
 test('installer.nsi：写 install.ini / 注册表 / 卸载默认保留数据', () => {
@@ -129,8 +217,40 @@ test('make-setup：编译前先验应用目录与图标，产物核对 PE/体积
   assert.match(src, /writeFileSync\(shaFile, `\$\{hash\}  \$\{path\.basename\(outFile\)\}\\n`/, 'sha 两空格格式');
 });
 
-test('package.json：0.2.1 且注册 dist:setup', () => {
+test('package.json：0.2.2 且注册 dist:setup', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-  assert.equal(pkg.version, '0.2.1');
+  assert.equal(pkg.version, '0.2.2');
   assert.equal(pkg.scripts['dist:setup'], 'node build/make-setup.js');
+});
+
+// ---------------------------------------------------------------- 更新安装：先关掉正在运行的 ZXDesk
+//
+// 0.2.2 真机第一次自动更新被打断：安装包覆盖 $INSTDIR\ZXDesk.exe 时进程还开着，
+// File 失败 → 安装中止。真机报过一次。
+
+test('installer.nsi：安装前关闭正在运行的 ZXDesk（否则覆盖 exe 失败、安装中止）', () => {
+  const nsi = fs.readFileSync(path.join(root, 'build', 'installer.nsi'), 'utf8');
+  assert.match(nsi, /Function CloseRunningApp/, '要有「关闭正在运行的程序」');
+  assert.match(nsi, /taskkill\.exe" \/IM "\$\{PRODUCT_EXE\}"/, '按进程名关');
+  assert.match(nsi, /\/F \/IM/, '「关闭到托盘」会拦 WM_CLOSE，必须能强杀');
+  assert.match(nsi, /MB_RETRYCANCEL/, '关不掉要给「重试」，不能默不作声地失败');
+
+  const callAt = nsi.indexOf('Call CloseRunningApp');
+  const fileAt = nsi.indexOf('File /r "${SRC_DIR}/*"');
+  assert.ok(callAt > 0, '要真的调用');
+  assert.ok(fileAt > callAt, '必须在复制文件之前调用（之后就没意义了）');
+
+  // ⛔ 不能放在 .onInit：用户在向导里点「取消」时，不该把正在用的程序关掉
+  const onInitStart = nsi.indexOf('Function .onInit');
+  const onInitEnd = nsi.indexOf('Function DataPageCreate');
+  assert.ok(!nsi.slice(onInitStart, onInitEnd).includes('CloseRunningApp'), '⛔ 别放进 .onInit');
+});
+
+test('更新：打开安装包前先把窗口最小化（安装向导别被我们挡在后面）', () => {
+  const main = fs.readFileSync(path.join(root, 'src', 'main', 'index.js'), 'utf8');
+  const start = main.indexOf('async function openDownloadedPackage');
+  const end = main.indexOf('\nfunction ', start);
+  const body = main.slice(start, end > 0 ? end : undefined);
+  assert.match(body, /mainWindow\?\.minimize\?\.\(\)/, '要最小化主窗口');
+  assert.ok(body.indexOf('minimize') < body.indexOf('shell.openPath'), '先最小化，再打开安装包');
 });

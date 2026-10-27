@@ -41,6 +41,16 @@ class Prefs(context: Context) {
         }
 
     /**
+     * 已同意的许可协议版本（0 = 没同意过）。
+     * 协议正文的版本号变大时会重新询问 —— 只存布尔量就没法区分「同意过旧版」。
+     */
+    var eulaAcceptedVersion: Int
+        get() = sp.getInt(KEY_EULA_ACCEPTED, 0)
+        set(value) {
+            sp.edit().putInt(KEY_EULA_ACCEPTED, value).apply()
+        }
+
+    /**
      * 设备标识（登录时当 `did`）。
      * 格式照 fnOS 前端的 `jX()`：`<时间36进制>-<13位随机>-<13位随机>`，一次性生成后不再变。
      */
@@ -80,6 +90,7 @@ class Prefs(context: Context) {
         const val KEY_USER = "last_user"
         const val KEY_REMEMBER = "remember_password"
         const val KEY_DRAWER_HINT = "drawer_hint_shown"
+        const val KEY_EULA_ACCEPTED = "eula_accepted_version"
         const val KEY_DEVICE = "device_id"
         const val TOFU_PREFIX = "tofu_"
     }

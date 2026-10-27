@@ -36,7 +36,7 @@
  *
  * @author zx
  * @date   2026-09-10
- * @since 0.8.34
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/01-架构总览.md
  */
 'use strict';
@@ -48,7 +48,7 @@ const { APP_VERSION } = require('./storage.js');
 const { GATEWAY_PREFIX, gatewaySlashRedirect, stripGatewayPrefix } = require('./gateway.js');
 const { currentUser, handleAdmin, handleAuth } = require('./routes/auth.js');
 const { fail, json, notFound } = require('./http-util.js');
-const { handleBootstrap, handleDashboard, handleHealth } = require('./routes/system.js');
+const { handleBootstrap, handleDashboard, handleHealth, handleVersions } = require('./routes/system.js');
 const { handleExportOrg, handleImportUser, handleRestoreOrg } = require('./routes/backup.js');
 const { handleMigrateLedger } = require('./routes/migrate.js');
 const { logLine, runtime, store } = require('./context.js');
@@ -143,6 +143,11 @@ const LEGACY_API_ROUTES = {
   //    ⚠️ 它不是某个模块的接口，而是**跨模块汇总**（课表 / 硬件 / 收藏夹 / 对话都读），
   //    所以处理函数住在 `routes/system.js` 而不是某个业务路由里。
   dashboard: handleDashboard,
+  // ⭐ 0.9.1 各端最新版本检测（设置页「版本数据」栏）。
+  //    ⚠️ 它在 401 闸门**之后**（载荷里带本机版本与「是不是测试版」的结论，属登录后才该看的信息），
+  //    且**只在用户点「检查更新」时才被调用** —— 本软件唯一的对外联网点，许可协议 §四 有承诺。
+  //    处理函数住在 `routes/system.js`（跨端的系统信息，不属任何模块）。
+  versions: handleVersions,
   // ⚠️ 0.5.0起任务板的**七个**顶层键（`tasks` / `export` / `search` / `today-count` /
   //    `summary` / `projects` / `daily`）**都不在这张表里了**：它们由
   //    `modules/tasks/routes.js` 的导出键自动挂上，两处同时登记会**启动即抛**
@@ -262,12 +267,16 @@ function handleApi(req, res, urlPath) {
  * ⚠️ `script-src` 里那两个 `sha256-…` 是**页面内两段内联入口脚本**的哈希（电脑版入口分流 / 手机版入口守卫）：
  *    它们没有 `src`，不放哈希就会被拦 —— 表现不是白屏，而是**功能退化**（`?view=mobile` 这类应急出口失效）。
  *    ⇒ **改了那两段脚本必须重算哈希**：`ttt/test/security-headers.test.js` 有断言钉住（漂移当场红）。
+ *    ⚠️⭐ **0.9.1 补账**：0.8.74 改过 `index.html` 的入口脚本（加手机 UA 兜底）却没重算哈希，
+ *    两个页面的哈希**都**已经对不上（手机版那份更早之前就漂了）—— 也就是说那两段内联脚本此前一直
+ *    被 CSP 拦着不执行。本次按实测重算（`index.html` `N60SSqr…` / `mobile/index.html` `XT/+gt…`）。
+ *    ⛔ 以后动内联脚本，跑一遍 `security-headers.test.js` 拿新哈希再贴回来。
  * ⚠️ `style-src` 的 `'unsafe-inline'` **必须留着**：全站约 140 处 `style="…"` 内联属性
  *    （看板的 `--c` 颜色、设置页说明段排版等），去掉不会报错但会**静默走形**。它只放开样式，不放开脚本。
  */
 const CSP_DIRECTIVES = [
   `default-src 'self'`,
-  `script-src 'self' 'sha256-EhSyhxLTWfL8Ltu3mxhQxtcjB46VejE+9kVli7BHzHA=' 'sha256-JXXqlB0Dqbi1UswRSJtERzs0K8ZlrgtqE6ggittRQ0g='`,
+  `script-src 'self' 'sha256-N60SSqr9KHjFkHMqy+KYTjuYKc1g0MBGJKI+mAHLa80=' 'sha256-XT/+gtBgh54oia9ob5nR7Kd0bDwwwPx1YTkiYwuaW40='`,
   `style-src 'self' 'unsafe-inline'`,
   `img-src 'self'`,
   `font-src 'self'`,

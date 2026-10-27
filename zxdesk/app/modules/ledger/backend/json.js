@@ -23,7 +23,7 @@
  *    同理，落盘一律写成 `this._saveJson(SCHEMA.LEDGER_DB)`：显式点名记账库（⛔ 不靠 `activeDb` 兜）。
  *    ⚠️ 写成**模块级函数**而不是 `ops` 上的 `_` 私有方法：`_` 开头的键**不进 `_bk` 门面的转发名单**
  *    （那份名单由 core 的 `assertOpsContract()` 给），写成方法会在真机上静默变成
- *    `... is not a function` —— 见 `docs/公共/架构文档/11-踩坑与说明.md` 第 34 条。
+ *    `... is not a function` —— 见 `docs/公共/架构文档/11-踩坑与说明.md` 第 42 条。
  *
  * @author zx
  * @date   2026-09-20

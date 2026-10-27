@@ -1,5 +1,5 @@
 /**
- * IPC 通道白名单（任务单 §9.2 第 2 条）。
+ * IPC 通道白名单。
  *
  * 两条规矩：
  * 1. **只认白名单**里的通道名 —— 壳不能凭字符串调任意主进程能力；
@@ -45,6 +45,14 @@ export const ACTION_ALLOWLIST = Object.freeze([
   'panel.refresh',
   'panel.changeAddress',
   'panel.logout',
+  'update.open',
+  'update.check',
+  'update.download',
+  'update.run',
+  'update.pan',
+  'update.skip',
+  'notice.open',
+  'notice.read',
   'toolbar.back',
   'toolbar.forward',
   'toolbar.reload',

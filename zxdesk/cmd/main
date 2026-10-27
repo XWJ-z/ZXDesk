@@ -11,6 +11,20 @@
 # 数据放在 resource 声明的 data-share 目录（卸载/升级保留）。
 # 首次启动 server.js 自动初始化 SQLite 数据库并写入示例数据。
 
+# ⚠️⚠️ 0.9.1：PKGVAR 必须属于本应用。飞牛的 Web 终端（fntermx）会把**它自己**的
+#   TRIM_PKGVAR 带进 shell —— 在那个终端里手工跑 `main start/stop`，下面两行就会照着
+#   那个路径写 app.log，结果是一串 Permission denied、什么也没做成（真人踩过）。
+#   ⚠️ 只在「非空且不含 zxdesk」时报错：空值维持旧行为（某些环境不注入），⛔ 别收紧成必须匹配，
+#   否则某个飞牛版本不注入 TRIM_PKGVAR 时应用会直接起不来。
+case "${TRIM_PKGVAR:-}" in
+  '' | *zxdesk*) : ;;
+  *)
+    echo "错误：TRIM_PKGVAR（${TRIM_PKGVAR}）不属于 ZXDesk，当前 shell 不是本应用的环境。" >&2
+    echo "      请在飞牛「应用中心 → ZXDesk → 启动/停止」里操作，端口与日志都由那边负责。" >&2
+    exit 1
+    ;;
+esac
+
 LOG_FILE="${TRIM_PKGVAR}/app.log"
 PID_FILE="${TRIM_PKGVAR}/app.pid"
 export PATH=/var/apps/nodejs_v24/target/bin:$PATH

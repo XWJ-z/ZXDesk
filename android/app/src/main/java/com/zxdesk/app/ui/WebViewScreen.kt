@@ -43,6 +43,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
@@ -66,11 +67,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.zxdesk.app.Eula
 import com.zxdesk.app.Prefs
 import com.zxdesk.app.store.SessionStore
+import com.zxdesk.app.update.UpdatePhase
+import com.zxdesk.app.update.UpdateState
 import com.zxdesk.core.connection.FnPortal
 import com.zxdesk.core.connection.GatewayPage
 import com.zxdesk.core.connection.GatewaySessionProbe
@@ -114,6 +119,11 @@ fun WebViewScreen(
     onLogout: () -> Unit = {},
     /** 进应用时要提示一句（例如「已改用局域网直连」），一闪而过，不挡操作。 */
     notice: String? = null,
+    /** 版本与更新的全部状态（检查 / 下载 / 已下载）。 */
+    updateState: UpdateState,
+    onCheckUpdate: () -> Unit,
+    onDownloadUpdate: () -> Unit,
+    onInstallUpdate: () -> Unit,
 ) {
     val context = LocalContext.current
     val prefs = remember { Prefs(context) }
@@ -210,6 +220,7 @@ fun WebViewScreen(
                 ConnectionDrawer(
                     entry = entry,
                     version = versionLabel(context),
+                    updateState = updateState,
                     onRefresh = {
                         scope.launch { drawerState.close() }
                         webView?.reload()
@@ -222,6 +233,9 @@ fun WebViewScreen(
                         scope.launch { drawerState.close() }
                         onLogout()
                     },
+                    onCheckUpdate = onCheckUpdate,
+                    onDownloadUpdate = onDownloadUpdate,
+                    onInstallUpdate = onInstallUpdate,
                     onClose = { scope.launch { drawerState.close() } },
                 )
             }
@@ -468,16 +482,22 @@ private fun versionLabel(context: Context): String = runCatching {
 }.getOrNull() ?: "?"
 
 /**
- * 连接抽屉（§5.2）：连接信息 + 刷新 / 换地址 / 退出登录 + 底部版本号。
+ * 连接抽屉（§5.2）：连接信息 + 刷新 / 换地址 / 退出登录，下面接「版本与更新」与「许可协议」。
  * 未 `arrived`（门户 / 飞牛登录页阶段）同样可用 —— 换地址、退出都要能走。
+ *
+ * ⚠️ 内容比一屏长：整列可滚动，⛔ 别在可滚动列里用 `weight` 撑底（高度无界时分不到空间）。
  */
 @Composable
 private fun ConnectionDrawer(
     entry: Entry,
     version: String,
+    updateState: UpdateState,
     onRefresh: () -> Unit,
     onChangeAddress: () -> Unit,
     onLogout: () -> Unit,
+    onCheckUpdate: () -> Unit,
+    onDownloadUpdate: () -> Unit,
+    onInstallUpdate: () -> Unit,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -488,6 +508,9 @@ private fun ConnectionDrawer(
         entry.flow == EntryFlow.DIRECT -> "局域网直连"
         else -> "网关域名"
     }
+    var showEula by remember { mutableStateOf(false) }
+    var showNotes by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxHeight()
@@ -527,13 +550,204 @@ private fun ConnectionDrawer(
                 Text(account, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(8.dp))
         DrawerAction("刷新页面", onRefresh)
         DrawerAction("换个地址", onChangeAddress)
         DrawerAction("退出登录", onLogout)
-        Spacer(Modifier.weight(1f))
+
+        Spacer(Modifier.height(12.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Spacer(Modifier.height(12.dp))
+
+        UpdateSection(
+            state = updateState,
+            onCheck = onCheckUpdate,
+            onDownload = onDownloadUpdate,
+            onInstall = onInstallUpdate,
+            onShowNotes = { showNotes = true },
+        )
+
+        Spacer(Modifier.height(12.dp))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Spacer(Modifier.height(4.dp))
+        DrawerAction("许可协议", onClick = { showEula = true })
+        Spacer(Modifier.height(4.dp))
         Text("ZXDesk $version", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
+
+    if (showEula) {
+        EulaViewer(text = Eula.text(context), onClose = { showEula = false })
+    }
+    if (showNotes) {
+        UpdateNotesDialog(notes = updateState.notes, onClose = { showNotes = false })
+    }
+}
+
+/**
+ * 抽屉里的「版本与更新」。
+ *
+ * 一个阶段只给一个主动作：检查 → 下载 → 安装。失败到上限时另给「网盘手动更新」出口，
+ * ⛔ 不在抽屉里堆一排等价按钮。
+ */
+@Composable
+private fun UpdateSection(
+    state: UpdateState,
+    onCheck: () -> Unit,
+    onDownload: () -> Unit,
+    onInstall: () -> Unit,
+    onShowNotes: () -> Unit,
+) {
+    val context = LocalContext.current
+
+    Text("版本与更新", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+    Spacer(Modifier.height(6.dp))
+    VersionRow("当前版本", state.current)
+    VersionRow(
+        label = "最新版本",
+        value = state.latest ?: "—",
+        badge = updateBadge(state),
+        accent = state.phase == UpdatePhase.AVAILABLE || state.phase == UpdatePhase.READY,
+    )
+
+    Spacer(Modifier.height(4.dp))
+    Text(
+        updateStatusText(state),
+        fontSize = 12.sp,
+        lineHeight = 17.sp,
+        color = if (state.phase == UpdatePhase.ERROR) {
+            MaterialTheme.colorScheme.error
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+    )
+
+    if (state.notes.isNotBlank() && state.latest != null) {
+        Spacer(Modifier.height(6.dp))
+        Surface(
+            onClick = onShowNotes,
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                state.notes,
+                fontSize = 12.sp,
+                lineHeight = 17.sp,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            )
+        }
+    }
+
+    if (state.phase == UpdatePhase.DOWNLOADING) {
+        Spacer(Modifier.height(8.dp))
+        val percent = state.progress
+        if (percent == null) {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+        } else {
+            LinearProgressIndicator(progress = { percent / 100f }, modifier = Modifier.fillMaxWidth())
+        }
+    }
+
+    Spacer(Modifier.height(10.dp))
+    PrimaryButton(
+        text = state.actionLabel,
+        enabled = state.actionEnabled,
+        onClick = when (state.phase) {
+            UpdatePhase.READY -> onInstall
+            UpdatePhase.AVAILABLE, UpdatePhase.ERROR -> onDownload
+            else -> onCheck
+        },
+    )
+
+    if (state.giveUp) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "自动下载连续失败，可以稍后再试，或到网盘手动下载安装包。",
+            fontSize = 12.sp,
+            lineHeight = 17.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (state.fallbackUrl.isNotBlank()) {
+            TextButton(
+                onClick = { openExternally(context, state.fallbackUrl) },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("前往百度网盘下载", fontSize = 14.sp) }
+        }
+        TextButton(onClick = onDownload, modifier = Modifier.fillMaxWidth()) {
+            Text("再试一次", fontSize = 14.sp)
+        }
+    }
+}
+
+/** 「标签 ---------------- 值」一行；值右侧可挂一枚状态徽标。 */
+@Composable
+private fun VersionRow(label: String, value: String, badge: String? = null, accent: Boolean = false) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+    ) {
+        Text(label, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.weight(1f))
+        Text(value, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        if (badge != null) {
+            Spacer(Modifier.width(6.dp))
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = if (accent) Ui.BadgeContainer else MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = if (accent) Ui.BadgeContent else MaterialTheme.colorScheme.onSurfaceVariant,
+            ) {
+                Text(badge, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+            }
+        }
+    }
+}
+
+private fun updateBadge(state: UpdateState): String? = when (state.phase) {
+    UpdatePhase.IDLE -> null
+    UpdatePhase.CHECKING -> "检测中"
+    UpdatePhase.LATEST -> if (state.latest == null) null else "已是最新"
+    UpdatePhase.AVAILABLE -> "有新版"
+    UpdatePhase.DOWNLOADING, UpdatePhase.READY -> "有新版"
+    UpdatePhase.ERROR -> "检查失败"
+}
+
+private fun updateStatusText(state: UpdateState): String = when (state.phase) {
+    UpdatePhase.IDLE -> "还没检查过"
+    UpdatePhase.CHECKING -> "正在检查…"
+    UpdatePhase.LATEST -> if (state.latest == null) "服务端还没有这一端的发布记录" else "已是最新版本"
+    UpdatePhase.AVAILABLE ->
+        (if (state.mustUpdate) "有新版本，建议尽快更新" else "有新版本可用") + sizeHint(state.fileSize)
+    UpdatePhase.DOWNLOADING -> state.progress?.let { "正在下载 $it%" } ?: "正在下载…"
+    UpdatePhase.READY -> "已下载并通过校验${sizeHint(state.fileSize)}，可以安装"
+    UpdatePhase.ERROR -> state.error ?: "检查失败"
+}
+
+/** 「（9.3 MB）」这样的尾巴；服务端没给大小就什么都不加。 */
+private fun sizeHint(bytes: Long): String {
+    if (bytes <= 0) return ""
+    val text = when {
+        bytes >= 1024L * 1024L -> "%.1f MB".format(Locale.US, bytes / 1024.0 / 1024.0)
+        bytes >= 1024L -> "${bytes / 1024} KB"
+        else -> "$bytes B"
+    }
+    return "（$text）"
+}
+
+/** 更新说明全文（抽屉里只露三行，点开看完整的一段）。 */
+@Composable
+private fun UpdateNotesDialog(notes: String, onClose: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("更新说明") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(notes.ifBlank { "这次更新没有附带说明。" }, fontSize = 14.sp, lineHeight = 21.sp)
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("知道了") } },
+    )
 }
 
 @Composable

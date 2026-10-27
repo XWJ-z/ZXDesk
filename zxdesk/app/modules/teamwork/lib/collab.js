@@ -1436,7 +1436,7 @@ module.exports = {
     // ⭐⭐ 0.8.17：给**周期任务**挂上「已打卡的期」—— 协作看板那一版甘特图
     //    照任务板画成「一期一段」，并给打过卡的期打勾，数据就来自这里。
     //    ⚠️ 那个原语（`attachTicks`）住在 **tasks 模块的 store** 上；跨模块只许走公开业务方法
-    //    （决策 98，先例就是上一行那个 `this.listProjectTasks`），⛔ 不 require 对方的文件
+    //    （先例就是上一行那个 `this.listProjectTasks`），⛔ 不 require 对方的文件
     //    （`teamwork/schema.js` 开头明写这条）。⚠️ 传的是 `project.user_id`（＝任务行的归属人），
     //    不是调用者 —— 打卡记录是按任务归属人存的。
     //    ⚠️ 它只对 `task_kind === 'cycle'` 的行动手，其余任务一个字节不加。

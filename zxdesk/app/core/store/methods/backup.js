@@ -1925,7 +1925,7 @@ module.exports = {
     // ---- ⭐ 0.8.12：评论 ----
     //    ⚠️ `project_id` 是**那台机器上的项目 id** ⇒ 由这里重指到刚建出来的项目；
     //    找不到对应项目（评在别人的项目上 / 项目已删）⇒ **跳过并计数**（如实告诉用户，⛔ 不静默）。
-    //    ⚠️ `task_id` **不重指**（方案 31 的 `C-8`）—— 跨机器搬任务 id 没有意义。
+    //    ⚠️ `task_id` **不重指**（`C-8`）—— 跨机器搬任务 id 没有意义。
     arrayOf(dump, PERSONAL_SOURCES[43]).forEach((raw, i) => {
       const row = asRow('project_comments', raw, i);
       const parent = parentOf('project_id', srcProjects, madeProjects, raw);

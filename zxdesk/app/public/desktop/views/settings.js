@@ -86,7 +86,7 @@
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.8.51
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/03-数据安全.md、07-前端-电脑版与手机版.md、docs/公共/开发方案/08-设置页交互改版.md
  */
 
@@ -837,7 +837,7 @@ function dataPaneHtml(isAdmin) {
         : '未知';
   const base = `
       <dl class="kv-grid">
-        <dt>应用版本</dt><dd>v${esc(h.version || '—')}</dd>
+        <dt>应用版本</dt><dd>v${esc(h.version || '—')}${versionBadgeHtml()}</dd>
         <dt>存储后端</dt><dd>${backend}</dd>
       </dl>`;
   const note = `
@@ -848,6 +848,7 @@ function dataPaneHtml(isAdmin) {
     return `
     <div class="set-sec">
       <div class="panel-card">${base}${note}</div>
+      ${versionsCardHtml()}
     </div>`;
   }
   const s = state.storage;
@@ -858,6 +859,7 @@ function dataPaneHtml(isAdmin) {
     return `
     <div class="set-sec">
       <div class="panel-card">${base}<div class="es-text" style="margin-top: 12px">${why}</div></div>
+      ${versionsCardHtml()}
     </div>`;
   }
   const warn = [];
@@ -893,7 +895,115 @@ function dataPaneHtml(isAdmin) {
         </dl>
         ${warn.join('')}
       </div>
+      ${versionsCardHtml()}
     </div>`;
+}
+
+/**
+ * 功能：从「各端最新版本」的响应里挑出飞牛那一条（没查过 / 查失败了都是 null）。
+ *
+ * 说明：⚠️ 判据只看**服务端算好的** `state` / `stateLabel`，前端⛔ 不自己比版本号 ——
+ *      「当前版本 > 服务器版本 = 测试版」这条口径只许有一份（`core/version-check.js` 的 `stateOf()`）。
+ *
+ * @returns {?Object} 飞牛那一条 `{platform,label,version,publishedAt,state,stateLabel,listLabel}`；没有则 null
+ */
+function fnosVersionItem() {
+  const v = state.versions;
+  if (!v || !v.ok || !Array.isArray(v.items)) return null;
+  return v.items.find((it) => it.platform === 'fnos') || null;
+}
+
+/**
+ * 功能：渲染「应用版本」后面那一小枚状态标 —— 前置版（比服务器新）标「测试版」，服务器更新标「有新版本」。
+ *
+ * 说明：⭐ 0.9.1（口径）：「当前版本 > 服务器版本 则提示 测试版」。
+ *      ⚠️ 这一颗**只挂在「应用版本」后面**，用 `stateLabel`。「各端最新版本」那四行用 `listLabel`
+ *      —— 那里的版本号都来自服务器、已经发布过，不可能是测试版（口径修正）。
+ *      ⚠️ 没检查过 / 读不到 / 不可比时**什么都不标**（⛔ 不写「未知」，那会让人以为版本有问题）。
+ *
+ * @returns {string} 一枚 `<span>` 或空串
+ */
+function versionBadgeHtml() {
+  const it = fnosVersionItem();
+  if (!it || !it.stateLabel) return '';
+  const cls = it.state === 'ahead' ? 'test' : it.state === 'behind' ? 'new' : 'same';
+  return ` <span class="ver-badge ${cls}">${esc(it.stateLabel)}</span>`;
+}
+
+/**
+ * 功能：渲染「各端最新版本」那张卡 —— 四端最新版本 ＋ 一颗「检查更新」。
+ *
+ * 说明：⭐⭐ **进页面不联网**（0.9.1）：许可协议 §四.2/3 写明「只有主动点『检查更新』才请求一次，
+ *      不点就不通信」⇒ 这里只画状态，请求由 `checkVersions()` 在点击时发出。
+ *      ⚠️ 三种状态各有各的话：**没查过**（引导去点）、**查失败**（说清是连不上，并声明不影响使用）、
+ *      **有结果**（四行版本 ＋ 检查时刻）。⛔ 别把失败画成空白，那与「还没查」长得一样。
+ *
+ * @returns {string} 该卡的 HTML
+ */
+function versionsCardHtml() {
+  const v = state.versions;
+  const busy = !!state.versionsBusy;
+  const btn = `<button id="btn-check-version" class="btn btn-subtle btn-sm" type="button"${
+    busy ? ' disabled' : ''
+  }>${busy ? '检查中…' : '检查更新'}</button>`;
+  let body;
+  if (!v) {
+    body = `<div class="ver-note">
+        还没检查过。点「检查更新」向更新服务器要一次各端最新版本 —— 只发本机的版本号与平台，不发任何账号与数据。
+      </div>`;
+  } else if (!v.ok) {
+    body = `<div class="ver-note ver-note-bad">暂时读不到：${esc(v.message || '连接失败')}。不影响使用，需要时再点一次。</div>`;
+  } else {
+    body = `
+      <dl class="kv-grid">
+        ${v.items
+          .map((it) => {
+            const date = it.publishedAt ? String(it.publishedAt).slice(0, 10) : '';
+            const val = it.version
+              ? `v${esc(it.version)}${date ? ` <small class="ver-date">${esc(date)}</small>` : ''}`
+              : '<span class="ver-empty">暂无发布记录</span>';
+            // ⚠️ 列表里读的是 `listLabel`，不是 `stateLabel`（0.9.1 口径修正）：
+            //    这四行版本号**都来自服务器、已经发布过**，已发布就不可能是测试版
+            //    ⇒ 这里只可能出现「有新版本」。`stateLabel` 留给上面「应用版本」旁那一颗。
+            const badge = it.listLabel
+              ? ` <span class="ver-badge ${it.state === 'behind' ? 'new' : 'same'}">${esc(it.listLabel)}</span>`
+              : '';
+            return `<dt>${esc(it.label)}</dt><dd>${val}${badge}</dd>`;
+          })
+          .join('')}
+      </dl>
+      <div class="ver-note">检查于 ${esc(v.checkedAt || '—')}${
+        v.fromCache ? '（10 分钟内再点不会重复联网）' : ''
+      }</div>`;
+  }
+  return `
+      <div class="panel-card" style="margin-top: 12px">
+        <div class="ver-head"><b>各端最新版本</b>${btn}</div>
+        ${body}
+      </div>`;
+}
+
+/**
+ * 功能：点「检查更新」—— 拉一次 `GET /api/versions` 并重画本栏。
+ *
+ * 说明：⭐ 这是**唯一**会触发对外联网的入口（许可协议）。`versionsBusy` 既是按钮的禁用态，
+ *      也是防连点的闸门；失败照旧把 `{ok:false,message}` 存进 state，让界面说得出「为什么没有」。
+ *      ⚠️ 请求前后都要判「还在这一栏」再重画：用户可能点完就切走了，别把别的栏刷成这一栏。
+ *
+ * @returns {Promise.<void>}
+ */
+async function checkVersions() {
+  if (state.versionsBusy) return;
+  state.versionsBusy = true;
+  if (state.setPane === 'version') renderSettings();
+  try {
+    state.versions = await api('GET', '/api/versions');
+  } catch (e) {
+    state.versions = { ok: false, message: e.message || '连接失败' };
+  } finally {
+    state.versionsBusy = false;
+  }
+  if (state.setPane === 'version') renderSettings();
 }
 
 /**
@@ -1089,6 +1199,8 @@ function bindPane(id) {
   }
   if (id === 'version') {
     on('btn-copy-path', copyDataPath);
+    // ⭐ 0.9.1：唯一会对外联网的那颗按钮（见 `checkVersions()` 的说明）
+    on('btn-check-version', checkVersions);
     return;
   }
   if (id === 'account') {

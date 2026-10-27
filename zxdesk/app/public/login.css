@@ -183,93 +183,209 @@ body {
   cursor: default;
 }
 
-/* ---- 切换提示 ---- */
-.switch {
-  margin: 14px 0 0;
-  text-align: center;
-  color: var(--muted);
-  font-size: 13px;
+/* ---- 辅助入口（两颗次级按钮，一左一右）---- */
+/* 0.9.1：原来是「还没有账号？注册一个 · 忘记密码？」一串小灰字，触屏上两处都难点中，
+   现在改成两颗等宽按钮：左「新用户注册」／右「忘记密码」。等宽靠两列网格，不靠 padding 凑。 */
+.aux {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 14px;
 }
 
-.switch a {
-  margin-left: 4px;
-  color: var(--accent);
-  text-decoration: none;
+/* ⚠️ 必须显式写：上面的 display: grid 会顶掉 HTML 的 hidden 属性（hidden 只是 UA 的 display:none，
+   优先级敌不过类选择器）⇒ 库里没账号时「忘记密码」会照样露出来。 */
+.aux[hidden] {
+  display: none;
 }
 
-.switch a:active {
-  text-decoration: underline;
+/* 只剩一颗（管理员关了自主注册）时占满整行 —— 两列网格里单放一颗会缩成半宽贴左边 */
+.aux.one {
+  grid-template-columns: 1fr;
 }
 
-/* ---- 忘记密码 ---- */
-/* 触发按钮做成文字链接的样子，但保留 44px 触摸目标 —— 手机上直接点文字太难点中 */
-.forgot {
-  display: block;
-  width: 100%;
-  min-height: 44px;
-  margin-top: 2px;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--muted);
+.aux-btn {
+  min-height: 44px; /* 触摸目标下限 */
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--input-bg);
+  color: var(--text);
   font: inherit;
-  font-size: 13px;
-  text-align: center;
+  font-size: 14px;
+  font-weight: 500;
+  /* 文案短的（返回登录）不会溢出；万一以后换成长句，宁可省略号也不要撑破卡片 */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
 }
 
-.forgot:hover {
+/* ⚠️ 同上：这颗也可能被 JS 置 hidden */
+.aux-btn[hidden] {
+  display: none;
+}
+
+.aux-btn:hover {
+  border-color: var(--accent);
   color: var(--accent);
 }
 
-.forgot:active {
-  opacity: 0.7;
+.aux-btn:active {
+  transform: translateY(1px);
+  background: var(--bg);
 }
 
-/* 展开后的说明面板：只用「显示 / 隐藏」切换，不做高度动画
-   （未知高度做动画要读 scrollHeight，慢一帧就闪，得不偿失） */
-.tip {
-  margin: 6px 0 2px;
-  padding: 14px;
+/* 「管理员已关闭自主注册，请向管理员申请账号」那类说明 —— 按钮下面单独一行，塞进按钮里会被截断 */
+.aux-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* ⚠️ 0.8.73 的教训：`<p>` 有 UA 的 display:block，这里没设过 display，但仍然显式写一条，
+   免得以后给它加 display 时把 hidden 顶掉。 */
+.aux-note[hidden] {
+  display: none;
+}
+
+/* ---- 重置密码弹窗 ---- */
+/* 只有一层滚动：外层 .modal-card 定 max-height，正文 .modal-body 自己滚。
+   ⚠️ 别在 .modal-card 或 .modal 上再叠 max-height + overflow —— 两层一叠正文会算成 0 高。 */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+/* ⚠️ 必须显式写：上面的 display: flex 会顶掉 HTML 的 hidden 属性 */
+.modal[hidden] {
+  display: none;
+}
+
+.modal-mask {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 45%);
+}
+
+.modal-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 420px;
+  max-height: calc(100dvh - 40px);
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--accent) 5%, var(--card));
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: 0 20px 50px rgb(0 0 0 / 28%);
+}
+
+/* 抽屉抓手：只在窄屏（底部抽屉形态）显示，电脑版是居中弹窗，顶部不需要这根条 */
+.modal-grip {
+  display: none;
+  width: 40px;
+  height: 4px;
+  margin: 8px auto 0;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 12px 12px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal-head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.modal-x {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.modal-x:active {
+  background: var(--bg);
+}
+
+.modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 14px 18px;
   font-size: 13px;
   line-height: 1.6;
   text-align: left;
 }
 
-.tip h2 {
-  margin: 0 0 10px;
-  font-size: 14px;
-  font-weight: 600;
+.modal-foot {
+  padding: 10px 16px 14px;
+  border-top: 1px solid var(--line);
 }
 
-.tip .who {
+.modal-ok {
+  width: 100%;
+  min-height: 44px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.modal-ok:active {
+  transform: translateY(1px);
+}
+
+.modal-body .who {
   margin: 12px 0 6px;
   font-weight: 600;
 }
 
-.tip .who:first-of-type {
+.modal-body .who:first-of-type {
   margin-top: 0;
 }
 
-.tip .steps {
+.modal-body .steps {
   margin: 0;
   padding-left: 18px;
   color: var(--muted);
 }
 
-.tip .steps li {
+.modal-body .steps li {
   margin-bottom: 8px;
 }
 
-.tip .steps li:last-child {
+.modal-body .steps li:last-child {
   margin-bottom: 0;
 }
 
 /* 命令块：窄屏上整条命令必然超宽，横向滚动而不是断行 —— 断开的路径没法照着敲 */
-.tip code {
+.modal-body code {
   display: block;
   margin-top: 5px;
   padding: 8px 10px;
@@ -284,7 +400,7 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
-.tip .note {
+.modal-body .note {
   margin: 12px 0 0;
   padding-top: 10px;
   border-top: 1px dashed var(--line);
@@ -301,4 +417,61 @@ body {
   font-size: 12px;
   text-align: center;
   line-height: 1.5;
+}
+
+/* 出厂账号与密码要能一眼扫到，别混进灰色说明里 */
+.foot b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ============================================================================
+ * 【窄屏】重置密码说明 —— 居中弹窗改成底部抽屉（0.9.1）
+ *
+ * 为什么：手机上居中的小卡片只有 420px 宽却悬在屏幕中间，逐条命令要横向滚动，
+ *        拇指也够不到顶部的 ×。改成从下沿升起的抽屉，短拇指行程、命令条贴近底部。
+ *
+ * ⚠️ 只有一层滚动：仍然由 .modal-body 自己滚（.modal-card 定 max-height）。
+ *    别在这里给 .modal-body 再加 max-height + overflow —— 两层一叠正文会算成 0 高（0.8.54 的坑）。
+ * ==========================================================================*/
+@media (max-width: 600px) {
+  .modal {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .modal-card {
+    max-width: none;
+    max-height: 88dvh;
+    border-radius: 16px 16px 0 0;
+    border-bottom: 0;
+    box-shadow: 0 -10px 40px rgb(0 0 0 / 22%);
+    animation: sheet-up 0.22s ease-out;
+  }
+
+  .modal-grip {
+    display: block;
+  }
+
+  /* 底部那行按钮要让开 iOS 的 home 指示条 */
+  .modal-foot {
+    padding-bottom: calc(14px + env(safe-area-inset-bottom));
+  }
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+
+  to {
+    transform: translateY(0);
+  }
+}
+
+/* 动效敏感的用户直接给出终态（系统开着「减弱动态效果」时） */
+@media (prefers-reduced-motion: reduce) {
+  .modal-card {
+    animation: none;
+  }
 }

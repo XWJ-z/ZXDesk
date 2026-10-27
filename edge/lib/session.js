@@ -1,7 +1,7 @@
 /**
  * 功能：会话侧（方案 §4.3）—— 中继域判定、`zxdesk_sid` 读取、中继 `mode=relay` Cookie 保活、用户名展示。
  *
- * ⭐ M0 实测的两个口径（2026-10-24）：
+ * ⭐ M0 实测的两个口径：
  * - 会话注入走 `credentials:'include'`（浏览器自动带 Cookie），**不手工拼 Cookie 头**；
  * - `cookies.getAll({url})` 在真机上可能返回 0 条（异常），而 `cookies.get` 找得到 ⇒
  *   `sidInfo()` 用 `cookies.get` 做存在性判定（`cookie_missing` 的判据）。

@@ -3,7 +3,7 @@
  *      2026-10-23 真机跑通），⛔ 不抄 Seek、⛔ 不「剥 `.fnos.net` 后缀」猜 FNID。
  *
  * 协议：`POST {端点}/api/v1/fn/con`，主 `https://5ddd.com`，备 `https://fnos.net`；8 s 超时。
- * 错误分类（任务单 §3.2）：`code!==0` ⇒ `fn_id_not_found`（⛔ 不再问备用端点）；`data` 无地址 ⇒
+ * 错误分类：`code!==0` ⇒ `fn_id_not_found`（⛔ 不再问备用端点）；`data` 无地址 ⇒
  * `fn_offline`；两条端点都失败 ⇒ `fn_unreachable`。
  *
  * ⛔ 纯逻辑 + 一个 fetch，不碰 `chrome.*`（Node 可单测）；请求通道与业务请求无关，
@@ -19,7 +19,7 @@ const CONNECT_SECRET = 'anna';
 const PRIMARY_ENDPOINT = 'https://5ddd.com';
 const FALLBACK_ENDPOINT = 'https://fnos.net';
 const TIMEOUT_MS = 8000;
-// 实测（2026-10-23）：本机 FNID 的 port 回 64999/64888，社区文档的 5666/5667 不通
+// 实测：本机 FNID 的 port 回 64999/64888，社区文档的 5666/5667 不通
 export const DEFAULT_HTTPS_PORT = 64999;
 export const DEFAULT_HTTP_PORT = 64888;
 

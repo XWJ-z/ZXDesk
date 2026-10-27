@@ -35,7 +35,7 @@ class FnErrnoTest {
 
     @Test
     fun taskSheetErrnosAreAllCovered() {
-        // 任务单 AND-005 §三 点名的五个，一个都不能落到「飞牛返回 errno=…」
+        //  点名的五个，一个都不能落到「飞牛返回 errno=…」
         listOf(135168L, 102570111L, 102570108L, 102570109L, 102570114L).forEach {
             assertFalse("errno=$it 没有文案", message(it).contains("飞牛返回 errno="))
         }

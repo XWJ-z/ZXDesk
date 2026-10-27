@@ -216,7 +216,7 @@ export const MODULES_UI = {
     //    （`users.nav_tabs`）里若还留着旧名字，`core/modules.js` 的 `navTabItems()` 会**自然忽略**它。
     //    ⚠️ `svg` **留着**：药丸那一格画线性图标用的就是它（手机端一贯画线性图标）。
     //    ⛔ `card` **不许撤** —— 那是设置页 `hide_digital` 那颗开关的宿主。
-    //    ⚠️ `card` 的 desc / tip 与电脑版**逐字一致**（决策 67 ④，`module-ui.test.js` 比对）。
+    //    ⚠️ `card` 的 desc / tip 与电脑版**逐字一致**（`module-ui.test.js` 比对）。
     //    ⭐ 0.8.20：「数码管理」显示名改成「**NAS/数码管理**」——
     //    走**顶层 `title`**（与电脑版逐字一致；⛔ 模块名 / 表 / 接口一个字不动）。
     //    ⭐⭐ 0.8.24：「NAS/数码管理」再改成「**我的设备**」（与电脑版逐字一致）。
@@ -251,7 +251,7 @@ export const MODULES_UI = {
     //    ⚠️ 图标是「一本日历」而不是课表那种单张日历页 —— 两个模块并排时得能一眼分开
     //    （0.8.7 起它出现在「今天」顶部那条胶囊上，同一条理由）。
     //    ⚠️ `svg` **留着**：看板胶囊就用它（手机端一贯画线性图标）；`settingsPane.label` /
-    //    `dashView.label` 与电脑端**逐字一致**（决策 67 ④，`module-ui.test.js` 比对 label）。
+    //    `dashView.label` 与电脑端**逐字一致**（`module-ui.test.js` 比对 label）。
     svg: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5.5" width="17" height="15" rx="2.6"/><path d="M3.5 10.2h17M8 3.4v4.2M16 3.4v4.2M7.6 14.2h2.2M14.2 14.2h2.2"/></svg>',
     slots: ['settings-pane', 'dash-view'],
     settingsPane: { id: 'calendar', ico: '📆', label: '日历视图' },
@@ -290,7 +290,7 @@ export const MODULES_UI = {
     //    ⭐⭐ 0.8.18：「自动锁定时间设置移动到全局设置中」——
     //    它另借**设置页的一栏**（`settingsPane` ＋ `slots` 里的 `settings-pane`），
     //    界面文件 `modules/vault/mobile-settings-pane.js`。
-    //    ⚠️ `settingsPane.label` **与电脑端逐字一致**（决策 67 ④，`module-ui.test.js` 比对）；
+    //    ⚠️ `settingsPane.label` **与电脑端逐字一致**（`module-ui.test.js` 比对）；
     //    `slots` 也两端逐字一致。
     slots: ['webpass-pane', 'settings-pane'],
     settingsPane: { id: 'vault', ico: '🔐', label: '密码库' },
@@ -311,7 +311,7 @@ export const MODULES_UI = {
     //    ⚠️ `svg` **留着**：它另有用处（`card` 那一行画线性图标用的是它），⛔ 别跟着一起删。
     //    ⚠️⭐ `slots` 与电脑端**逐字一致**（`module-ui.test.js` 钉着）——
     //      `teamwork-page` / `teamwork-thread` 是「对话页问 AI」那条真功能，⛔ 别跟着一起撤。
-    //    ⚠️ `settingsPane.label` 两端逐字一致（决策 67 ④，`module-ui.test.js` 比对）。
+    //    ⚠️ `settingsPane.label` 两端逐字一致（`module-ui.test.js` 比对）。
     svg: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="7" width="14" height="11" rx="3"/><path d="M12 3.5v3.5M9.5 12h.01M14.5 12h.01M9.5 15h5"/></svg>',
     slots: ['teamwork-page', 'teamwork-thread', 'settings-pane'],
     settingsPane: { id: 'ai', ico: '🤖', label: 'AI 设置' },

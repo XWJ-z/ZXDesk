@@ -463,7 +463,7 @@ function cellHtml(d, cal, evs, hasCourse, hasTask, holMap, ledgerRows) {
 /**
  * 功能：**只就地改选中态与当天列表**（不整屏重画、不重新取数）—— 点某天走的就是这里。
  *
- * 说明：⭐ 决策 49：点日期只**选中**、**不换屏**（`state.view` 一个字都不能变）。
+ * 说明：⭐ 点日期只**选中**、**不换屏**（`state.view` 一个字都不能变）。
  *      与 同源：能就地改 class 就别整块重画 —— 重画会把滚动位置和焦点一起丢掉。
  *
  * @returns {void}

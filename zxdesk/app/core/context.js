@@ -20,7 +20,7 @@
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.8.13
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/01-架构总览.md
  */
 'use strict';

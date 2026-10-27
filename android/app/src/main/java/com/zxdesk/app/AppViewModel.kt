@@ -1,11 +1,15 @@
 package com.zxdesk.app
 
 import android.app.Application
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.zxdesk.app.store.CredentialStore
 import com.zxdesk.app.store.SavedSession
 import com.zxdesk.app.store.SessionStore
+import com.zxdesk.app.update.InstallResult
+import com.zxdesk.app.update.UpdateCenter
+import com.zxdesk.app.update.UpdateState
 import com.zxdesk.core.connection.FnLoginException
 import com.zxdesk.core.connection.FnLoginFlow
 import com.zxdesk.core.connection.FnLoginOutcome
@@ -63,7 +67,7 @@ data class TwoFactorUi(
 )
 
 /**
- * 引导流程走到第几步（任务单 AND-007 §一）。
+ * 引导流程走到第几步。
  *
  * `MODE → CONNECT → TWO_FACTOR →（ACCESS_CODE）→ 应用`。
  * 其中 [ACCESS_CODE] 只有网关真的要访问码时才出现，否则跳过。
@@ -124,6 +128,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = Prefs(app)
     private val sessions = SessionStore(app)
     private val credentials = CredentialStore(app)
+
+    /** 版本检测与下载更新（0.2.13）：状态机活在 ViewModel 里，切后台、转屏都不中断下载。 */
+    private val updateCenter = UpdateCenter(app, viewModelScope)
+    val updateState: StateFlow<UpdateState> = updateCenter.state
+
+    /** 本次冷启动是否已经自动查过更新（⛔ 每次重组都打接口）。 */
+    private var updateAutoChecked = false
 
     private val _screen = MutableStateFlow<AppScreen>(AppScreen.Booting)
     val screen: StateFlow<AppScreen> = _screen.asStateFlow()
@@ -197,7 +208,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 第 ① 步选模式。另两个只是占位（任务单 §2.1：点灰显卡不报错，只轻提示「规划中」）。
+     * 第 ① 步选模式。另两个只是占位（点灰显卡不报错，只轻提示「规划中」）。
      */
     fun selectMode(kind: DataSourceKind) {
         if (kind == DataSourceKind.NAS) {
@@ -211,7 +222,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun next() = update { it.copy(step = OnboardingStep.CONNECT, notice = null, error = null) }
 
     /**
-     * 返回键：**逐级回退**，⛔ 不直接退出（任务单 §四.6）。
+     * 返回键：**逐级回退**，⛔ 不直接退出。
      * 第 ① 步没有上一级 —— 返回 false，交给系统退出 App。
      */
     fun back(): Boolean {
@@ -262,7 +273,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 连接：解析地址 →（需要飞牛账号就走原生 WS 登录）→ 第 ③/④ 步或直接进应用。
      *
-     * 局域网口径（任务单 §一）：**优先网关**（`https://<ip>:64999`，要飞牛账号），
+     * 局域网口径：**优先网关**（`https://<ip>:64999`，要飞牛账号）
      * 网关连不上再回 `http://<ip>:8990` 直连。没填账号的局域网 IP 直接走直连，不打扰用户。
      */
     fun connect() {
@@ -750,6 +761,44 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 // 续命失败不踢人：用户再点一次验证时会走 call2fa 自己的恢复逻辑
                 updateTwoFactor { it.copy(error = "连接已断开，重连失败：${e.message ?: "原因未知"}") }
             }
+        }
+    }
+
+    // ---------------------------------------------------------------- 版本与更新
+
+    /**
+     * 进浏览页后自动查一次版本。
+     *
+     * 每次冷启动只查一次；静默失败不打扰用户（抽屉里仍是「检查更新」按钮），
+     * 手动检查在抽屉里，随时可点。
+     */
+    fun checkUpdateOnLaunch() {
+        if (updateAutoChecked) return
+        updateAutoChecked = true
+        updateCenter.check(silent = true)
+    }
+
+    fun checkUpdate() = updateCenter.check()
+
+    fun downloadUpdate() = updateCenter.download()
+
+    /**
+     * 拉起系统安装器。
+     *
+     * 三种拦截都要说清下一步：没给「安装未知应用」权限就跳授权页，
+     * 包被系统清理就提示重新下载 —— ⛔ 不能点了没反应。
+     */
+    fun installUpdate() {
+        when (val result = updateCenter.install()) {
+            InstallResult.Started -> Unit
+            InstallResult.NeedPermission -> {
+                Toast.makeText(getApplication(), "请先允许安装未知应用，再回来点「立即安装」", Toast.LENGTH_LONG).show()
+                updateCenter.openInstallPermissionSettings()
+            }
+            InstallResult.NoPackage ->
+                Toast.makeText(getApplication(), "安装包不在了，请重新下载", Toast.LENGTH_LONG).show()
+            is InstallResult.Failed ->
+                Toast.makeText(getApplication(), result.message, Toast.LENGTH_LONG).show()
         }
     }
 

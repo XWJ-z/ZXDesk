@@ -7,7 +7,7 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.33
+ * @since 0.9.1
  * 相关：docs/公共/架构文档/07-前端-电脑版与手机版.md
  */
 
@@ -81,6 +81,12 @@ export const state = {
   memberMeId: null, // 成员列表里「我」的 id
   allowSelfRegister: true, // 自主注册开关
   storage: null, // 数据位置（/api/admin/storage，仅管理员）
+  // ---- ⭐ 0.9.1 各端最新版本（更多 → 设置 → 版本数据）----
+  //    `null` = 这次还没检查过（**进页面不自动联网**：许可协议写明只有主动点「检查更新」才请求一次）。
+  //    值是 `GET /api/versions` 的整份载荷（成功 `{ok:true, items}`，失败 `{ok:false, message}`）——
+  //    ⚠️ 失败也存：不存就分不清「没查过」与「查了连不上」。
+  versions: null,
+  versionsBusy: false, // 正在请求中（按钮转「检查中…」并禁用，防连点）
   sheetSave: null, // 底部弹层上挂的保存回调，弹层关闭前由事件处理调用
   sheetTask: null, // 详情弹层当前对应的任务包装项
   confirmResolve: null, // 确认层的 Promise resolve，关闭弹层时按「取消」兑现

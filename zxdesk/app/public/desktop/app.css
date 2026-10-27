@@ -3322,11 +3322,22 @@ body {
 .sidebar-foot {
   flex-shrink: 0;
   display: flex;
-  flex-wrap: nowrap;
+  /* ⭐ 0.9.1：从 `nowrap` 改成 `wrap` —— 底部多了「关于我们 / 联系与反馈」那一行，
+     它们用 `flex: 1 0 100%` 独占一整行（见下面的 `.foot-about`）。
+     ⚠️ 「刷新 / 设置」那两颗仍是并排一行，行为没变。 */
+  flex-wrap: wrap;
   gap: 10px;
   padding: 12px;
   border-top: 1px solid var(--border);
   background: var(--panel);
+}
+/* 「关于我们 / 联系与反馈」：两列等宽，排在刷新与设置**上面**。
+   ⚠️ `flex: 1 0 100%` 是「占满一行」的意思 —— 别改成 `flex:1`，那样它会跟刷新挤在同一行。 */
+.sidebar-foot .foot-about {
+  flex: 1 0 100%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
 }
 .sidebar-foot .foot-btn {
   flex: 1 1 0;
@@ -4122,6 +4133,53 @@ kbd {
   font-size: 12.5px;
   line-height: 1.6;
 }
+/* ---------- 版本数据 · 各端最新版本（0.9.1） ---------- */
+.ver-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+.ver-note {
+  margin-top: 10px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+.ver-note-bad {
+  color: var(--zx-warn-ink);
+}
+.ver-date {
+  color: var(--text-2);
+  font-size: 12px;
+}
+.ver-empty {
+  color: var(--text-2);
+}
+.ver-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.5;
+  vertical-align: 1px;
+}
+.ver-badge.test {
+  border-color: var(--zx-warn-line);
+  background: var(--zx-warn-soft);
+  color: var(--zx-warn-ink);
+}
+.ver-badge.new {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+.ver-badge.same {
+  background: var(--bg);
+  color: var(--text-2);
+}
 .acct-actions {
   display: flex;
   gap: 8px;
@@ -4129,8 +4187,7 @@ kbd {
   margin-top: 16px;
   padding-top: 14px;
   border-top: 1px solid var(--border);
-}
-.sec-head {
+}.sec-head {
   display: flex;
   align-items: center;
   gap: 8px;

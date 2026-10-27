@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'; font-src 'self'"
+    />
+    <title>检查更新</title>
+    <link rel="stylesheet" href="update.css" />
+  </head>
+  <body>
+    <header class="head">
+      <div>
+        <h1>检查更新</h1>
+        <p class="sub">ZXDesk 工作台 · Windows 桌面端</p>
+      </div>
+      <button class="ghost" type="button" id="refresh">重新检查</button>
+    </header>
+
+    <main class="body">
+      <section class="card">
+        <div class="row">
+          <span class="label">当前版本</span>
+          <span class="value" id="current">-</span>
+        </div>
+        <div class="row">
+          <span class="label">最新版本</span>
+          <span class="value" id="latest">-</span>
+          <span class="badge" id="badge">检测中</span>
+        </div>
+
+        <p class="notes-title" id="notes-title" hidden>更新说明</p>
+        <div class="notes" id="notes" hidden></div>
+
+        <div class="progress" id="progress" hidden>
+          <div class="bar"><span id="bar-fill"></span></div>
+          <p class="progress-text" id="progress-text">0%</p>
+        </div>
+
+        <p class="status" id="status">正在检查…</p>
+
+        <!-- 连续下载失败后的出口：网盘手动更新（地址来自版本清单的 fallbackUrl） -->
+        <div class="fallback" id="fallback" hidden>
+          <p class="fallback-text" id="fallback-text">
+            由于网络问题下载失败，请稍后再试或者前往百度网盘下载最新版本，手动更新。
+          </p>
+          <div class="actions">
+            <button class="primary" type="button" id="pan" hidden>前往百度网盘下载</button>
+            <button class="ghost" type="button" id="retry">再试一次</button>
+          </div>
+          <p class="fallback-url" id="fallback-url" hidden></p>
+        </div>
+
+        <div class="actions" id="actions" hidden>
+          <button class="primary" type="button" id="download" hidden>下载更新</button>
+          <button class="primary" type="button" id="install" hidden>立即安装</button>
+          <button class="ghost" type="button" id="skip" hidden>以后再说</button>
+        </div>
+      </section>
+
+      <p class="hint" id="hint">
+        安装包会先按服务器下发的 SHA256 校验，通过后才允许运行；校验不通过会删包重下。
+      </p>
+    </main>
+
+    <footer class="foot">
+      <button class="ghost" type="button" id="close">关闭</button>
+    </footer>
+
+    <!-- 与主壳一样用经典脚本：file:// 下 type=module 会被 CORS 拦掉 -->
+    <script src="update.js" defer></script>
+  </body>
+</html>
