@@ -573,6 +573,7 @@ module.exports = {
   AUTH_SECRET,
   BUILTIN_ADMIN,
   BUILTIN_ADMIN_KEY,
+  builtinAdminId,
   ensureBuiltinAdmin,
   runtime,
 };

@@ -22,7 +22,7 @@
  */
 'use strict';
 
-const { AUTH_SECRET, BUILTIN_ADMIN, logLine, store } = require('../context.js');
+const { AUTH_SECRET, BUILTIN_ADMIN, builtinAdminId, logLine, store } = require('../context.js');
 // ⭐ 0.8.5：日志文件（目录 / 清单 / 读尾部 / 删账号时清）—— 见 `/api/admin/logs` 那两个分支
 const logs = require('../logs.js');
 const {
@@ -89,18 +89,29 @@ function usesDefaultPassword(user) {
 }
 
 /**
- * 功能：判断某个账号是否**仍在使用公开的初始凭据**（内置管理员的 `admin` / `admin123`）。
+ * 功能：判断某个账号是否**仍处在「必须先做首登设置」的状态**。
  *
- * 说明：⭐ 首登强制的唯一判据 —— 比对散列，不加标志位、不改表结构。好处是老库不用迁移、
- *      重启不丢、整库备份恢复后照样成立，管理员改过用户名或密码后**自动**不命中。
- *      只认「内置管理员仍在使用初始凭据」这一种，普通成员与其它管理员一律不受影响。
+ * 说明：⭐ 两件事都要成立 ——
+ *      ① **它是内置管理员**：认 `settings.builtin_admin_id`（**改名之后 id 不变**）；
+ *         只有那个键还没落下时才退回按名字 `admin` 认。
+ *         ⚠️ 这一段是安全关键：早先整条判据绑在「用户名等于 admin」上，用户只要改一次用户名
+ *         就能绕过闸门（改完密码还是公开的 `admin123`，`/api/bootstrap` 却已经 200）。
+ *      ② **两项都还没换干净**：仍能用初始口令登录（`usesDefaultPassword`，按散列比、有缓存），
+ *         **或者**用户名还是 `admin`。
+ *      ⇒ 只有「用户名与密码都换掉」才解除拦截 —— 与对外承诺「必须先改用户名和密码」逐字一致；
+ *         任一项单独完成都不算（改密不能顶替改名，改名更不能顶替改密）。
+ *      ⚠️ 副作用是：任何仍叫 `admin` 的内置管理员（含用户自己注册后被升上来的那个）都会被要求
+ *         完成设置。这是刻意的：`admin` 是公开的初始标识，留着它就等于留着「先猜这个」的入口。
  *
  * @param {Object} user - `currentUser()` 返回的账号元信息（不含口令散列）
- * @returns {boolean} 命中时 true（调用方必须拦住它，逼用户先改用户名与密码）
+ * @returns {boolean} 命中时 true（调用方必须拦住它，逼用户先完成设置）
  */
 function mustSetupUser(user) {
-  if (!user || user.username !== BUILTIN_ADMIN.username) return false;
-  return usesDefaultPassword(user);
+  if (!user) return false;
+  const claimedId = builtinAdminId();
+  const isBuiltin = claimedId !== null ? claimedId === user.id : user.username === BUILTIN_ADMIN.username;
+  if (!isBuiltin) return false;
+  return usesDefaultPassword(user) || user.username === BUILTIN_ADMIN.username;
 }
 
 /**
@@ -353,9 +364,11 @@ function handleAuth(req, res, parts, user) {
       }
       loginThrottle.reset(username, ip);
 
-      // ⭐ 首登强制：内置管理员仍在使用公开初始凭据 ⇒ 告诉前端去 /setup.html
-      const mustSetup =
-        row.username === BUILTIN_ADMIN.username && verifyPassword(BUILTIN_ADMIN.password, row.password_hash);
+      // ⭐ 首登强制：告诉前端去 /setup.html
+      //   ⚠️ 与闸门用**同一个判据**（`mustSetupUser`），别在这里另写一套 ——
+      //   早先这里写的是「用户名等于 admin 且口令是初始值」，改名之后登录响应就不提示了，
+      //   而闸门还在拦，前端会以为能进主界面、结果一片 403。
+      const mustSetup = mustSetupUser({ id: row.id, username: row.username });
 
       // 成本参数升级：老散列在登录成功时静默重算（不会让老账号失效）。
       // 走 setPasswordHash 而非 setPassword —— 后者会递增 session_epoch，把该账号其他设备一并踢下线，

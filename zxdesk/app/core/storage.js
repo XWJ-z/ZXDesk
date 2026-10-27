@@ -47,7 +47,7 @@
 const { makeStore } = require('./store/index.js');
 const { today } = require('./store/helpers.js');
 
-const APP_VERSION = '0.9.2';
+const APP_VERSION = '0.9.3';
 
 /** ⭐ 存储层装配：两个后端 + 六个业务模块 + 加载时的后端契约自检 */
 const Store = makeStore(APP_VERSION);
