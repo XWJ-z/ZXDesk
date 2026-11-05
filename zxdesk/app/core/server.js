@@ -36,7 +36,7 @@
  *
  * @author zx
  * @date   2026-09-10
- * @since 0.9.5
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/01-架构总览.md
  */
 'use strict';
@@ -276,13 +276,21 @@ function handleApi(req, res, urlPath) {
  *    ⚠️⭐ **0.9.1 补账**：0.8.74 改过 `index.html` 的入口脚本（加手机 UA 兜底）却没重算哈希，
  *    两个页面的哈希**都**已经对不上（手机版那份更早之前就漂了）—— 也就是说那两段内联脚本此前一直
  *    被 CSP 拦着不执行。本次按实测重算（`index.html` `N60SSqr…` / `mobile/index.html` `XT/+gt…`）。
+ *    ⚠️⭐ **0.9.6 再补一次**：给 `index.html` 的入口脚本加了「UA 判定必须带宽度上限」与
+ *    「`view=desktop` 透传」两处（平板分流修复），哈希随之变成 `KNZVon…` ——
+ *    真机表现是**桌面版 DOM 渲染了但分流脚本没跑**（平板停在电脑版、`#app` 高度塌陷）。
+ *    ⚠️⭐ **0.9.7 又一次**：平板在飞牛桌面里是**自由窗口**（1080×706 这种），老判据把它判成手机，
+ *    于是加了「短边 ≥ 600 一律电脑版」的闸门 —— 哈希变成 `nmM493Cj…`。
+ *    ⚠️⭐ **0.9.7 当天再补一次**（老大「还是这样」）：真正拦住平板的是**服务端** `static.js` 的 `isPhoneUA`
+ *    （含 `Android` ⇒ 请求阶段就 302 去 /mobile/，本文件的内联脚本压根没执行）。服务端收窄成
+ *    iPhone / iPod / Windows Phone 三种之后，内联脚本才真正跑起来 —— 哈希变成 `0FRBIaz8…`。
  *    ⛔ 以后动内联脚本，跑一遍 `security-headers.test.js` 拿新哈希再贴回来。
  * ⚠️ `style-src` 的 `'unsafe-inline'` **必须留着**：全站约 140 处 `style="…"` 内联属性
  *    （看板的 `--c` 颜色、设置页说明段排版等），去掉不会报错但会**静默走形**。它只放开样式，不放开脚本。
  */
 const CSP_DIRECTIVES = [
   `default-src 'self'`,
-  `script-src 'self' 'sha256-N60SSqr9KHjFkHMqy+KYTjuYKc1g0MBGJKI+mAHLa80=' 'sha256-XT/+gtBgh54oia9ob5nR7Kd0bDwwwPx1YTkiYwuaW40='`,
+  `script-src 'self' 'sha256-0FRBIaz8UV2R6hbM0QAnsVLsdJPZtug/O1RZ6yZG0dM=' 'sha256-XT/+gtBgh54oia9ob5nR7Kd0bDwwwPx1YTkiYwuaW40='`,
   `style-src 'self' 'unsafe-inline'`,
   `img-src 'self'`,
   `font-src 'self'`,

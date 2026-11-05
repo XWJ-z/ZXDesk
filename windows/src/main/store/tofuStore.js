@@ -1,5 +1,7 @@
 /**
- * TOFU 记录（`data/tofu.json`，明文 —— 只存 subject 与指纹，没有凭据价值）。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：tofuStore.js
+ * 职责：TOFU 记录（`data/tofu.json`，明文 —— 只存 subject 与指纹，没有凭据价值）
  *
  * 结构：`{ "10.1.2.3:64999": { subject, sha256, confirmedAt } }`，键是 `host[:port]`
  * （同一台 NAS 的 64999 与自定义域名是两条记录）。

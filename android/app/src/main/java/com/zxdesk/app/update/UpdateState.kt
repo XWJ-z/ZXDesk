@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：UpdateState.kt
+ * 职责：抽屉「版本与更新」读取的状态与主动作
+ */
+
 package com.zxdesk.app.update
 
 /**
@@ -50,10 +56,10 @@ data class UpdateState(
     val actionLabel: String
         get() = when (phase) {
             UpdatePhase.IDLE -> "检查更新"
-            UpdatePhase.CHECKING -> "正在检查…"
+            UpdatePhase.CHECKING -> "正在检查"
             UpdatePhase.LATEST -> "检查更新"
             UpdatePhase.AVAILABLE -> "下载更新"
-            UpdatePhase.DOWNLOADING -> "正在下载…"
+            UpdatePhase.DOWNLOADING -> "正在下载"
             UpdatePhase.READY -> "立即安装"
             UpdatePhase.ERROR -> if (available) "重新下载" else "检查更新"
         }

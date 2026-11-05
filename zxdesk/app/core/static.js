@@ -8,7 +8,7 @@
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.9.5
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/01-架构总览.md
  */
 'use strict';
@@ -196,24 +196,30 @@ function sendGzip(res, headers, type, body) {
  * @returns {void}
  */
 /**
- * 功能：按 `User-Agent` 判断请求方是不是手机。
+ * 功能：按 `User-Agent` 判断请求方是不是**确定无疑的手机**。
  *
  * ⭐ 为什么服务端也要判一次：飞牛 App 的内置 WebView 会把指针报成 `pointer: fine`，
  *    连 `navigator.maxTouchPoints` 都给 0 ⇒ 前端那套「看着像手机就送去 /mobile/」
  *    在它面前整条失效，手机于是落在电脑版（搜索框、7 列日历挤在窄屏里，右边被裁）。
  *    **HTTP 请求头不依赖任何 JS 能力**：JS 被禁、被改、被拦都拦不住这一跳。
  *
- * 口径：`Android` / `iPhone` / `iPad` / `iPod` / `Mobile` / `HarmonyOS` 任一命中即算手机。
- *      宁可把 Android 平板也送进手机版（平板用手机版只是窄，能看能用），
- *      也不能让手机留在电脑版（那是完全没法用）。
- *      触屏笔记本的 UA 是 `Windows NT` / `Macintosh`，一个都不命中。
+ * ⭐⭐ 0.9.7（2026-11-04 老大平板截图）：口径**收窄到只剩三种**，`Android` / `iPad` / 泛 `Mobile` 全部移除。
+ *   现场：平板在飞牛桌面里打开应用，永远进手机版（窄卡片居中），前端 0.9.6 / 0.9.7 两次改判定都没效果 ——
+ *   就是因为**这一跳先手把它送走了**，`public/index.html` 里的分流脚本根本没机会执行。
+ *   平板的 UA 里普遍带 `Android`，不少国产 ROM 与定制 WebView 还带 `Mobile`（TXZ-W20 / Android 16 即如此），
+ *   只靠 UA **原理上分不出手机与平板** ⇒ 服务端只处理「一眼就是手机、绝不可能是平板」的三种：
+ *   `iPhone` / `iPod` / `Windows Phone`。iPad 明确排除（老大 2026-11-04：平板就该是桌面端）。
+ *   Android（含鸿蒙手机）一律交给前端：它能读到视口，判得比 UA 准。
+ *   ⚠️ 前端那条兜底必须能独立站住（窄屏 `innerWidth <= 768` ＋ `Android.+Mobile` UA 兜底），
+ *      否则手机会落回电脑版 —— `ttt/test/routing.test.js` 钉着这两条。
+ *   触屏笔记本的 UA 是 `Windows NT` / `Macintosh`，一个都不命中。
  * @param {string} ua - `req.headers['user-agent']`
  * @returns {boolean} 是手机则为 true
  */
 function isPhoneUA(ua) {
   const s = String(ua || '');
   if (!s) return false;
-  return /Android|iPhone|iPad|iPod|Mobile|HarmonyOS/i.test(s);
+  return /iPhone|iPod|Windows Phone/i.test(s);
 }
 
 function serveStatic(req, res, urlPath) {

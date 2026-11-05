@@ -45,7 +45,7 @@
  *
  * @author zx
  * @date   2026-09-15
- * @since 0.8.61
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/18-ai辅助任务.md、docs/公共/开发方案/11-AI辅助任务-1期.md、docs/公共/开发方案/14-AI辅助任务-2期.md、docs/公共/开发方案/16-AI辅助任务-3期-AI工具调用与授权.md、modules/vault/store.js
  */
 
@@ -359,9 +359,15 @@ function snapshotProposalItems(items, kind) {
         amount: String(s.amount == null ? '' : s.amount),
         category_id: s.category_id != null && Number.isFinite(cid) ? cid : null,
         category_name: String(s.category_name == null ? '' : s.category_name),
+        // ⭐ 0.9.7：一级 / 全称 / 没匹配上的原因 —— 卡上要能写「餐饮 / 其他」与「本机有多个，请用全称」
+        category_parent: String(s.category_parent == null ? '' : s.category_parent),
+        category_full: String(s.category_full == null ? '' : s.category_full),
         category_want: String(s.category_want == null ? '' : s.category_want),
+        category_why: String(s.category_why == null ? '' : s.category_why),
         account_id: s.account_id != null && Number.isFinite(aid) ? aid : null,
         account_name: String(s.account_name == null ? '' : s.account_name),
+        // ⭐ 0.9.7：`account_default` = 这一格是**用户设置的默认账户**（不是模型点名的）
+        account_default: !!s.account_default,
         account_want: String(s.account_want == null ? '' : s.account_want),
         note: String(s.note == null ? '' : s.note),
       };
@@ -519,8 +525,10 @@ const MACHINE_TEXT_NOTICE = '（这条回复当时是一段机器语法，已经
 /**
  * 功能：把一条历史消息的正文**清洗成能给人看的样子**（只动 assistant 那侧）。
  *
- * 说明：⚠️ 只判「看起来是原生调用标记」（`client.nativeCallShaped()`，认全角与半角竖线），
- *      ⛔ 不做任何改写 —— 正文一个字不动，只在这条整体是机器语法时整条替换。
+ * 说明：⚠️ 两类机器语法，两种处理（**都不能原样给人看**）：
+ *      · 原生调用标记（`hasNativeMarkers()`，认全角与半角竖线）—— 整条替换成一句人话；
+ *      · 工具调用回显（`stripToolEcho()`，`命令 {…}` / `[工具结果] {…}`）—— **剪掉机器段**、
+ *        人话留下（2026-11-05 加，见函数体里那条说明）。
  *      ⚠️ 用户自己发的消息**永远不动**（他打什么就是什么，哪怕他真的贴了一段 `<|DSML|`）。
  * @param {*} role - `'user'` / `'assistant'`
  * @param {*} content - 正文
@@ -529,7 +537,16 @@ const MACHINE_TEXT_NOTICE = '（这条回复当时是一段机器语法，已经
 function cleanHistoryText(role, content) {
   const t = String(content == null ? '' : content);
   if (String(role) !== 'assistant') return t;
-  return client.hasNativeMarkers(t) ? MACHINE_TEXT_NOTICE : t;
+  // ⭐ 0.8.55：原生调用标记（DSML）—— 整条都是机器语法 ⇒ 换成一句人话
+  if (client.hasNativeMarkers(t)) return MACHINE_TEXT_NOTICE;
+  // ⭐⭐ 2026-11-05（真机：气泡里整段「命令 {json} / [工具结果] {json}」）：
+  //    工具调用**回显** —— 这里**剪**而不是整条替换，因为模型常见的写法是
+  //    「先说半句 → 吐调用 → 吐结果 → 再接着答」，整条丢掉会把正常回答一起吃掉。
+  //    剪完什么都不剩（整条都是机器）才退回那句人话。
+  //    ⚠️ 只动 assistant 那侧：用户自己贴一段 JSON 是他自己的事（见上面的参数说明）。
+  const cut = client.stripToolEcho(t);
+  if (cut !== t) return cut || MACHINE_TEXT_NOTICE;
+  return t;
 }
 
 /**

@@ -1,5 +1,7 @@
 /**
- * 证书信息提取（Node `crypto.X509Certificate`）。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：cert.js
+ * 职责：证书信息提取（Node `crypto.X509Certificate`）
  *
  * 用途有二：① 远程视图 `setCertificateVerifyProc` 的回调里拿 subject / 指纹；
  * ② 原生 WS/TLS 首次遇到自签证书时同样走 TOFU（两条路共用一份判定，⛔ 别写两套）。

@@ -67,11 +67,22 @@ test('canWriteDir：真实目录可写', () => {
   assert.equal(canWriteDir(dir), true);
 });
 
-test('dataFiles：六个文件名固定', () => {
+test('dataFiles：八个文件名固定（0.2.6 起多账号清单与网关凭据）', () => {
   const files = dataFiles('/data');
-  assert.deepEqual(Object.keys(files).sort(), ['bootLog', 'credential', 'notices', 'prefs', 'session', 'tofu']);
+  assert.deepEqual(Object.keys(files).sort(), [
+    'accounts',
+    'bootLog',
+    'credential',
+    'gateway',
+    'notices',
+    'prefs',
+    'session',
+    'tofu',
+  ]);
   assert.equal(files.bootLog, path.join('/data', 'logs', 'boot.log'));
   assert.equal(files.notices, path.join('/data', 'notices-cache.json'));
+  assert.equal(files.accounts, path.join('/data', 'accounts.json'), '账号清单撑起「切换账号」菜单');
+  assert.equal(files.gateway, path.join('/data', 'gateway.bin'), '访问码凭据要跨启动保留');
 });
 
 test('prefs 归一：窗口最小 1100x720，其余给默认值', () => {

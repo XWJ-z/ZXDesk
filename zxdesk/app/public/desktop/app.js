@@ -22,11 +22,12 @@
  *
  * @author zx
  * @date   2026-09-10
- * @since 0.9.5
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/07-前端-电脑版与手机版.md
  */
 
 import { setNotifier } from '../core/api.js';
+import { mountOfflineBanner } from '../core/cache.js';
 // ⭐ 0.9.1：「关于我们 / 联系与反馈」两份弹窗内容 —— 与手机端共用同一份（`core/about.js`）
 import { aboutBodyHtml, contactBodyHtml } from '../core/about.js';
 import { addDays, mondayOf, todayStr } from '../core/date.js';
@@ -862,6 +863,122 @@ export async function init() {
 export let resizeTimer;
 
 setNotifier(toast); // ⭐ 把本端的 toast 注册给 core/api.js（两端的提示是两套 DOM，不能合并）
+// ⭐ 0.2.15 离线只读：挂一次常驻横幅（断网时出现），并接管 online / offline 事件
+mountOfflineBanner();
+
+/**
+ * 把外壳高度**钉成像素**写进 `--app-vh`（0.9.6）。
+ *
+ * 为什么非做不可：真机平板（Android 16 WebView）实测 `html` 的 clientHeight 是 680，
+ * 而 `body` 是 **0**、`.app` 的 computed height 是 **0px** —— 页面内容挤在顶上两百多像素，下面全空。
+ * `100vh` 与 `100%` 在这类内嵌 WebView 里都可能落空（视口在页面加载时还没定下来），
+ * 而**像素值不会**。手机端一直用这套办法（`mobile/app.css` 的 `--app-vh`），桌面版漏了。
+ *
+ * ⚠️ 只在读到正数时写：`innerHeight` 为 0 的那一瞬写进去等于把页面钉成 0 高。
+ * ⚠️ 2px 以内的抖动不跟 —— 飞牛桌面 iframe / 宿主外壳换屏时常见，跟了会让整页跟着跳。
+ */
+function pinShellHeight() {
+  let h = 0;
+  const apply = () => {
+    /* ⭐⭐ 0.9.7 修订（老大 2026-11-04 平板：弹窗塌了 / 团队协作下半屏空着）：
+       **只用 `innerHeight`，不再与 `documentElement.clientHeight` 取小。**
+       上一版加「取小」是为了治「整页跟手指上下滑」，但那个毛病另有责任方 ——
+       `html, body` 上的 `overflow: hidden` 已经把它按住了（见 `desktop/app.css` 开头）。
+       取小反而带来一个新问题，而且很难查：
+         `html { height: var(--app-vh) }` ⇒ 第一次量到偏小值写进去之后，
+         `clientHeight` 读到的就是**它自己写下去的那个高度**，于是下一秒再取小还是同一个数，
+         **永远回不去**。表现就是「页面底部恒定差一截、内容没到底」，重启也不自愈。
+       ⇒ 高度只认窗口自己报的值。
+     ⚠️ 只在读到正数时写：`innerHeight` 为 0 的那一瞬写进去等于把页面钉成 0 高。
+     ⚠️ 2px 以内的抖动不跟 —— 飞牛桌面 iframe / 宿主外壳换屏时常见，跟了会让整页跟着跳。 */
+    const next = window.innerHeight || 0;
+    if (!(next > 0)) return;
+    if (Math.abs(next - h) < 2) return;
+    h = next;
+    document.documentElement.style.setProperty('--app-vh', next + 'px');
+    /* ⭐⭐ 0.9.7 新增：把 `1vh` / `1vw` 也钉成**真像素**（变量定义见 `desktop/app.css` 的 `:root`）。
+       为什么非做不可：这个 WebView 里 `100vh` 会被解析成 **0**（已实测），
+       而这份 CSS 里有十几处拿 `vh` 限高 —— 弹窗卡片的 `88vh` 算成 0 ⇒ **所有弹窗白底不可见**；
+       团队协作屏的 `calc(100vh - 40px)` 算成 -40px（无效）⇒ 回落到 `min-height: 460px`、下半屏空着。
+       把比例尺换成 px 之后，`calc(var(--vh) * 88)` 就是「窗口高的 88%」，与正常浏览器逐像素一致。
+       ⛔ 别只设 `--app-vh` 就以为够了：那个只喂给 `.app`，喂不到 `calc()` 里的比例。 */
+    document.documentElement.style.setProperty('--vh', next / 100 + 'px');
+    document.documentElement.style.setProperty('--vw', (window.innerWidth || next) / 100 + 'px');
+  };
+  apply();
+  window.addEventListener('resize', apply);
+  window.addEventListener('orientationchange', apply);
+}
+pinShellHeight();
 
 // 保留一个可控的失败兜底：初始化挂了也要让用户看到原因
 init().catch((e) => toast('初始化失败：' + e.message, true));
+
+/**
+ * 外壳高度自检（0.9.6）。
+ *
+ * 只为一件事：平板上出现过「整页内容挤在顶上两百多像素、下面全空」的白屏。
+ * 隔着屏幕判断不了是 `.app` 的行高塌了、`body` 的百分比断了，还是 `100vh` 算成了 0 ——
+ * 这里在首帧后量一次，**只有异常才打一行** `console.warn`（正常时一个字都不输出），
+ * 那行会进安卓壳的本机日志（`WebChromeClient.onConsoleMessage` 只记 WARN/ERROR）。
+ *
+ * 判据取 100px：正常满屏是视口高（平板 680），塌陷时是 0~40；
+ * 100 既能滤掉「一屏只有一张卡片」的极简视图，也不会漏掉真正的塌陷。
+ *
+ * ⚠️ 只读、不改任何布局 —— ⛔ 别在这里顺手“修”高度，那会把排查变成猜。
+ */
+function auditShellHeight() {
+  const app = document.getElementById('app');
+  if (!app) return;
+  const r = app.getBoundingClientRect();
+  if (r.height >= 100) return;
+  const cs = getComputedStyle(app);
+  console.warn(
+    '[zxdesk] 外壳高度异常 ' +
+      JSON.stringify({
+        app: Math.round(r.height),
+        appW: Math.round(r.width),
+        bodyH: document.body.clientHeight,
+        htmlH: document.documentElement.clientHeight,
+        vh: window.innerHeight,
+        cssHeight: cs.height,
+        gridRows: cs.gridTemplateRows,
+        display: cs.display,
+      }),
+  );
+}
+/**
+ * 视口单位自检（0.9.7）。
+ *
+ * 只为一件事：真机平板里 `100vh` 被解析成 **0**，而 `window.innerHeight` 是正常的。
+ * 这类偏差**不报错、不白屏**，只是让一切拿 `vh` 限高的浮层静默塌掉 ——
+ * 弹窗白底消失（看着像"弹窗透明"）、列表撑不开、整屏高度算成负值。
+ * 隔着截图判断不了是"没渲染"还是"高度是 0"，所以这里把 `100vh` 的真实像素量出来。
+ *
+ * ⚠️ 只在「明显小于窗口高」时才打一行（判据：不到窗口的一半）。正常浏览器里两者相等，一个字都不输出。
+ * ⚠️ 只读，不改布局 —— ⛔ 别在这里顺手把探针的高度回写回去。
+ */
+function auditViewportUnits() {
+  const probe = document.createElement('div');
+  probe.style.cssText =
+    'position:absolute;left:-9999px;top:0;width:0;height:100vh;pointer-events:none';
+  document.body.appendChild(probe);
+  const cssVh = Math.round(probe.getBoundingClientRect().height);
+  probe.remove();
+  const winH = window.innerHeight || 0;
+  if (!(winH > 0) || cssVh * 2 >= winH) return;
+  const root = getComputedStyle(document.documentElement);
+  console.warn(
+    '[zxdesk] 视口单位异常 ' +
+      JSON.stringify({
+        cssVh,
+        innerH: winH,
+        appVh: root.getPropertyValue('--app-vh').trim(),
+        ruler: root.getPropertyValue('--vh').trim(),
+      }),
+  );
+}
+// 两个时机各量一次：首帧后（布局已定）与 800ms 后（慢加载的样式 / 字体到位后）
+requestAnimationFrame(auditShellHeight);
+setTimeout(auditShellHeight, 800);
+setTimeout(auditViewportUnits, 800);

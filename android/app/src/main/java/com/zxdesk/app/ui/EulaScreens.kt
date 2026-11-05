@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：EulaScreens.kt
+ * 职责：首次启动的许可协议闸门与正文阅读页
+ */
+
 package com.zxdesk.app.ui
 
 import androidx.compose.foundation.layout.Arrangement
@@ -137,7 +143,7 @@ private fun EulaBody(text: String, modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         if (text.isBlank()) {
-            HintLine("读不到协议正文。请重新安装应用，或到项目官网查看许可条款。")
+            HintLine("读不到协议正文，请重装或看官网许可条款")
             return@Column
         }
         Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, lineHeight = 22.sp)

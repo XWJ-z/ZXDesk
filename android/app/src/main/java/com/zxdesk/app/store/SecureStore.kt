@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：SecureStore.kt
+ * 职责：Android Keystore AES-256-GCM 的加解密封装
+ */
+
 package com.zxdesk.app.store
 
 import android.content.Context

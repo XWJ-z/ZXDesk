@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：MiniJson.kt
+ * 职责：极简只读 JSON 解析（RFC 8259 子集）
+ */
+
 package com.zxdesk.core.connection
 
 /**

@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：Target.kt
+ * 职责：输入判定的结果类型
+ */
+
 package com.zxdesk.core.connection
 
 /** 输入判定类型 —— 登录页右侧那个小标签就用这四个值（文案在 app 层映射）。 */

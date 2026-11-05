@@ -282,3 +282,19 @@ test('give-up 的文案不被「检查失败」那张表盖掉（排查线索要
   assert.equal(update.attempts, 2);
   assert.equal(update.fallbackUrl, 'https://pan.baidu.com/s/abc');
 });
+
+test('自动下载停手（give-up）⇒ 状态行指向网盘出口，而不是「稍后再试」', async () => {
+  const updater = fakeUpdater({ phase: 'available', latest: '0.2.5', available: true });
+  const { controller } = makeController({ updater });
+  updater.download = async () => {
+    updater.set({
+      phase: 'error',
+      error: { kind: 'give-up', message: '所有下载源都连不上（GitHub 与镜像均超时）', attempts: 0 },
+    });
+  };
+
+  await controller.action('update.download');
+  const text = controller.getState().update.actionError;
+  assert.match(text, /网盘/, '停手后的出口是网盘');
+  assert.ok(!/稍后再试/.test(text), '⛔ 别说成「再点一次就好」——它已经不再自动重试了');
+});

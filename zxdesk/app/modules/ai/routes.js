@@ -51,7 +51,7 @@
  *
  * @author zx
  * @date   2026-09-15
- * @since 0.8.61
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/18-ai辅助任务.md、docs/公共/开发方案/11-AI辅助任务-1期.md、docs/公共/开发方案/14-AI辅助任务-2期.md
  */
 'use strict';
@@ -836,6 +836,11 @@ function looksLikeIntentPrefix(s) {
   //    ⚠️ 压住**只是一拍**：下一帧若不是竖线（正文里的 `<` 通常后面跟字母），`flushing`
   //    立刻置真并把攒下的整段一次发出去 —— 正常回答不受影响，只多等一帧。
   if (c === '<') return true;
+  // ⭐⭐ 2026-11-05（真机截图：气泡里整段「命令 {json} / [工具结果] {json}」）：
+  //    模型有时把一次调用写成「命令 {"tool":…}」—— 首字符是中文，上面三条一条都拦不住，
+  //    于是整坨机器语法边流边显示。判据放在 `client.toolEchoPrefixish()`（与清洗用的
+  //    前缀词表**同一份**，⛔ 别在这里另抄一份）。
+  if (client.toolEchoPrefixish(t)) return true;
   return false;
 }
 
@@ -1150,7 +1155,28 @@ function handleChat({ req, res, uid }) {
             break;
           }
           if (!intent) {
-            if (!flushing && pending) send({ type: 'delta', text: pending });
+            // ⭐⭐ 2026-11-05（真机）：模型有时把「我调用了什么 ＋ 拿到了什么」当成**正文**
+            //    写出来（`命令 {"tool":"ledger.bill",…}` ＋ `[工具结果]` ＋ 一段 JSON ——
+            //    字段名还是它自己简写的 `expense` / `amount`，不是我们回灌的 `expense_fen`）。
+            //    这种输出走不到上面两条兜底（首字符是中文、也不是 DSML 标记），
+            //    旧代码在这里**原样下发、原样落库**。
+            //    ⇒ 出口处剪掉机器段：人话留下；整条都是机器就给一句人话（与原生标记同一出口）。
+            //    ⚠️ 落库也用剪后的文本 —— 原文进了历史，模型下一轮会照着学得更像。
+            if (!flushing && pending) {
+              const shown = client.stripToolEcho(pending);
+              if (shown) {
+                send({ type: 'delta', text: shown });
+                full = shown;
+              } else {
+                const notice = '（AI 这条回复只回了一段工具调用的内部数据，没有作答。请把刚才的问题再发一次。）';
+                send({ type: 'delta', text: notice });
+                full = notice;
+              }
+            } else if (flushing) {
+              // 已经边流边发了（屏幕上收不回来），至少把**落库那份**剪干净
+              const shown = client.stripToolEcho(full);
+              full = shown || '（这条回复当时夹了一段工具调用的内部数据，已经不再显示。）';
+            }
             break;
           }
           // 是指令：⛔ 不发给用户、⛔ 不落库；执行后把**结果**续接成下一条消息，让模型接着答

@@ -1,5 +1,7 @@
 /**
- * 启动顺序（**单独一个文件，只为了能单测**）。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：boot.js
+ * 职责：启动顺序（**单独一个文件，只为了能单测**）
  *
  * 为什么要有这个文件：0.1.0 的 `createWindow()` 在读 `prefs.get()`，而 `prefs` 是在后面的
  * `buildController()` 里才 `new` 出来的 ⇒ 首跑第一行就 `Cannot read properties of null (reading 'get')`。

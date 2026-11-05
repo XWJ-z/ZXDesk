@@ -9,12 +9,12 @@ class TlsPolicyTest {
     /** 方案文档里的写法（O 在前、带空格）。 */
     private val deviceSubject = "O=fnOS, CN=fnOS"
 
-    /** Java `subjectX500Principal.name` 的真实输出：CN 在前、无空格（2026-10-23 真机实测）。 */
+    /** Java `subjectX500Principal.name` 的真实输出：CN 在前、无空格。 */
     private val realSubject = "CN=fnOS,O=fnOS"
 
     @Test
     fun realDeviceSubjectIsRecognized() {
-        // 回归：原正则只认 O 在前，真机证书会被一律拒绝
+        // 回归：原正则只认 O 在前，设备证书会被一律拒绝
         assertTrue(TlsPolicy.isDeviceCertificate(realSubject))
         assertTrue(TlsPolicy.isDeviceCertificate("CN=fnOS, O=fnOS"))
         assertTrue(TlsPolicy.isDeviceCertificate(deviceSubject))

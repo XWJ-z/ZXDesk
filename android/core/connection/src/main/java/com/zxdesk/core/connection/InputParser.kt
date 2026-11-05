@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：InputParser.kt
+ * 职责：登录输入识别，FNID、域名、IP 与完整 URL
+ */
+
 package com.zxdesk.core.connection
 
 import java.net.URI
@@ -5,7 +11,7 @@ import java.net.URI
 /**
  * 输入识别：FNID / 域名 / IP / 完整 URL。
  *
- * 判定顺序与任务单（批 1 §二 A）逐条对应，顺序不能改：
+ * 判定顺序固定，不能改：
  * 完整 URL → `[v6]:port` → `host:port` → 裸 IPv6 → IPv4 → 含 `.` 的域名 → FNID → 认不出。
  *
  * ⚠️ 已知取舍：不带点也不带端口的主机名（如 `localhost`、`nas`）会命中 FNID 正则，

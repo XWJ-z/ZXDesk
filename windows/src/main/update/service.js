@@ -1,5 +1,7 @@
 /**
- * 更新服务：把「查最新版 → 下载 → 校验」串成一个带状态的对象。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：service.js
+ * 职责：更新服务：把「查最新版 → 下载 → 校验」串成一个带状态的对象
  *
  * 只做三件事，别的一律不做（打开安装包、弹窗、写界面都在上层）：
  * 1. 调接口并判定「有没有新版」；
@@ -109,6 +111,16 @@ export class UpdateService {
   async check(options = {}) {
     const silent = options.silent === true;
     if (this.pendingCheck) return this.pendingCheck;
+    /**
+     * ⚠️ 下载正在进行时**不查**：更新窗口关掉再打开就会再调一次 `openUpdate → check`，
+     * 而 `doCheck` 会把阶段改成 checking / available 并把 progress 清空 ——
+     * 用户看到的是「下载进度突然没了、又变回『点下载更新』」，任务栏进度也跟着断。
+     * 直接回当前状态，下载继续跑（进度照旧经 onState 推进窗口）。
+     */
+    if (this.pendingDownload) {
+      this.log('info', '更新包正在下载，跳过这次版本检查');
+      return this.snapshot();
+    }
 
     const target = buildApiUrl(this.apiUrl, this.channel);
     if (!target.ok) {
@@ -164,10 +176,19 @@ export class UpdateService {
     const available = isNewer(info.version, this.currentVersion);
     // 强制更新：服务端点名 force，或当前版本低于它给的最低支持版本
     const belowMinimum = info.minVersion && isValidVersion(info.minVersion) ? isNewer(info.minVersion, this.currentVersion) : false;
+    /**
+     * ⚠️ 已经下好的包要认回来。
+     *
+     * 「下载更新 → 关掉窗口 → 再从菜单打开」会再查一次版本；旧逻辑在这里无条件
+     * `filePath: ''`，于是 150 MB 的包明明还在磁盘上，界面却退回「点下载更新」——
+     * 想装就得从头再拖一遍（而且下次下载开头还会把它删掉）。
+     * 同一版 + 同一份 hash + 文件在且大小对得上 ⇒ 直接算「已就绪」。
+     */
+    const readyFile = available ? this.reusablePackage(info) : '';
 
     this.state = {
       ...this.state,
-      phase: available ? 'available' : 'latest',
+      phase: readyFile ? 'ready' : available ? 'available' : 'latest',
       latest: info.version,
       available,
       mustUpdate: available && (info.force || belowMinimum),
@@ -181,10 +202,11 @@ export class UpdateService {
       fallbackUrl: info.fallbackUrl || '',
       attempts: 0,
       error: null,
-      progress: null,
-      filePath: '',
+      progress: readyFile ? { received: info.fileSize, total: info.fileSize, percent: 100 } : null,
+      filePath: readyFile,
       checkedAt: Date.now(),
     };
+    if (readyFile) this.log('info', `上次下好的 ${info.version} 还在本地，直接算「已就绪」（不重复下载）`);
     this.log('info', `版本检查：当前 ${this.currentVersion}，最新 ${info.version}（${available ? '有更新' : '已是最新'}）`);
     this.emit();
     return this.snapshot();
@@ -195,6 +217,8 @@ export class UpdateService {
     if (this.pendingDownload) return this.pendingDownload;
     const info = this.info;
     if (!info || !this.state.available) return this.snapshot();
+    // 已经就绪（上次下好的包还在）⇒ 不再拖一遍 150 MB；要重下得先让状态回到 available
+    if (this.state.phase === 'ready' && this.downloadedFile()) return this.snapshot();
 
     this.state = {
       ...this.state,
@@ -364,6 +388,24 @@ export class UpdateService {
     if (!file) return '';
     try {
       return fs.statSync(file).isFile() ? file : '';
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * 上一次下好的包还能不能直接用（同版本 ＋ 同 hash ＋ 文件还在且大小对得上）。
+   * @returns {string} 可复用的路径；不能复用返回空串
+   */
+  reusablePackage(info) {
+    const file = this.state.filePath;
+    if (!file || !info) return '';
+    if (this.state.latest !== info.version || this.state.hash !== info.hash) return '';
+    try {
+      const stat = fs.statSync(file);
+      if (!stat.isFile()) return '';
+      if (info.fileSize > 0 && stat.size !== info.fileSize) return '';
+      return file;
     } catch {
       return '';
     }

@@ -46,16 +46,21 @@ html {
 
 body {
   margin: 0;
-  /* ⚠️ 用 vh/dvh 而不是 `min-height: 100%`：百分比高度依赖父级，html 高度为 auto 时会被忽略，
-     垂直居中直接失效。dvh 让移动端动态工具栏出现时也不产生多余滚动（旧内核退回 vh）。 */
-  min-height: 100vh;
-  min-height: 100dvh;
+  /* ⭐⭐ 0.2.15：**别用 `100vh` / `100dvh` 撑这一页**。
+     真机（安卓壳的 WebView）截图：卡片贴在屏幕上方、下面空一大片 —— 就是这两行在这里算小了，
+     `min-height` 退化成本身内容高度，`align-items: center` 随之失效。
+     改用百分比链：`html` 已经 `height: 100%`（相对视口），`body` 的 100% 就是视口高 ——
+     这条路不经过 vh 单位，WebView 与桌面浏览器结果一致。
+     ⚠️ 两个都留着「以防某个环境百分比链断掉」= 白留：哪个错就用哪个错，反而不稳定，
+        所以只保留百分比。 */
+  min-height: 100%;
 }
 
 body {
+  /* ⭐ 0.2.15：居中改由 `.card { margin: auto }` 负责，容器这里只做 flex 方向。
+     为什么不用 align-items/justify-content：内容一超屏，`center` 会把顶部裁掉且滚不上去；
+     `margin: auto` 在空间不足时自动退回 0，从顶部开始、可以正常滚。 */
   display: flex;
-  align-items: center;
-  justify-content: center;
   padding: calc(24px + env(safe-area-inset-top)) calc(16px + env(safe-area-inset-right))
     calc(24px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
   background: var(--bg);
@@ -72,6 +77,8 @@ body {
 .card {
   width: 100%;
   max-width: 380px;
+  /* ⭐ 0.2.15：见上面 body 的说明 —— 居中靠这里，不靠容器的 align-items */
+  margin: auto;
   padding: 28px 24px 20px;
   border: 1px solid var(--line);
   border-radius: 16px;

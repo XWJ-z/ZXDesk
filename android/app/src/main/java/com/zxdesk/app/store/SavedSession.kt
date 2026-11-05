@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：SavedSession.kt
+ * 职责：「上次登录」快照的模型与加解密读写
+ */
+
 package com.zxdesk.app.store
 
 import android.content.Context
@@ -23,6 +29,8 @@ data class SavedSession(
     val flow: EntryFlow,
     val relayHost: String?,
     val portalUrl: String?,
+    /** FNID 解析时顺带拿到的局域网地址（排障文案用，见 [Entry.lanHint]）。 */
+    val lanHint: String? = null,
     val cleartext: Boolean,
     val token: String,
     val longToken: String?,
@@ -40,6 +48,7 @@ data class SavedSession(
         flow = flow,
         relayHost = relayHost,
         portalUrl = portalUrl,
+        lanHint = lanHint,
         cleartext = cleartext,
         // 这里把 Cookie 也塞回会话里：WebView 启动时会写进 CookieManager，
         // 于是「会话还有效」这种情况连一次 WS 都不用建。
@@ -62,6 +71,7 @@ data class SavedSession(
         append(",\"flow\":").append(MiniJson.quote(flow.name))
         append(",\"relayHost\":").append(relayHost?.let { MiniJson.quote(it) } ?: "null")
         append(",\"portalUrl\":").append(portalUrl?.let { MiniJson.quote(it) } ?: "null")
+        append(",\"lanHint\":").append(lanHint?.let { MiniJson.quote(it) } ?: "null")
         append(",\"cleartext\":").append(cleartext)
         append(",\"token\":").append(MiniJson.quote(token))
         append(",\"longToken\":").append(longToken?.let { MiniJson.quote(it) } ?: "null")
@@ -89,6 +99,7 @@ data class SavedSession(
                 flow = EntryFlow.valueOf(map["flow"] as? String ?: EntryFlow.GATEWAY.name),
                 relayHost = map["relayHost"] as? String,
                 portalUrl = map["portalUrl"] as? String,
+                lanHint = map["lanHint"] as? String,
                 cleartext = map["cleartext"] as? Boolean ?: false,
                 token = map["token"] as? String ?: "",
                 longToken = map["longToken"] as? String,
@@ -112,6 +123,7 @@ data class SavedSession(
                 flow = entry.flow,
                 relayHost = entry.relayHost,
                 portalUrl = entry.portalUrl,
+                lanHint = entry.lanHint,
                 cleartext = entry.cleartext,
                 token = session.token,
                 longToken = session.longToken,

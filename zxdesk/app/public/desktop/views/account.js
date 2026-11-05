@@ -17,11 +17,12 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.9.5
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/04-多用户与账号.md、docs/公共/开发方案/08-设置页交互改版.md
  */
 
 import { api, BASE } from '../../core/api.js';
+import { cacheClear } from '../../core/cache.js';
 import { $, esc } from '../../core/dom.js';
 import { renderSidebar } from '../shell.js';
 import { state } from '../state.js';
@@ -176,5 +177,7 @@ export async function doLogout() {
   } catch (_e) {
     /* 本来就已经掉线了也无所谓，照样回登录页 */
   }
+  // ⭐ 0.2.15：退出就把离线快照清掉 —— 换账号时绝不能把上一个账号的数据留在本机
+  cacheClear();
   location.href = BASE + '/login.html';
 }

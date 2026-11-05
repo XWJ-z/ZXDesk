@@ -1,5 +1,7 @@
 /**
- * Cookie 注入（移植自 `FnSession.cookies()`）。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：cookies.js
+ * 职责：Cookie 注入（移植自 `FnSession.cookies()`）
  *
  * 名字照 fnOS 前端 bundle：会话 `fnos-token`（SameSite=Strict、**不设过期**）、
  * 长期 `fnos-long-token`（30 天）、入口 `entry-token`（写到 `.<relayHost>` 域）、中继再加 `mode=relay`。
@@ -82,6 +84,37 @@ export async function applyCookies(session, target, cookieStore, logger = () => 
 }
 
 /**
+ * 合并多份 Cookie 头（`name=value; …`），同名以后给的为准。
+ *
+ * 为什么需要：原生探测与 WS 握手要同时带「登录会话 Cookie」和「远程视图分区里的网关 Cookie」
+ * （访问码过了之后网关种下的那份）。两份直接接起来会出现同名两条，服务端行为不可预期；
+ * 而浏览器里的那份是服务端续期过的，应该覆盖登录时的快照（Android 0.2.17 的踩坑）。
+ *
+ * @param {...string} parts
+ * @returns {string}
+ */
+export function mergeCookieHeader(...parts) {
+  const out = [];
+  const index = new Map();
+  for (const part of parts) {
+    for (const raw of String(part || '').split(';')) {
+      const pair = raw.trim();
+      if (!pair) continue;
+      const eq = pair.indexOf('=');
+      if (eq <= 0) continue;
+      const name = pair.slice(0, eq).trim();
+      if (!name) continue;
+      if (index.has(name)) out[index.get(name)] = pair;
+      else {
+        index.set(name, out.length);
+        out.push(pair);
+      }
+    }
+  }
+  return out.join('; ');
+}
+
+/**
  * 退出登录：清掉远程视图分区里的全部 Cookie（保留 TOFU 与偏好，与 Android 一致）。
  *
  * ⚠️ Electron 的 `Cookies` **没有 `clear()`**（0.1.4 调了，日志里是
@@ -112,6 +145,106 @@ export async function clearCookies(session, logger = () => {}) {
   }
 }
 
+// ---------------------------------------------------------------- 网关凭据（访问码）
+
+/**
+ * 这些名字属于「飞牛登录会话 / ZXDesk 网页会话」，各有各的落盘通道，⛔ 不进网关凭据。
+ * - `fnos-token` / `fnos-long-token` / `entry-token` → `FnSession`（session.bin 里的 session 段）；
+ * - `zxdesk_sid` → `webSession`（同样在 session.bin，但单独一段、带 host 校验）；
+ * - `mode=relay` → 每次按 relayHost 重新算出来。
+ */
+const NON_GATEWAY_NAMES = new Set(['fnos-token', 'fnos-long-token', 'entry-token', 'zxdesk_sid', 'mode']);
+
+/** 网关凭据最多存几条（防某个部署往浏览器里塞一堆无关 Cookie 把快照撑大）。 */
+export const GATEWAY_COOKIE_LIMIT = 20;
+
+/**
+ * 从分区 Cookie 里挑出**网关凭据**（访问码过完之后网关种下的那几条）。
+ *
+ * 为什么要落盘：Electron 的 `persist:` 分区只持久化**带有效期**的 Cookie，会话级 Cookie
+ * 应用一关就没了。而飞牛网关的访问码 Cookie 正是会话级 —— 于「每次启动都要重新输一次访问码」。
+ * 这里把它按 `session.bin`（safeStorage 加密）存起来，启动时回注；过期的由网关自己再拦一次。
+ *
+ * @param {Array<object>} cookieList - `session.cookies.get({url})` 的结果
+ * @param {number} [now] - 当前秒级时间戳（测试注入）
+ * @returns {Array<object>} 可直接交给 `cookies.set` 的规格
+ */
+export function pickGatewayCookies(cookieList, now = Math.floor(Date.now() / 1000)) {
+  const out = [];
+  for (const cookie of cookieList || []) {
+    if (!cookie || !cookie.name || !cookie.value) continue;
+    if (NON_GATEWAY_NAMES.has(cookie.name)) continue;
+    // 已经过期的别存（回注一个死 Cookie 只会在请求里多一个脏字段）
+    if (typeof cookie.expirationDate === 'number' && cookie.expirationDate > 0 && cookie.expirationDate <= now) continue;
+    out.push({
+      name: cookie.name,
+      value: cookie.value,
+      domain: String(cookie.domain || ''),
+      path: typeof cookie.path === 'string' && cookie.path ? cookie.path : '/',
+      secure: cookie.secure !== false,
+      httpOnly: cookie.httpOnly === true,
+      sameSite: SAME_SITE.has(cookie.sameSite) ? cookie.sameSite : 'unspecified',
+      ...(typeof cookie.expirationDate === 'number' && cookie.expirationDate > 0
+        ? { expirationDate: cookie.expirationDate }
+        : {}),
+    });
+    if (out.length >= GATEWAY_COOKIE_LIMIT) break;
+  }
+  return out;
+}
+
+/**
+ * 回注网关凭据。
+ *
+ * ⚠️ `url` 与 `domain` 的取舍：Electron 在 `url` 与 `domain` 冲突时会直接抛错，
+ * 所以只有当 Cookie 的 domain 与当前主机**不完全相同**（带了父域 / 子域）时才显式给 domain。
+ */
+export function gatewayCookieSpecs(list, { baseUrl } = {}) {
+  const base = String(baseUrl || '').replace(/\/+$/, '');
+  if (!base) return [];
+  let host = '';
+  try {
+    host = new URL(base).hostname.toLowerCase();
+  } catch {
+    return [];
+  }
+  const specs = [];
+  for (const cookie of list || []) {
+    if (!cookie || !cookie.name || typeof cookie.value !== 'string') continue;
+    const domain = String(cookie.domain || '').replace(/^\./, '').toLowerCase();
+    const spec = {
+      url: base,
+      name: cookie.name,
+      value: cookie.value,
+      path: cookie.path || '/',
+      secure: cookie.secure !== false,
+      httpOnly: cookie.httpOnly === true,
+    };
+    if (domain && domain !== host) spec.domain = cookie.domain;
+    if (SAME_SITE.has(cookie.sameSite)) spec.sameSite = cookie.sameSite;
+    if (typeof cookie.expirationDate === 'number' && cookie.expirationDate > 0) {
+      spec.expirationDate = cookie.expirationDate;
+    }
+    specs.push(spec);
+  }
+  return specs;
+}
+
+/** 把网关凭据写进分区（失败只记日志，⛔ 不中断导航）。 */
+export async function applyGatewayCookies(list, target, cookieStore, logger = () => {}) {
+  const specs = gatewayCookieSpecs(list, target);
+  let ok = 0;
+  for (const spec of specs) {
+    try {
+      await cookieStore.set(spec);
+      ok += 1;
+    } catch (e) {
+      logger(`网关凭据回注失败：${spec.name}（${e.message}）`);
+    }
+  }
+  return { total: specs.length, ok };
+}
+
 // ---------------------------------------------------------------- ZXDesk 网页会话（zxdesk_sid）
 
 export const WEB_SESSION_COOKIE = 'zxdesk_sid';
@@ -125,7 +258,7 @@ const SAME_SITE = new Set(['unspecified', 'no_restriction', 'lax', 'strict']);
 export function pickWebSession(cookieList, url) {
   const cookie = (cookieList || []).find((c) => c && c.name === WEB_SESSION_COOKIE && c.value);
   if (!cookie) return null;
-  let host = '';
+  let host;
   try {
     host = new URL(url).hostname.toLowerCase();
   } catch {
@@ -152,7 +285,7 @@ export function pickWebSession(cookieList, url) {
  */
 export function webSessionSpec(webSession, { baseUrl } = {}) {
   if (!webSession || webSession.name !== WEB_SESSION_COOKIE || !webSession.value) return null;
-  let host = '';
+  let host;
   try {
     host = new URL(baseUrl).hostname.toLowerCase();
   } catch {

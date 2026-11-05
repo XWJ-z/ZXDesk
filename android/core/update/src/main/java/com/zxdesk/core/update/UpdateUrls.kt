@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：UpdateUrls.kt
+ * 职责：下载地址的校验与展开，只接受服务端下发的地址
+ */
+
 package com.zxdesk.core.update
 
 import java.net.URI

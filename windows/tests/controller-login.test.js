@@ -126,10 +126,11 @@ function makeController({ handler, probeBody = '<html><body>ZXDesk</body></html>
     },
     logger: () => {},
     notify: () => {},
-    fetcher: async (url) => ({
+    fetcher: async (_url) => ({
       ok: true,
       status: 200,
-      text: async () => probeBody,
+      // 允许给函数：按调用次数模拟「预检要码 / 过码后放行」
+      text: async () => (typeof probeBody === 'function' ? probeBody() : probeBody),
       headers: { getSetCookie: () => ['fnos-token=TICKET-TOKEN; Path=/; Secure'] },
     }),
     rpcFactory: factory,
@@ -172,24 +173,30 @@ test('局域网 IP + 账号 ⇒ 走网关登录 → 2FA → 进浏览模式，�
   assert.equal(state.applied.length, 1, 'Cookie 要写进远程视图');
 });
 
-test('网关返回访问码页 ⇒ 进第 ④ 步（不假装已经进应用）', async () => {
+test('网关要访问码 ⇒ 先过码、再验密码（fnOS 顺序），过码后自己接着登录', async () => {
+  let probes = 0;
   const { controller, state, view } = makeController({
     handler: twoFactorHandler,
-    probeBody: '<!doctype html><html><body><h1>请输入访问码</h1></body></html>',
+    // 第一次（登录前预检）是访问码页；过码之后的预检放行
+    probeBody: () => (++probes === 1 ? '<!doctype html><html><body><h1>请输入访问码</h1></body></html>' : '<html><body>ZXDesk</body></html>'),
   });
   await controller.boot();
   await controller.action('flow.next');
   await controller.action('connect.submit', { address: '10.1.2.3', https: true, user: 'myaccount', password: 'p@ss' });
+
+  assert.equal(controller.getState().screen, 'access', '还没验证密码就该停在访问码页');
+  assert.equal(view.visible, true, '访问码页要真的显示出来（远程视图）');
+  assert.equal(state.saved, null, '访问码没过之前不该有会话');
+  assert.equal(state.applied.length, 0, '访问码没过之前不该有会话 Cookie');
+
+  // 过码 → 自动重走连接：这次预检放行，才轮到密码 / 两步验证
+  await controller.action('access.done');
+  assert.equal(controller.getState().screen, 'twofa', '过码后才验证密码（两步验证）');
   await controller.action('twofa.totp', { value: '123456' });
   await controller.action('twofa.submitTotp');
 
-  assert.equal(controller.getState().screen, 'access');
-  assert.equal(view.visible, true, '访问码页要真的显示出来（远程视图）');
-  assert.equal(state.saved.session.token, 'TOKEN', '会话仍然要存：访问码过了就能进');
-
-  // 点「已输入完成」→ 进浏览模式
-  await controller.action('access.done');
   assert.equal(controller.getState().screen, 'browsing');
+  assert.equal(state.saved.session.token, 'TOKEN', '会话已落盘');
 });
 
 test('网关探针说 invalid token ⇒ 仍按「进应用」处理（弱信号不拦人）', async () => {

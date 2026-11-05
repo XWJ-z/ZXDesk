@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：Eula.kt
+ * 职责：许可协议正文的读取与版本号提取
+ */
+
 package com.zxdesk.app
 
 import android.content.Context

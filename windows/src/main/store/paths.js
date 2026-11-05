@@ -1,5 +1,7 @@
 /**
- * 数据目录解析（安装版 + 绿色版 + 开发态三合一）。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：paths.js
+ * 职责：数据目录解析（安装版 + 绿色版 + 开发态三合一）
  *
  * 优先级（`isPackaged` 时）：
  * 1. `ZXDESK_DATA_DIR` 环境变量（调试 / 便携，最高优先）；
@@ -205,6 +207,13 @@ export function dataFiles(dir) {
   return {
     session: path.join(dir, 'session.bin'),
     credential: path.join(dir, 'credential.bin'),
+    /** 账号清单（明文，不存密码）：撑起「文件 → 切换账号」那个菜单。 */
+    accounts: path.join(dir, 'accounts.json'),
+    /**
+     * 网关凭据（加密）：访问码 Cookie 的跨启动副本。
+     * 独立于 `session.bin` —— 「退出登录」不该让这台设备连访问码都要重输。
+     */
+    gateway: path.join(dir, 'gateway.bin'),
     tofu: path.join(dir, 'tofu.json'),
     prefs: path.join(dir, 'prefs.json'),
     notices: path.join(dir, 'notices-cache.json'),

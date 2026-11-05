@@ -57,7 +57,7 @@
  *
  * @author zx
  * @date   2026-10-04
- * @since 0.8.54
+ * @since 0.9.7
  * 相关：docs/公共/开发方案/32-团队协作.md §丁 · §丙-2、core/slots.js、modules/teamwork/mobile-teamwork-page.js
  */
 
@@ -1023,17 +1023,34 @@ async function createTask(root, st) {
  *
  * 说明：⭐⭐ 与电脑端 `promoteTask()` 同一套判据：状态落到「未开始」组的默认状态
  *      （`stateKeyOfGroup()`，⛔ 不写死 `todo`）；类型四项一次发全，改回普通时才能清掉旧规则。
+ *      ⭐⭐ 2026-11-05：**任务编号从按钮上取**（`data-tid`），不再靠 `st.promoteFor` ＋ `st.board`
+ *      去「找」那条任务 —— 只要状态对象不是画弹层的那一份（片段换项目会重新 `render()`），
+ *      那个找法必然落空（老大当场截图：「这条待排期已经不在了」）。编号在按钮上就不会错位。
  * @param {HTMLElement} root - 本片段的根节点
  * @param {Object} st - 状态
+ * @param {(string|number)} tidArg - 那颗保存按钮上的任务编号（`data-tid`）
  * @returns {Promise.<void>}
  */
-async function promoteTask(root, st) {
+async function promoteTask(root, st, tidArg) {
   if (st.busy) return;
-  const t = findCard(st.board, st.promoteFor);
-  if (!t) return;
-  const modal = document.querySelector('[data-role="pm-dates"]');
-  const box = modal ? modal.closest('.collab-modal') : null;
-  if (!box) return;
+  const tid = Number(tidArg) > 0 ? Number(tidArg) : Number(st.promoteFor);
+  if (!(tid > 0)) {
+    // ⚠️ 2026-11-05：取不到编号就明说（静默 return 在界面上与「按钮坏了」同形）。
+    toast('这条待排期已经不在了，关掉弹层重开一次', true);
+    return;
+  }
+  // ⭐⭐ 2026-11-05（老大：「团队协作-项目-待排期-转为任务：点击无反应」）：
+  //    这里原来找的是 `document.querySelector('[data-role="pm-dates"]').closest('.collab-modal')` ——
+  //    那是 0.8.54 之前**自绘遮罩**的壳。弹层改走宿主 `openSheet()` 之后，正文住在 `#sheet-body`，
+  //    DOM 里**根本没有 `.collab-modal`** ⇒ `box` 恒为 null，函数在取任何值之前就
+  //    `return`（连一句 toast 都没有，所以看起来就是「按钮坏了」）。
+  //    ⚠️ 与 `saveCard()` / `bindNewTaskModal()` 同一口径：弹层本体是宿主的 `#sheet-body`。
+  //    ⛔ 别退回 `closest('.collab-modal')`，那个壳已经不存在了。
+  const box = document.getElementById('sheet-body');
+  if (!box) {
+    toast('弹层没打开，关掉重开一次', true);
+    return;
+  }
   /**
    * 功能：取弹层里某一格的值。
    * @param {string} role - `data-role`
@@ -1080,7 +1097,7 @@ async function promoteTask(root, st) {
   if (status) body.status = status;
   st.busy = true;
   try {
-    await api('PUT', '/api/collab/projects/' + st.pid + '/tasks/' + Number(t.id), body);
+    await api('PUT', '/api/collab/projects/' + st.pid + '/tasks/' + tid, body);
     toast('已转为任务');
     st.promoteFor = 0;
     await reloadBoard(root, st);
@@ -2862,7 +2879,11 @@ function promoteModalHtml(st) {
     '</div>' +
     kindBlockHtml('pm', t) +
     btns(
-      '<button class="collab-btn primary" type="button" data-act="collab-promote-save">转为任务</button>' +
+      // ⚠️⭐ 2026-11-05：`data-tid` 是这个弹层**唯一的任务身份来源** —— 保存时按它发请求，
+      //    不再靠 `st.promoteFor` 回查（状态对象换过一份就会查不到，症状见 `promoteTask()` 的说明）。
+      '<button class="collab-btn primary" type="button" data-act="collab-promote-save" data-tid="' +
+        esc(t.id != null ? String(t.id) : '') +
+        '">转为任务</button>' +
         '<button class="collab-btn ghost" type="button" data-act="collab-promote-close">取消</button>',
     );
   return mask('collab-promote-close', '转为任务', body);
@@ -3451,14 +3472,37 @@ function syncSheet(st) {
  * @returns {void}
  */
 function bindSheetClosed(getSt) {
+  // ⚠️⭐ 2026-11-05：**每次 `render()` 都要把最新的取值函数换进来**（见 `sheetCtx` 那段说明）。
+  sheetClosedOf = typeof getSt === 'function' ? getSt : null;
   if (bindSheetClosed._bound) return;
   bindSheetClosed._bound = true;
   document.addEventListener('zx:sheet-closed', () => {
-    const st = typeof getSt === 'function' ? getSt() : null;
+    const st = sheetClosedOf ? sheetClosedOf() : null;
     if (st) closeAll(st);
     sheetKey = '';
   });
 }
+
+/**
+ * 文档级委托**当前该用哪一份**根节点与状态（`render()` 每次重挂都会换成新的）。
+ *
+ * ⚠️⭐ 为什么不能闭包捕获第一份（2026-11-05 老大报「待排期-转为任务：点击无反应」的真因）：
+ *      `bindSheetActs` / `bindSheetClosed` 的监听器**只挂一次**（`_bound`），而看板片段在
+ *      **换项目时会重新 `render()`**（`mobile.js` 的 `boardMounted` 判据）⇒ 第一份 `st` 会一直
+ *      留在监听器里。之后弹层里的每一次点击都在改**上一份状态**：
+ *      弹层标题照旧由新状态渲染（所以看着是对的那条任务），可 `promoteFor` 在第一份 `st` 上还是
+ *      **0**、`pid` 还是**上一个项目** ⇒ 取不到任务（「这条待排期已经不在了」），
+ *      或者在**旧项目**里写一条评论。
+ *      ⇒ 一律走这两个模块级引用：**每次 render 覆盖，监听器只读最新的**。
+ * @type {?{getRoot: Function, getSt: Function}}
+ */
+let sheetCtx = null;
+
+/**
+ * 「弹层关了」那条通知该问谁要状态（同上，每次 render 覆盖）。
+ * @type {?Function}
+ */
+let sheetClosedOf = null;
 
 /**
  * 功能：给**宿主弹层里的动作**接线（⭐ 0.8.54）—— 文档级委托，只挂一次。
@@ -3477,6 +3521,9 @@ function bindSheetClosed(getSt) {
  * @returns {void}
  */
 function bindSheetActs(getRoot, getSt) {
+  // ⚠️⭐ 2026-11-05：**先换再挂** —— 换项目重挂片段时，这里换掉引用，监听器继续用最新的那一份。
+  //    ⛔ 别把 `getRoot` / `getSt` 直接闭包进监听器（`_bound` 只让挂一次 ⇒ 闭包永远停在第一份）。
+  sheetCtx = { getRoot: getRoot, getSt: getSt };
   if (bindSheetActs._bound) return;
   bindSheetActs._bound = true;
   document.addEventListener('click', (e) => {
@@ -3486,16 +3533,16 @@ function bindSheetActs(getRoot, getSt) {
     if (!t) return;
     const act = String(t.dataset.act || '');
     if (act.indexOf('collab-') !== 0) return;
-    const root = getRoot();
-    const st = getSt();
+    const root = sheetCtx ? sheetCtx.getRoot() : null;
+    const st = sheetCtx ? sheetCtx.getSt() : null;
     if (root && st) runAct(root, st, act, t);
   });
   document.addEventListener('change', (e) => {
     if (!isSheetOpen()) return;
     const el = e.target;
     if (!el || el.type !== 'file' || !el.closest('#sheet-body')) return;
-    const root = getRoot();
-    const st = getSt();
+    const root = sheetCtx ? sheetCtx.getRoot() : null;
+    const st = sheetCtx ? sheetCtx.getSt() : null;
     if (root && st) onFilePick(root, st, e);
   });
 }
@@ -3580,7 +3627,7 @@ function runAct(root, st, act, t) {
   else if (act === 'collab-promote-close') {
     st.promoteFor = 0;
     paint(root, st);
-  } else if (act === 'collab-promote-save') promoteTask(root, st);
+  } else if (act === 'collab-promote-save') promoteTask(root, st, t.dataset.tid);
   else if (act === 'collab-card') {
     openCard(root, st, t.dataset.tid);
   } else if (act === 'collab-card-close') {

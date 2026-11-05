@@ -1,8 +1,13 @@
 /**
- * 功能：纯 JS MD5（`md5Hex(text)`，UTF-8）—— 浏览器 WebCrypto 没有 MD5，任务单 §一 明确**自己写、不引库**。
+ * md5.js —— 纯 JS MD5（`md5Hex(text)`，UTF-8）
  *
- * ⛔ 纯函数，不碰 `chrome.*`（可在 Node 里单测）；输入先过 `TextEncoder` 转 UTF-8 字节。
- * 正确性以向量测试为准：`ttt/temp/md5-vectors/`（Node crypto 生成 10 组 + Android 单测的空串向量）。
+ * 功能：给 FN Connect 的 `authx` 签名算 MD5。浏览器的 WebCrypto 没有 MD5，
+ *      所以这里自己实现，⛔ 不引第三方库（本端零依赖）。
+ * ⛔ 纯函数，不碰 `chrome.*`，可在 Node 里直接验向量。
+ *
+ * @author zx
+ * @since 0.1.2
+ * 相关：Project/Edge/README.md
  */
 
 const S = [

@@ -1,13 +1,20 @@
 /**
- * 0.1.4 app.js —— ⭐ 弹窗与侧边栏的**唯一**内容视图（任务单 §四：同一份内容、两种外壳）。
+ * app.js —— 弹窗与侧边栏的唯一内容视图（同一份内容、两种外壳）
  *
- * 两个壳（popup.js / sidepanel.js）只做三件事：设 data-host、调 mountApp(root, host)、定高度。
- * 本文件里 ⛔ 出现 `host === 'popup'` 以外的宿主分支；全部差异（§4.2 表）：
- *   表单默认展开+预填（popup）↔ 折叠（侧边栏）；列表 20 条+看全部（popup）↔ 全量（侧边栏）；
- *   收藏成功自动关（popup）↔ 不关（侧边栏）。
+ * 功能：`mountApp(root, host)` 按宿主渲染整套界面：连接卡 / 登录等待 / 收藏表单 / 列表 /
+ *      行内编辑 / 密码库只读弹层 / 设置视图 / 许可协议门槛 / 新版本气泡。
  *
- * 连接：`authorizeAndConnect`（conn-ui）在手势内授权并连接；手势丢失/用户拒绝回
- * `need_settings`，这里切到内嵌的设置视图（0.1.4 起：设置不再是整页标签）。
+ * ⚠️ 两个壳（`popup.js` / `sidepanel.js`）只做三件事：设 `data-host`、调 `mountApp`、定高度。
+ *    本文件里 ⛔ 出现 `host === 'popup'` 以外的宿主分支。两形态的差异只有五条：
+ *    表单默认展开+预填（popup）↔ 折叠（侧边栏）；列表 20 条+看全部（popup）↔ 全量（侧边栏）；
+ *    收藏成功自动关（popup）↔ 不关（侧边栏）；设置视图内嵌；密码库弹层相同。
+ *
+ * ⚠️ 连接走 `conn-ui.authorizeAndConnect`（手势内授权）；手势丢失或用户拒绝时回 `need_settings`，
+ *    这里切到内嵌的设置视图，⛔ 不开整页标签。
+ *
+ * @author zx
+ * @since 0.1.4
+ * 相关：Project/Edge/README.md
  */
 import { LINK_LABEL } from '../lib/address.js';
 import { MSG, BM_TEXT, UI_TEXT, VAULT_TEXT, UPDATE_TEXT, EULA_UI, errText, statusText } from '../lib/messages.js';
@@ -35,14 +42,14 @@ export async function mountApp(root, host) {
   let stopPoll = null;
   let lastInput = '';
 
-  // ================= 0.1.6：许可协议门槛（首次启动 / 协议改版后） =================
+  // ================= 许可协议门槛（首次启动 / 协议改版后） =================
   // ⚠️ 先判后挂：未同意前既不建视图也不发任何请求（连接与版本检测都在后面）。
   if (!(await isEulaAccepted())) {
     createEulaPanel(root, { mode: 'gate', onAccept: () => location.reload() });
     return;
   }
 
-  // ================= 0.1.6：新版本气泡（启动时检测，结果由 SW 读给了这里） =================
+  // ================= 新版本气泡（启动时检测，结果由 SW 读给了这里） =================
   const bubble = el('div', 'update-bubble');
   bubble.hidden = true;
   bubble.setAttribute('role', 'status');
@@ -97,7 +104,7 @@ export async function mountApp(root, host) {
   btnRefresh.title = BM_TEXT.mRefresh;
   const menu = document.createElement('details');
   menu.className = 'pop-anchor';
-  const menuSum = el('summary', 'more-btn', UI_TEXT.mMore); // 0.1.4：⋮ 改「更多」
+  const menuSum = el('summary', 'more-btn', UI_TEXT.mMore); // ⋮ 改「更多」
   menuSum.title = '连接管理';
   const menuPop = el('div', 'menu-pop');
   const mReaddress = el('button', null, BM_TEXT.mReaddress);
@@ -151,7 +158,7 @@ export async function mountApp(root, host) {
   const cardMain = el('section', 'main-view');
   cardMain.hidden = true;
 
-  // ---- 0.1.5 E3：密码库只读弹层 —— 明文的**唯一**去处；关闭即从 DOM 与内存里清掉 ----
+  // ---- 密码库只读弹层 —— 明文的**唯一**去处；关闭即从 DOM 与内存里清掉 ----
   const vaultMask = el('div', 'vault-mask');
   vaultMask.hidden = true;
   const vaultCard = el('div', 'vault-card');
@@ -173,8 +180,9 @@ export async function mountApp(root, host) {
   const inUrl = el('input', 'f-url');
   inUrl.autocomplete = 'off';
   inUrl.spellcheck = false;
-  inUrl.tabIndex = -1; // 0.1.3 口径：Tab 跳过网址（鼠标可改），保证三次内到收藏
+  inUrl.tabIndex = -1; // 口径：Tab 跳过网址（鼠标可改），保证三次内到收藏
   const picks = el('div', 'picks');
+  const suggest = el('div', 'suggest'); // 按网址识别的「建议标签」（虚线＝未选）
   const tagSel = el('select');
   tagSel.setAttribute('aria-label', '从已有标签里选一个');
   const inNewTag = el('input');
@@ -205,12 +213,13 @@ export async function mountApp(root, host) {
     })(),
     el('p', 'flabel-line', '标签'),
     picks,
+    suggest,
     tagAdd
   );
   if (isPopup) {
     form.append(el('hr', 'sep'), saveRow); // 差异 2：popup 表单带主按钮
   } else {
-    // 侧边栏折叠表单：添加 / 取消（§4.2——折叠入口展开后要有提交钮）
+    // 侧边栏折叠表单：添加 / 取消（折叠入口展开后要有提交钮）
     const btnAdd = el('button', 'primary', BM_TEXT.addSave);
     const btnCancelForm = el('button', null, BM_TEXT.btnCancel);
     const addRow = el('div', 'row');
@@ -225,7 +234,7 @@ export async function mountApp(root, host) {
   cardMain.appendChild(formWrap);
 
   // ---- 列表区（共用；搜索栏只侧边栏） ----
-  let listBar = null;
+  let listBar;
   let inQ = null;
   let selTag = null;
   if (!isPopup) {
@@ -255,7 +264,7 @@ export async function mountApp(root, host) {
   const ul = el('ul', 'list');
   const listCard = el('div', 'card');
   listCard.append(skel, listNote, btnRetry, ul);
-  // 0.1.4（弹窗）：外框固定，只有条目区自己滚 —— 列表块整体包进 .list-scroll
+  // 弹窗形态：外框固定，只有条目区自己滚 —— 列表块整体包进 .list-scroll
   const listScroll = el('div', 'list-scroll');
   listScroll.append(listHint, listTotal, listCard);
   cardMain.appendChild(listScroll);
@@ -266,14 +275,14 @@ export async function mountApp(root, host) {
     listScroll.appendChild(btnViewAll); // 差异 3：popup 列表尾「在侧边栏看全部」（随条目区滚）
   }
 
-  // ================= 设置视图（0.1.4：嵌进 popup/侧边栏，不开整页） =================
+  // ================= 设置视图（嵌进 popup/侧边栏，不开整页） =================
   const cardSettings = el('section', 'settings');
   cardSettings.hidden = true;
   const sBack = el('button', 'icon-btn back-btn', '←');
   sBack.type = 'button';
   sBack.title = UI_TEXT.sBack;
-  sBack.setAttribute('aria-label', UI_TEXT.sBack); // 0.1.5 E1：图标按钮必须有可读名
-  const sHead = el('div', 's-head'); // ⭐ 0.1.5 E1：⛔ 不再借用 .row（那条 `flex:1` 会把箭头撑成整行长条）
+  sBack.setAttribute('aria-label', UI_TEXT.sBack); // 图标按钮必须有可读名
+  const sHead = el('div', 's-head'); // ⚠️ ⛔ 不借用 .row（那条 `flex:1` 会把箭头撑成整行长条）
   const sH1 = el('h1', null, UI_TEXT.setTitle);
   sHead.append(sBack, sH1, el('span', 's-head-pad')); // 右侧对称留白（32px 列）
 
@@ -318,7 +327,7 @@ export async function mountApp(root, host) {
   const gMode = el('section', 'group');
   gMode.append(el('h2', null, UI_TEXT.secOpen), modeBox);
 
-  // -- 关于组（版本取 manifest，不手写；0.1.6 起可手动检查更新） --
+  // -- 关于组（版本取 manifest，不手写；可手动检查更新） --
   const sAbout = el('p', 'hint', UI_TEXT.aboutLine(chrome.runtime.getManifest().version));
   const btnCheck = el('button', 'btn-subtle', UI_TEXT.check);
   btnCheck.type = 'button';
@@ -400,12 +409,13 @@ export async function mountApp(root, host) {
   function show(name) {
     for (const k of Object.keys(cards)) cards[k].hidden = k !== name;
     menu.open = false;
-    closeVault(); // 0.1.5：切视图 ⇒ 明文立刻离开 DOM（任务单 §4.3「切换视图即清」）
+    closeVault(); // 切视图 ⇒ 明文立刻离开 DOM（切换视图即清）
   }
   function resetBar() {
     bar.hidden = true;
     dot.className = 'dot';
     barHost.textContent = '—';
+    barHost.removeAttribute('title'); // ⛔ 不清就留着上一个账号名（换号 / 断开后仍在）
     barLink.hidden = true;
   }
 
@@ -458,12 +468,13 @@ export async function mountApp(root, host) {
   }
 
   // ================= 连接（授权并连接一步到位；手势丢了回设置视图兜底） =================
-  function showSettings(input) {
+  async function showSettings(input) {
     if (input && !sAddr.value) sAddr.value = input;
     show('settings');
-    send(MSG.status)
-      .catch(() => ({ state: 'idle' }))
-      .then(renderSettings);
+    // ⚠️ 先读回「已授权与否」再渲染：grantedNow 初始 false，否则已授权的人会看到「授权并连接」
+    await renderGranted();
+    const st = await send(MSG.status).catch(() => ({ state: 'idle' }));
+    renderSettings(st);
   }
 
   btnConnect.addEventListener('click', async () => {
@@ -471,7 +482,7 @@ export async function mountApp(root, host) {
     const input = addr.value.trim();
     show('resolving');
     resolvingTarget.textContent = input;
-    // ⭐ 0.1.4 真机修：这里原来没有护栏，一次 TypeError 就让视图停在「连接中…」永不落地
+    // ⚠️ 这里必须有护栏：一次 TypeError 就会让视图停在「连接中…」永不落地
     let st;
     try {
       st = await authorizeAndConnect(input);
@@ -502,12 +513,18 @@ export async function mountApp(root, host) {
     render(st);
   });
   btnCancelLogin.addEventListener('click', async () => {
-    await send(MSG.disconnect);
+    await send(MSG.disconnect).catch(() => {});
     resetBar();
     show('connect');
   });
   btnRefresh.addEventListener('click', async () => {
-    render(await send(MSG.recheck));
+    let st;
+    try {
+      st = await send(MSG.recheck);
+    } catch (_e) {
+      st = { state: 'failed', error: 'network' }; // ⛔ 点了没反应比报错更糟
+    }
+    render(st);
   });
   mReaddress.addEventListener('click', () => {
     menu.open = false;
@@ -520,7 +537,7 @@ export async function mountApp(root, host) {
   });
   mDisconnect.addEventListener('click', async () => {
     menu.open = false;
-    await send(MSG.disconnect);
+    await send(MSG.disconnect).catch(() => {});
     addr.value = '';
     if (inQ) inQ.value = '';
     if (selTag) selTag.value = '';
@@ -532,7 +549,7 @@ export async function mountApp(root, host) {
     if (menu.open && !menu.contains(e.target)) menu.open = false;
   });
   /**
-   * 0.1.5：Esc 的统一口径（自内向外）—— 弹层 > 菜单 > 设置视图返主视图。
+   * Esc 的统一口径（自内向外）—— 弹层 > 菜单 > 设置视图返主视图。
    * ⚠️ 焦点在输入框/下拉里时不接管（那时用户按 Esc 是想取消这次输入，不是想离开这一屏）。
    */
   document.addEventListener('keydown', (e) => {
@@ -575,8 +592,8 @@ export async function mountApp(root, host) {
   }
   btnFormToggle.addEventListener('click', () => {
     setFormOpen(true);
-    // ⭐ 侧边栏没有 initForm（那是 popup 的预填路径）⇒ 这里必须自己拉一次标签，
-    //   否则下拉里一个选项都没有（0.1.7 真机反馈「新建网址的标签下拉是空白的」）。
+    // ⚠️ 侧边栏不走 initForm（那是 popup 的预填路径）⇒ 必须在这里补一次标签，
+    //   否则下拉里一个选项都没有 —— 不在这一层补，它就是永远空白。
     // 每次展开都刷：别处新建的标签也能立刻选到。
     fillTagOptions();
     inUrl.focus();
@@ -593,22 +610,26 @@ export async function mountApp(root, host) {
     submitBtn.disabled = true;
     submitBtn.textContent = BM_TEXT.save;
     picks.textContent = '';
+    suggest.textContent = '';
     inNewTag.value = '';
-    send(MSG.pageContext).then((c) => {
-      if (c && c.url) {
-        inTitle.value = c.title || '';
-        inUrl.value = c.url;
-        inUrl.title = c.url;
-        submitBtn.disabled = false;
-      } else {
-        formMsgShow(BM_TEXT.urlEmpty, false);
-      }
-    });
+    send(MSG.pageContext)
+      .catch(() => null) // SW 不可达 ⇒ 与「这页没有网址」同一落点，⛔ 不留一个永久禁用的按钮
+      .then((c) => {
+        if (c && c.url) {
+          inTitle.value = c.title || '';
+          inUrl.value = c.url;
+          inUrl.title = c.url;
+          submitBtn.disabled = false;
+          renderSuggestions(); // 预填完立刻给「同站点用过的标签」
+        } else {
+          formMsgShow(BM_TEXT.urlEmpty, false);
+        }
+      });
     fillTagOptions();
   }
 
   async function fillTagOptions() {
-    const r = await send(MSG.bmList, {});
+    const r = await send(MSG.bmList, {}).catch(() => null);
     // ⚠️ 拿不到列表（没连上 / 请求失败）时也要把下拉重置成一句可读的话，
     //    别留一个空白下拉让人以为功能坏了。
     const tags = r && r.ok && Array.isArray(r.tags) ? r.tags : [];
@@ -628,6 +649,60 @@ export async function mountApp(root, host) {
     }
   }
 
+  /**
+   * 功能：给没写协议的网址补协议 —— 用户多半直接粘 `example.com/x`。
+   * 判据照 `lib/address.js`：IP / IPv6 / localhost 走 http，其余走 https；
+   * ⛔ 已经写了协议的一律不动（http / https / 其它都原样交出去，由服务端判）。
+   * @param {string} raw
+   * @returns {string}
+   */
+  function withScheme(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return '';
+    if (/^[a-z][a-z0-9+.-]*:/i.test(s)) return s;
+    if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?(\/|$)/.test(s)) return 'http://' + s;
+    if (/^\[[0-9a-f:.]+\]/i.test(s)) return 'http://' + s;
+    if (/^localhost(:\d+)?(\/|$)/i.test(s)) return 'http://' + s;
+    return 'https://' + s;
+  }
+
+  /**
+   * 功能：给一个网址找「同一站点下用过的标签」。
+   * ⚠️ 只在已加载的列表里找，⛔ 不额外发请求；列表正被筛选时建议也跟着窄，属预期。
+   * @param {string} url
+   * @returns {string[]} 按出现次数降序，最多 3 个
+   */
+  function suggestTagsFor(url) {
+    const host = hostOf(url);
+    if (!host) return [];
+    const count = new Map();
+    for (const it of lastItems) {
+      if (hostOf(it.url) !== host) continue;
+      for (const n of it.tag_names || []) count.set(n, (count.get(n) || 0) + 1);
+    }
+    return [...count.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([n]) => n);
+  }
+
+  /** 功能：重画建议行 —— 虚线药丸＝「这个站点你用过」，点一下就变成已选。 */
+  function renderSuggestions() {
+    suggest.textContent = '';
+    const url = inUrl.value.trim();
+    if (!url) return;
+    const names = suggestTagsFor(url).filter((n) => !selected.has(n));
+    if (!names.length) return;
+    suggest.appendChild(el('span', 'suggest-label', BM_TEXT.suggest));
+    for (const name of names) {
+      const b = el('button', 'pick sug', name);
+      b.type = 'button';
+      b.title = BM_TEXT.suggestTitle;
+      b.addEventListener('click', () => addPick(name));
+      suggest.appendChild(b);
+    }
+  }
+
   function addPick(name) {
     name = String(name || '').trim();
     if (!name || selected.has(name)) return;
@@ -640,8 +715,10 @@ export async function mountApp(root, host) {
     b.addEventListener('click', () => {
       selected.delete(name);
       b.remove();
+      renderSuggestions(); // 移掉之后它应该回到「建议」里
     });
     picks.appendChild(b);
+    renderSuggestions();
   }
 
   // 下拉选已有：先重置再挂——不重置「再选同一枚」change 不触发（网页端踩过的坑）
@@ -649,6 +726,18 @@ export async function mountApp(root, host) {
     const v = tagSel.value;
     tagSel.value = '';
     if (v) addPick(v);
+  });
+
+  // 网址失焦自动补协议；输入时防抖重算「同站点用过的标签」
+  inUrl.addEventListener('blur', () => {
+    const v = withScheme(inUrl.value);
+    if (v !== inUrl.value) inUrl.value = v;
+    renderSuggestions();
+  });
+  let sugTimer = null;
+  inUrl.addEventListener('input', () => {
+    clearTimeout(sugTimer);
+    sugTimer = setTimeout(renderSuggestions, 300);
   });
 
   function commitNew() {
@@ -667,7 +756,8 @@ export async function mountApp(root, host) {
 
   /** 功能：提交收藏（popup 表单与侧边栏折叠表单共用一条提交路径）。 */
   async function submitBookmark() {
-    const url = inUrl.value.trim();
+    const url = withScheme(inUrl.value);
+    if (url !== inUrl.value) inUrl.value = url; // 补好的协议写回去，用户看得见
     if (!url) return formMsgShow(BM_TEXT.urlEmpty, false);
     submitBtn.disabled = true;
     submitBtn.textContent = BM_TEXT.saving;
@@ -678,14 +768,18 @@ export async function mountApp(root, host) {
         .map((s) => s.trim())
         .filter(Boolean)
     );
-    const r = await send(MSG.bmCreate, { url, title: inTitle.value.trim(), tags });
+    const r = await send(MSG.bmCreate, { url, title: inTitle.value.trim(), tags }).catch(() => ({
+      ok: false,
+      code: 'network',
+    }));
     if (r && r.ok) {
       if (isPopup) {
-        submitBtn.textContent = BM_TEXT.saved; // 差异 4：新增成功才自动关（0.1.3 规则）
+        submitBtn.textContent = BM_TEXT.saved; // 差异 4：新增成功才自动关
         setTimeout(() => window.close(), 1200);
       } else {
         selected.clear();
         picks.textContent = '';
+        suggest.textContent = '';
         inTitle.value = '';
         inUrl.value = '';
         inNewTag.value = '';
@@ -733,17 +827,20 @@ export async function mountApp(root, host) {
   // ================= 列表（两形态共用；popup 截 20 条） =================
   let searchTimer = null;
   let curTag = '';
-  let lastTags = []; // 0.1.5：最近一次列表带回的分类（编辑行的下拉选项）
-  let curBase = ''; // 0.1.5 E3：「去网页解锁」要打开的地址（连接成功时落一次）
-  let vaultFor = null; // 0.1.5 E3：当前弹层对应的那条收藏（重试用）
+  let lastTags = []; // 最近一次列表带回的分类（编辑行的下拉选项）
+  let lastItems = []; // 最近一次列表的条目（按站点建议标签用）
+  let curBase = ''; // 「去网页解锁」要打开的地址（连接成功时落一次）
+  let vaultFor = null; // 当前弹层对应的那条收藏（重试用）
 
   function relTime(t) {
     if (typeof t !== 'string' || t.length < 10) return { short: '', full: t || '' };
     const full = t;
     const d = new Date(t.replace(' ', 'T'));
     const now = new Date();
-    const day = (x) => Math.floor((x && x.getTime ? x.getTime() : 0) / 86400000);
-    const diff = day(now) - day(d);
+    // ⚠️ 按**本地日**取零点再比：⛔ 不能用 getTime()/86400000（那是 UTC 日，
+    //    UTC+8 的 00:00–08:00 会被算成「昨天」，白天又对）。
+    const day = (x) => (x && x.getTime ? new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime() : 0);
+    const diff = Math.round((day(now) - day(d)) / 86400000);
     let short = t.slice(5, 10);
     if (diff === 0) short = BM_TEXT.today;
     else if (diff === 1) short = BM_TEXT.yesterday;
@@ -769,25 +866,30 @@ export async function mountApp(root, host) {
   async function loadList(allowCache) {
     const q = inQ ? inQ.value.trim() : '';
     const tag = curTag;
-    if (allowCache && !q && !tag) {
-      const c = await send(MSG.bmCacheGet);
-      if (c && c.items) {
-        renderList(c);
+    try {
+      if (allowCache && !q && !tag) {
+        const c = await send(MSG.bmCacheGet).catch(() => null);
+        if (c && c.items) {
+          renderList(c);
+          return;
+        }
+        listState('loading'); // 骨架
+      }
+      const r = await send(MSG.bmList, { q, tag });
+      if (!(r && r.ok)) {
+        listState('error');
         return;
       }
-      listState('loading'); // 骨架
+      renderList(r);
+      if (!q && !tag && !isPopup) await send(MSG.bmCacheSet, { items: r.items, total: r.total, tags: r.tags }).catch(() => {});
+    } catch (_e) {
+      listState('error'); // SW 不可达 / 超时 ⇒ 落到「可重试」的失败态，⛔ 不留骨架屏
     }
-    const r = await send(MSG.bmList, { q, tag });
-    if (!(r && r.ok)) {
-      listState('error');
-      return;
-    }
-    renderList(r);
-    if (!q && !tag && !isPopup) await send(MSG.bmCacheSet, { items: r.items, total: r.total, tags: r.tags });
   }
 
   function renderList({ items, total, tags }) {
-    lastTags = Array.isArray(tags) ? tags : []; // 0.1.5：编辑行的「已有标签」下拉从这里取
+    lastTags = Array.isArray(tags) ? tags : []; // 编辑行的「已有标签」下拉从这里取
+    lastItems = Array.isArray(items) ? items : []; // 建议标签的数据源
     listTotal.textContent = BM_TEXT.totalOf(total ?? items.length);
     if (selTag) {
       const keep = curTag;
@@ -812,6 +914,7 @@ export async function mountApp(root, host) {
     const shown = isPopup ? items.slice(0, 20) : items; // 差异 5：popup 最近 20 条
     if (!shown.length) {
       listState('empty', BM_TEXT.listEmpty);
+      renderSuggestions();
       return;
     }
     listState('ready');
@@ -831,7 +934,7 @@ export async function mountApp(root, host) {
       open.type = 'button';
       open.title = '打开';
       open.addEventListener('click', () => chrome.tabs.create({ url: it.url }));
-      const edit = el('button', 'act-btn', '✎'); // 0.1.5 E2
+      const edit = el('button', 'act-btn', '✎');
       edit.type = 'button';
       edit.title = BM_TEXT.edit;
       edit.setAttribute('aria-label', BM_TEXT.edit);
@@ -842,7 +945,7 @@ export async function mountApp(root, host) {
       del.addEventListener('click', () => confirmDelete(li, it));
       act.append(open, edit, del);
       top.append(a);
-      // 0.1.5 E3：绑定了密码的**常显**一颗 🔑（未绑定什么都不画、不占位）
+      // 绑定了密码的**常显**一颗 🔑（未绑定什么都不画、不占位）
       if (it.vault_entry_id != null && it.vault_entry_id !== '') {
         const k = el('button', 'key-btn', VAULT_TEXT.key);
         k.type = 'button';
@@ -864,6 +967,7 @@ export async function mountApp(root, host) {
       ul.appendChild(li);
     }
     maybeShowHint();
+    renderSuggestions(); // 列表变了 ⇒ 同站点的建议标签也跟着变
   }
 
   function confirmDelete(li, it) {
@@ -903,7 +1007,7 @@ export async function mountApp(root, host) {
     }
   }
 
-  // ================= 0.1.5 E2：行内编辑（不弹全屏层 —— 侧边栏太窄） =================
+  // ================= 行内编辑（不弹全屏层 —— 侧边栏太窄） =================
 
   /** 功能：编辑行的已有标签下拉（选项来自最近一次列表带回的分类）。 */
   function fillPickerOptions(sel) {
@@ -923,7 +1027,7 @@ export async function mountApp(root, host) {
 
   /**
    * 功能：标签选择器（下拉选已有 + 新标签输入 → 药丸，点药丸移除），编辑行专用。
-   * ⚠️ 与收藏表单那块**刻意不合并**：表单那条是 0.1.3 真机验过的路径，收尾单不顺手重构它
+   * ⚠️ 与收藏表单那块**刻意不合并**：表单那条是走过真机验证的路径，不顺手重构它
    *    （禁止清单 7）；两份都较短，重复成本低于回归风险。
    * @param {string[]} initial - 初始标签名
    * @returns {{node:HTMLElement, tags:()=>string[]}}
@@ -1100,7 +1204,12 @@ export async function mountApp(root, host) {
       if (r && r.code === 'bookmark_gone') {
         err.textContent = BM_TEXT.editGone;
         err.hidden = false;
-        setTimeout(() => loadList(false), 1200); // 这条没了 ⇒ 刷新列表对齐
+        // ⚠️ 1.2 s 后**先 close() 再刷新**：close() 不跑 ⇒ document 上的 Esc 监听永远摘不掉
+        //    （列表重建会丢掉这一行 DOM，闭包却还挂在 document 上，且会 stopPropagation 吞掉全局 Esc）
+        setTimeout(() => {
+          close();
+          loadList(false);
+        }, 1200);
         return;
       }
       err.textContent = BM_TEXT.editFail;
@@ -1108,7 +1217,7 @@ export async function mountApp(root, host) {
     });
   }
 
-  // ================= 0.1.5 E3：密码库只读（明文只在内存/DOM 里过一遍） =================
+  // ================= 密码库只读（明文只在内存/DOM 里过一遍） =================
 
   /** 功能：关弹层 —— ⭐ 明文必须立刻离开 DOM（⛔ 只藏起来留着 textContent 等被读）。 */
   function closeVault() {
@@ -1154,7 +1263,7 @@ export async function mountApp(root, host) {
 
   /** 功能：复制（先 clipboard API，失败退 execCommand —— ⛔ 不为它加 clipboardWrite 权限，注册新权限会让已装扩展被停用）。 */
   async function copyText(text, btn) {
-    let done = false;
+    let done;
     try {
       await navigator.clipboard.writeText(text);
       done = true;
@@ -1242,7 +1351,7 @@ export async function mountApp(root, host) {
       }
       paintVaultEntry(r.entry);
     } catch (_e) {
-      paintVaultMsg(VAULT_TEXT.fail, true); // ⛔ 任何异常都要有落点（0.1.4「一直连接中」的教训）
+      paintVaultMsg(VAULT_TEXT.fail, true); // ⛔ 任何异常都要有落点（「一直连接中」就是没有落点）
     }
   }
 
@@ -1274,9 +1383,14 @@ export async function mountApp(root, host) {
     );
   }
 
-  // popup「查看」跳转：滚动并高亮那条（UI↔UI 消息，不经 SW）
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg && msg.type === 'bm:highlight' && msg.url) highlightUrl(msg.url);
+  // popup「查看」跳转：滚动并高亮那条（UI↔UI 消息，不经 SW）。
+  // ⚠️ 必须回执：popup 靠「有没有人接」判断侧边栏是否已就绪（没人接就 300 ms 后重发）。
+  //    只处理不回应 ⇒ 发送方的 promise 会 reject，重试虽然能跑但每次都白等 4 发。
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg && msg.type === 'bm:highlight' && msg.url) {
+      highlightUrl(msg.url);
+      sendResponse({ ok: true });
+    }
   });
   async function highlightUrl(url) {
     show('main');
@@ -1363,7 +1477,7 @@ export async function mountApp(root, host) {
     if (e.key === 'Enter') sConnect.click();
   });
   sDisconnect.addEventListener('click', async () => {
-    await send(MSG.disconnect);
+    await send(MSG.disconnect).catch(() => {});
     sAddr.value = '';
     sState.hidden = true;
     sUser.hidden = true;
@@ -1376,8 +1490,8 @@ export async function mountApp(root, host) {
     });
   });
   /**
-   * 功能：从设置视图回收藏主视图（0.1.5 E1 的语义口径）——设置是**内嵌视图**，不是标签页，
-   *      所以 ⛔ 不碰 `window.close()`（那是 0.1.3 整页设置时代的做法）。
+   * 功能：从设置视图回收藏主视图 —— 设置是**内嵌视图**，不是标签页，
+   *      所以 ⛔ 不碰 `window.close()`（那是整页设置时代的做法）。
    */
   async function backToMain() {
     let st;
@@ -1412,7 +1526,7 @@ export async function mountApp(root, host) {
       b.appendChild(el('span', 'cap', t.label));
       b.addEventListener('click', () => onPick(t.v));
       b.addEventListener('keydown', (e) => {
-        // 卡片 ←/→ 可切（§九.8 口径保留）
+        // 卡片 ←/→ 可切
         const dir = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
         if (!dir) return;
         e.preventDefault();
@@ -1457,13 +1571,22 @@ export async function mountApp(root, host) {
 
   // ================= 启动 =================
   // R4 红线：SW 每次真握手，重启后不会假装已连接
-  const st0 = await send(MSG.status);
+  // ⚠️ 这一发**必须有兜底**：send() 30 s 超时会 reject，而所有卡片初始都是 hidden
+  //    ⇒ 一抛就整页空白、连错都不报（与「一直连接中」同源，只是换了个位置）。
+  let st0;
+  try {
+    st0 = await send(MSG.status);
+  } catch (_e) {
+    st0 = { state: 'failed', error: 'network' };
+  }
   render(st0);
-  loadUpdate(); // 0.1.6：新版本气泡，不 await —— 检测慢也不挡界面
+  loadUpdate(); // 新版本气泡，不 await —— 检测慢也不挡界面
   // 自动识别：只在 popup（activeTab 随图标点击授予；侧边栏没有手势，探了也白探）
   if (isPopup) {
-    send(MSG.detect).then((d) => {
-      if (d && d.origin && !addr.value) addr.value = d.origin;
-    });
+    send(MSG.detect)
+      .catch(() => null)
+      .then((d) => {
+        if (d && d.origin && !addr.value) addr.value = d.origin;
+      });
   }
 }

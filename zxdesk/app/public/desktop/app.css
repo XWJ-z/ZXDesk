@@ -38,6 +38,21 @@
   --radius-sm: 8px;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 4px 16px rgba(16, 24, 40, 0.06);
   --shadow-lg: 0 8px 32px rgba(16, 24, 40, 0.18);
+  /* ⭐⭐ 0.9.7（老大 2026-11-04 平板截图：弹窗塌了 / 团队协作下半屏空着）：
+     **这一份 1vh 与 1vw 的像素标尺**，由 `desktop/app.js` 的 `pinShellHeight()` 覆盖成真 px。
+     为什么非有不可：真机平板（Android 16 WebView）里 `100vh` 会被解析成 **0**——
+     同样的缺陷上一版已经实测证实过（`.app` 的 computed height 是 `0px`，见文件开头 `--app-vh` 那段）。
+     `.app` 靠 `--app-vh` 救回来了，**但这一份 CSS 里还有十几处拿 `vh` 限高**，
+     它们各自塌掉，表现各不相同、看着像三个不相干的 bug：
+       · `.modal-card` 的 `max-height: 88vh` ＝ 0 ⇒ **所有弹窗白底不可见**、内容直接压在页面上；
+       · `#teamwork-view` 的 `calc(100vh - 40px)` ＝ -40px（无效值）⇒ 回落到 `min-height: 460px`，
+         团队协作屏下半截空着；
+       · 各列表的 `max-height: NNvh` ＝ 0 ⇒ 列表撑不开。
+     ⇒ 全文件**不再直接写 `vh` / `dvh`**，一律 `calc(var(--vh) * NN)` / `calc(var(--vw) * NN)`。
+     ⚠️ 回落值给 `1vh` / `1vw`：JS 没跑到时两者等价，正常浏览器里行为**逐像素不变**。
+     ⛔ 别把回落到 `1vh` 当成"反正会坏"就删掉——正常环境下这是正确的比例尺。 */
+  --vh: 1vh;
+  --vw: 1vw;
   /* ⭐ 0.8.51：**四级切换动画**的时长与缓动 —— 值只在 `core/tokens.css` 一处（`--zx-dur-1..4` /
      `--zx-ease`），这里只做本端别名（与 `--brand` 那一批同一条纪律）。
      ⚠️ 用的时候一律写 `var(--dur-2)` 这种别名，⛔ 别再写 `0.2s` 字面量 —— 「同一件事四个时长」
@@ -61,8 +76,24 @@
 }
 html,
 body {
-  height: 100%;
+  /* ⭐ 0.9.6：高度改由 JS 钉成 px（`--app-vh`，见 `desktop/app.js` 的 `pinShellHeight()`）。
+     为什么：真机平板（Android 16 WebView）实测 `html` 有 680 而 `body` 是 **0**，
+     `.app` 的 `height/min-height: 100vh` 也一起算成 0 —— 整页内容挤在顶上两百多像素、下面全空。
+     `100vh` 与 `100%` 在这类内嵌 WebView 里都可能落空（视口在页面加载时还没定下来），
+     而**像素值不会**。这个办法手机端已经在用（`mobile/app.css` 的 `--app-vh`），只是桌面版没做。
+     ⚠️ 回落保留：JS 还没跑时用 `100%` / `100vh`，跑起来就换成 px。 */
+  height: var(--app-vh, 100%);
   margin: 0;
+  /* ⭐⭐ 0.9.7（老大 2026-11-04 平板截图「页面可以整体上下滑动」）：**整页锁死不滚**。
+     桌面版是「外壳固定 + 侧栏自己滚 + 主区自己滚」的布局（`.project-list` / `.main` 各带
+     `overflow-y: auto`），文档本身不该有一像素的滚动。可平板上一拖整页就跑，侧栏顶部连品牌一起滑出屏幕。
+     成因是「溢出可见」：`.app` 高度虽然钉死了，但里面任何一处内容高出容器（矮窗口下侧栏最容易），
+     浏览器都会把它算进**文档滚动区**——`.app` 自己不滚、文档替它滚。
+     `overflow: hidden` 在文档这一层把滚动区截断；内部两个滚动容器照旧各滚各的，内容一样够得着。
+     ⛔ 别改成 `overflow: visible`：那就退回「整页跟着手指走」。
+     ⚠️ 只挂 html/body，**不挂 `.app`** —— `.app` 里还有绝对定位的弹层（下拉、拖拽浮层），
+        给它 `overflow: hidden` 会把浮层裁掉。 */
+  overflow: hidden;
 }
 body {
   background: var(--bg);
@@ -94,7 +125,16 @@ body {
      窄屏时内容会把列撑宽、把整页顶出横向滚动条。 */
   grid-template-columns: var(--side-w) minmax(0, 1fr);
   --side-w: 280px;
-  height: 100vh;
+  /* ⭐ 0.9.6：三个都要有，缺一个平板就塌。
+     ① `grid-template-rows: 1fr` —— 只写 columns 时行高是默认的 `auto`（等于子项内容高）。
+        平板上内容少，整块只占两百多像素，下面全空；手机上内容本来就满屏，所以一直没露。
+     ② `min-height` —— 与下面 `height` 同一个来源，双保险：只写 `height` 时若被别处覆盖就没下限了。
+     ③ 高度走 `--app-vh`（JS 钉成的 px，见 `desktop/app.js` 的 `pinShellHeight()`），
+        ⛔ 不用 `100vh`：真机平板实测 `body` 与 `.app` 的 `100vh` 都算成了 0。
+     ⚠️ 下面 `@media (max-width: 720px)` 那条会自己写 `grid-template-rows: auto 1fr`，不受影响。 */
+  grid-template-rows: 1fr;
+  height: var(--app-vh, 100vh);
+  min-height: var(--app-vh, 100vh);
   transition: grid-template-columns 0.18s;
 }
 /* 收起：侧栏缩成 44px 窄栏（只留那颗开关），内容区跟着变宽 */
@@ -346,7 +386,7 @@ body {
      窗口里**恒取下限 460**（52vh 根本够不着），页面下方总空着一条，而每格只有 474×190 ——
      2.5:1 的扁条，一条任务 37px ⇒ 一屏只看得到 4 行。
      ⇒ 下限抬到 520、比例抬到 64vh：同一窗口下每格约 474×245（多看一条半），窗口越高框越大。 */
-  height: clamp(520px, 64vh, 880px);
+  height: clamp(520px, calc(var(--vh) * 64), 880px);
   /* ⭐ 0.8.9 修订：「紧急 / 重要 / 不重要 / 不紧急 这个不要放到线上，
      可以突出去显示」—— 上下各留一条**格子之外的窄白**，纵轴标（紧急 / 不紧急）落进去；
      横轴标则由下面 `.qa-axis-x` 的左右 inset 让到轴线两端的外側。
@@ -490,7 +530,7 @@ body {
     --qa-gutter: 26px;
   }
   .qa-plot {
-    height: clamp(400px, 60vh, 560px);
+    height: clamp(400px, calc(var(--vh) * 60), 560px);
   }
   .qa-lab {
     font-size: 11px;
@@ -1144,8 +1184,8 @@ body {
   background: #fff;
   border-radius: 16px;
   width: 460px;
-  max-width: calc(100vw - 32px);
-  max-height: 88vh;
+  max-width: calc(var(--vw) * 100 - 32px);
+  max-height: calc(var(--vh) * 88);
   display: flex;
   flex-direction: column;
   box-shadow: var(--shadow-lg);
@@ -1174,7 +1214,7 @@ body {
    `max-height` 下内容一少卡片就矮回去，那一屏的「三段式」（顶固定 / 中间滚 / 底部钉住）也就不成立了。
    ⚠️ 与 `wide` 一样由 `closeModal()` 还原，别让它留给下一个弹窗。 */
 .modal-tall .modal-card {
-  height: 88vh;
+  height: calc(var(--vh) * 88);
 }
 .modal-tall .modal-body {
   flex: 1;
@@ -3117,7 +3157,7 @@ body {
   .app {
     grid-template-columns: 1fr;
     grid-template-rows: auto 1fr;
-    height: 100dvh;
+    height: var(--app-vh, 100dvh);
   }
   .sidebar {
     border-right: none;
@@ -3194,7 +3234,7 @@ body {
     width: 100%;
     max-width: none;
     border-radius: 16px 16px 0 0;
-    max-height: 90dvh;
+    max-height: calc(var(--vh) * 90);
   }
   .timeline {
     padding: 10px 10px;
@@ -3586,7 +3626,7 @@ kbd {
   position: sticky;
   top: 0;
   /* 窗口矮时菜单自己滚，别被切掉最后几项 */
-  max-height: calc(100vh - 40px);
+  max-height: calc(var(--app-vh, 100vh) - 40px);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -3699,7 +3739,7 @@ kbd {
 }
 .settings-body .set-nav {
   top: calc(var(--set-head-h) + 8px);
-  max-height: calc(100vh - var(--set-head-h) - 56px);
+  max-height: calc(var(--app-vh, 100vh) - var(--set-head-h) - 56px);
 }
 /* 右栏：内容宽度有上限（表格与说明超过这个宽度就不好读了），左菜单固定宽度。
     ⚠️ 设置页质检：780 → 900 —— `.view` 本身封顶 1080，减去左菜单 176 与 22 的间距
@@ -4854,8 +4894,8 @@ kbd {
 
 /* ---- 弹窗内容 ---- */
 .tt-modal-card {
-  width: min(860px, 94vw);
-  max-height: 88vh;
+  width: min(860px, calc(var(--vw) * 94));
+  max-height: calc(var(--vh) * 88);
   display: flex;
   flex-direction: column;
 }
@@ -5570,7 +5610,7 @@ label.tt-field > select {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 52vh;
+  max-height: calc(var(--vh) * 52);
   overflow-y: auto;
 }
 .sf-item,
@@ -7074,11 +7114,13 @@ label.tt-field > select {
         别折叠、别做成 hover 才出现、也别在别处再摆一份。
      ③ **当前会话要有明确高亮**（`.teamwork-row.conv.on`）—— 左栏同时列着好友与会话，
         没有高亮就不知道右边这条对话是谁的。
-   ⚠️ 这一屏的高度用 `calc(100vh - 40px)`（`.main` 上下各 20px 内边距）：左右两栏**各自滚动**，
-      不给定高的话 `.teamwork-body` 会被内容撑开，输入框被顶到屏幕外面去。 */
+   ⚠️ 这一屏的高度用 `calc(var(--vh) * 100 - 40px)`（`.main` 上下各 20px 内边距）：左右两栏**各自滚动**，
+      不给定高的话 `.teamwork-body` 会被内容撑开，输入框被顶到屏幕外面去。
+      ⭐ 0.9.7：这里原来是 `calc(100vh - 40px)` —— 真机平板上 `100vh` 算成 0 ⇒ 整条算成 **-40px**
+      （无效值）⇒ 高度退回 `min-height: 460px`，屏幕下半截空着。改用 `--vh` 标尺后才有真高度。 */
 #teamwork-view {
   max-width: 1200px;
-  height: calc(100vh - 40px);
+  height: calc(var(--vh) * 100 - 40px);
   min-height: 460px;
   display: flex;
   flex-direction: column;
@@ -7931,7 +7973,7 @@ button.teamwork-row.conv:hover .teamwork-row-plus,
   color: #fff;
 }
 .tw-pick-list {
-  max-height: 52vh;
+  max-height: calc(var(--vh) * 52);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -8042,8 +8084,8 @@ button.teamwork-row.conv:hover .teamwork-row-plus,
   cursor: zoom-out;
 }
 .tw-imgbox-img {
-  max-width: 92vw;
-  max-height: 92vh;
+  max-width: calc(var(--vw) * 92);
+  max-height: calc(var(--vh) * 92);
   border-radius: 10px;
   box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.8);
 }
@@ -8069,7 +8111,7 @@ button.teamwork-row.conv:hover .teamwork-row-plus,
      ⚠️ 刻意**没有** `align-items: start`：它会让两项只有内容那么高 ⇒ 右内容区滚不起来。
      ⚠️ 短内容那页（好友设置 / 回收站）底下留一片空白是**有意的**，换来的是「切页不跳」。 */
   width: 100%;
-  height: min(64vh, 600px);
+  height: min(calc(var(--vh) * 64), 600px);
 }
 .teamwork-set-menu {
   display: flex;
@@ -8336,8 +8378,29 @@ button.teamwork-row.conv:hover .teamwork-row-plus,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* ⭐⭐ 2026-11-05（老大手机截图：「开启新对话这个按键太不协调」）：
+   两端**同一套口径** —— 这一行是「一句小号灰字 ＋ 一颗描边胶囊」，按钮把行高撑起来、
+   左边那句进度被迫截断，而且胶囊看着像主操作（实际是「重置会话分段」，次要且低频）。
+   ⇒ 降成**文字按钮**：透明底、无边框、品牌色、与左边那句同字号。
+   ⚠️ 热区不缩：上下各 10px 内边距（正文 18px）＝ 38px，与本屏其它按钮同档；
+     再用等量负 margin 抵消，⛔ 不把这一行撑高。 */
 .ai-thread-head .ai-btn {
   flex: none;
+  min-height: 0;
+  padding: 10px 0 10px 10px;
+  margin: -10px 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--brand);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+/* 桌面有 hover：文字按钮靠下划线给反馈（⛔ 不画底色，理由同手机端）。 */
+.ai-thread-head .ai-btn:hover {
+  color: var(--brand);
+  background: transparent;
+  text-decoration: underline;
 }
 .ai-thread-head + .ai-note {
   margin-top: 6px;
@@ -9011,7 +9074,7 @@ textarea.ai-composer-input {
   flex-direction: column;
   gap: 10px;
   width: min(760px, 100%);
-  max-height: 86vh;
+  max-height: calc(var(--vh) * 86);
   overflow: auto;
   padding: 14px;
   border-radius: 12px;
@@ -11108,7 +11171,7 @@ button.cal-row:hover {
   display: grid;
   grid-template-columns: 172px minmax(0, 1fr);
   gap: 18px;
-  height: min(62vh, 560px);
+  height: min(calc(var(--vh) * 62), 560px);
 }
 .lg-kinds {
   display: flex;
@@ -11313,7 +11376,7 @@ button.cal-row:hover {
   border-radius: var(--radius-sm);
 }
 .lg-txlist {
-  max-height: 34vh;
+  max-height: calc(var(--vh) * 34);
   overflow-y: auto;
 }
 .lg-txrow {
@@ -14162,7 +14225,7 @@ button.cal-row:hover {
   color: var(--text-3);
 }
 .lg-sres {
-  max-height: 46vh;
+  max-height: calc(var(--vh) * 46);
   overflow-y: auto;
 }
 .lg-sres-row {
@@ -15272,7 +15335,13 @@ button.cal-row:hover {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 12px;
+  /* ⚠️⭐ 2026-11-05（「待排期-转为任务：点击无反应，请你排查手机端和电脑端」）：
+     底部 84px 是给右下角那颗 54px 悬浮 ＋（`.btn-fab-float`：距右 32 / 距底 28）**让位**的。
+     待排期是**最后一块**，滚到底时末行的【转为任务】/ ✕ 正好落在 ＋ 的圆盘底下 ——
+     点下去命中的是 ＋（弹新建任务），或者落在圆角外面**什么都没发生**。
+     手机端 0.8.54 就是这么修过来的（`.teamwork-board-body` 的 `padding-bottom: 84px`，
+     见 13-决策记录 §138③），当时漏了电脑端。⛔ 别再改回 `padding: 12px`。 */
+  padding: 12px 12px 84px;
   overflow-y: auto;
   background: var(--bg);
 }

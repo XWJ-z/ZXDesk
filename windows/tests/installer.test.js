@@ -214,12 +214,12 @@ test('make-setup：编译前先验应用目录与图标，产物核对 PE/体积
   assert.match(src, /makensis/, '要调 makensis');
   assert.match(src, /PE\\0\\0|PE\\\\0\\\\0/, '产物要是 PE');
   assert.match(src, /mb < 80/, '体积过小视为空壳');
-  assert.match(src, /writeFileSync\(shaFile, `\$\{hash\}  \$\{path\.basename\(outFile\)\}\\n`/, 'sha 两空格格式');
+  assert.match(src, /writeFileSync\(shaFile, `\$\{hash\} {2}\$\{path\.basename\(outFile\)\}\\n`/, 'sha 两空格格式');
 });
 
-test('package.json：0.2.2 且注册 dist:setup', () => {
+test('package.json：版本是 semver 且注册 dist:setup', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-  assert.equal(pkg.version, '0.2.2');
+  assert.match(pkg.version, /^\d+\.\d+\.\d+$/);
   assert.equal(pkg.scripts['dist:setup'], 'node build/make-setup.js');
 });
 

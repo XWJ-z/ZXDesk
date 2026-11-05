@@ -1,5 +1,7 @@
 /**
- * 飞牛的 errno → 用户能看懂的话（移植自 `FnLoginClient.kt` 的 `fnErrnoMessage`）。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：errno.js
+ * 职责：飞牛的 errno → 用户能看懂的话（移植自 `FnLoginClient.kt` 的 `fnErrnoMessage`）
  * 文案照抄 Android：同一个错误在两端说法要一致，否则「照 Android 一期」这句话就落空了。
  */
 

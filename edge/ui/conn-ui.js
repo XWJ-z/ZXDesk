@@ -1,20 +1,22 @@
 /**
- * 功能：UI 侧共享的连接交互 —— 发消息、连接流程、授权并连接、状态轮询。
+ * conn-ui.js —— UI 侧共享的连接交互（发消息 / 连接流程 / 授权并连接 / 状态轮询）
  *
- * ⭐ 口径（0.1.4 真机反馈「设置也是侧边栏或者弹窗，而不是全屏幕进入」）：
- *    设置不是独立标签页，而是 popup/侧边栏里的一个视图（app.js cardSettings），
- *    `permissions.request` 的授权点在本模块 —— 依然是手势内调用（点按钮触发），
- *    手势丢失时回 `need_settings` 让用户在设置视图再点一次。
+ * 功能：`send` 给消息加超时；`connectFlow` 走「已授权就直接连」；
+ *      `authorizeAndConnect` 在用户手势里申请权限再连接；`pollWhile` 在登录等待期间收割状态。
  *
- * ⭐ 0.1.4 真机修「一直连接中，连不上 NAS」（2026-10-24 23:5x）——两条硬伤：
- *    1. `originsFor` 只回 `{origins}`，这里却读 `o.p.kind` ⇒ 连接第一行 TypeError，
- *       异常没人接 ⇒ UI 永远停在「连接中…」。现在 `p` 由 address.js 一并带回，且本模块
- *       **任何异常都收敛成确定状态**（failed/need_settings），⛔ 不再有「无限转圈」。
- *    2. 0.1.3 的「授权后等 300ms 再 connect」在 0.1.4 迁设置页时被删了，改成只靠 SW 的
- *       `permissions.onAdded` 续跑 —— 权限传播延迟下那一跑必败。现在**回归自己跑**
- *       （0.1.3 真机验证过的路径），onAdded 只作为「popup 在授权中被关掉」的兜底；
- *       用 `takePending` 取走即删做**防双跑**。
- * ⛔ UI 不发任何网络请求（分层纪律 1）——解析用纯函数 `lib/address.js`，其余全走消息。
+ * ⚠️ 设置不是独立标签页，而是 popup / 侧边栏里的一个视图（`app.js` 的 cardSettings）。
+ *    `permissions.request` 的授权点在本模块，必须在点击事件里发起；
+ *    手势丢失时回 `need_settings`，让用户在设置视图再点一次。
+ * ⚠️ 本模块**任何异常都收敛成确定状态**（failed / need_settings），⛔ 不能有「无限转圈」。
+ * ⚠️ 授权成功后要自己再发一次 `conn:start`：只靠 SW 的 `permissions.onAdded` 续跑，
+ *    在权限传播延迟时会失败。onAdded 只作为「popup 在授权中被关掉」的兜底，
+ *    两边用 `takePending` 取走即删做防双跑。
+ *
+ * ⛔ UI 不发任何网络请求 —— 解析用纯函数 `lib/address.js`，其余全走消息。
+ *
+ * @author zx
+ * @since 0.1.4
+ * 相关：Project/Edge/README.md
  */
 import { parseInput, originsFor } from '../lib/address.js';
 import { MSG } from '../lib/messages.js';
@@ -22,11 +24,15 @@ import { setPending, clearPending, takePending } from '../lib/store.js';
 
 /** 单条消息上限 —— SW 冷启动 + 握手最坏 12s，30s 还没回话就不是「慢」而是坏了（⛔ 不许无限等） */
 const SEND_TIMEOUT = 30_000;
-/** 授权 resolve 后等权限传播到 SW 的 fetch（0.1.3 真机结论，⛔ 别删） */
+/** 授权 resolve 后等权限传播到 SW 的 fetch（⛔ 别删：删了就回到「每次要连两次」） */
 const PERM_SETTLE_MS = 300;
 /** 「SW 已在跑，我只收割」的轮询节奏与次数 */
 const HARVEST_MS = 1500;
 const HARVEST_TRIES = 8;
+/** 「SW 自动续跑」结果的有效期 —— 更早的那条是上一次连接的遗留，⛔ 不能当本次结果 */
+const LAST_CONN_FRESH_MS = 120_000;
+/** need_login 期间的轮询上限，与 `lib/connect.js` 的 LOGIN_MAX_MS 对齐（那边 10 分钟就停） */
+const LOGIN_WAIT_MAX_MS = 10 * 60_000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -69,7 +75,9 @@ async function harvest(tries = HARVEST_TRIES) {
     if (st && (st.state === 'connected' || st.state === 'failed' || st.state === 'need_login')) return st;
   }
   const last = await send(MSG.lastConn).catch(() => null);
-  return last && last.status ? last.status : { state: 'idle' };
+  // ⚠️ 只认 2 分钟内的结果：更早的那条是上一次连接的遗留，拿它当本次结果会说错话
+  const fresh = last && last.status && last.at && Date.now() - last.at < LAST_CONN_FRESH_MS;
+  return fresh ? last.status : { state: 'idle' };
 }
 
 /**
@@ -93,9 +101,9 @@ export async function connectFlow(input) {
 
 /**
  * 功能：授权并连接（一步到位）：
- *   1. 连接意图先落 `storage.session`（pendingConnect —— 硬规则 2，popup 被授权弹窗关掉也不丢）；
+ *   1. 连接意图先落 `storage.session`（pendingConnect —— popup 被授权弹窗关掉也不丢）；
  *   2. 手势内 `permissions.request`（手势丢了 ⇒ 回 need_settings，不静默失败）；
- *   3. 授权成功 ⇒ 等 300ms ⇒ **自己发 `conn:start`**（主路径，0.1.3 真机验证过）；
+ *   3. 授权成功 ⇒ 等 300ms ⇒ **自己发 `conn:start`**（主路径，真机验证过）；
  *   4. `takePending` 取不到 ⇒ 说明 SW 的 `permissions.onAdded` 已抢先接手 ⇒ 只收割它的结果。
  * @param {string} input - 用户输入
  * @returns {Promise<object>} Status（终态：connected / failed / need_login / need_settings）
@@ -111,11 +119,11 @@ export async function authorizeAndConnect(input) {
   if (o.invalid) return { state: 'failed', error: o.invalid, input };
   const p = o.p;
 
-  // 硬规则 2：连接意图先落盘再授权（session 瞬态失败不阻断主流程）
+  // 连接意图先落盘再授权（storage.session 瞬态失败不阻断主流程）
   await setPending({ input, kind: p.kind, origin: p.origin, id: p.id, at: Date.now() }).catch(() => {});
 
   let hadPerm = false;
-  let granted = false;
+  let granted;
   try {
     hadPerm = await chrome.permissions.contains({ origins: o.origins });
     granted = await chrome.permissions.request({ origins: o.origins }); // ⭐ 授权点（手势内）
@@ -127,10 +135,10 @@ export async function authorizeAndConnect(input) {
     return { state: 'need_settings', input, denied: hadPerm };
   }
 
-  await sleep(PERM_SETTLE_MS); // ⭐ 权限传播：删了这行就回到「连两次」（0.1.3 真机结论）
+  await sleep(PERM_SETTLE_MS); // ⚠️ 权限传播：删了这行就回到「连两次」
 
   // 防双跑：onAdded 已把 pending 取走 ⇒ 它正在跑，这里只收割
-  let mine = null;
+  let mine;
   try {
     mine = await takePending();
   } catch (_e) {
@@ -151,11 +159,18 @@ export async function authorizeAndConnect(input) {
 
 /**
  * 功能：need_login 期间的 2 s 轮询 —— SW 的登录轮询不推 UI，UI 自己收割状态。
+ * ⚠️ 有上限（与 SW 侧 10 分钟同口径）：侧边栏可以一直开着，⛔ 不能永远每 2 s 打一次真握手。
  * @param {(status: object) => boolean} onStatus - 返回 false 停止轮询
+ * @param {number} [maxMs] - 轮询上限，缺省 10 分钟
  * @returns {() => void} 停止函数
  */
-export function pollWhile(onStatus) {
+export function pollWhile(onStatus, maxMs = LOGIN_WAIT_MAX_MS) {
+  const deadline = Date.now() + maxMs;
   const timer = setInterval(async () => {
+    if (Date.now() > deadline) {
+      clearInterval(timer); // 停在 need_login（「重新打开」可再起），⛔ 不无限打
+      return;
+    }
     try {
       const st = await send(MSG.status);
       if (onStatus(st) === false) clearInterval(timer);

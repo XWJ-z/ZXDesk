@@ -31,7 +31,7 @@
  *
  * @author zx
  * @date   2026-09-15
- * @since 0.8.61
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/18-ai辅助任务.md、docs/公共/开发方案/11-AI辅助任务-1期.md、modules/vault/lib/crypto.js
  */
 
@@ -609,15 +609,35 @@ function toolsPrompt(auth) {
   if (a.read.includes('ledger')) {
     lines.push(
       '· ledger.bill —— 用户的收支账单（区间收入 / 支出 / 结余 ＋ 支出分类 ＋ 最近几笔）。' +
+        // ⭐ 2026-11-05（老大：「AI 获取不到记账的备注信息」）：recent 里现在带 note。
+        //    ⚠️ 必须在这里说一句 —— 工具面多了一格而提示词不知道，模型就仍然答「看不到备注」
+        //    （与 0.8.5 那次「加了工具却没加提示词」是同一类事故）。
+        '⭐ 最近几笔（recent[]）里每笔都带 note（用户自己写的备注，可能为空串）：' +
+        '问「那笔备注写的什么」「哪几笔是报销」时**直接引用**它；' +
+        '⛔ 空串就如实说「这一笔没写备注」，⛔ 不要替用户编一句、也不要当它是分类依据。' +
         '入参 {"range":"month"}，range 取 today（今天）、week（本周）、month（本月）、year（本年）；' +
         '⭐ 也可以自己给 {"from":"2026-09-01","to":"2026-09-30"}（任意区间，最多 366 天）——' +
         '**问「上个月花了多少」「9 月和 10 月比」时就用它**，别再回答「没有上月这一档」。' +
-        '还能加 {"category":"餐饮"} 只统计这一个分类（分类名要用本机真有的；本机没有时会明确回 false）。',
+        '还能加 {"category":"餐饮-早餐"} 只统计这一个分类（**二级分类请用「一级-二级」全称**；' +
+        '只写二级名时若本机有多个同名分类，会明确报错并列候选）。',
+      // ⭐⭐ 0.9.7（老大：「一次请求 1 月 2 月 6 月 9 月的记账信息」）：
+      //    一轮最多 3 次工具调用，逐月查根本查不完 ⇒ 必须教它一次带多段。
+      '  ⭐⭐ **一次查好几个月**：用 {"months":["2026-01","2026-02","2026-06","2026-09"]}' +
+        '（或 {"periods":[{"from":"2026-01-01","to":"2026-01-31"},…]}，最多 12 段）——' +
+        '结果里会有 multi:true 与 periods[]，每一段各一份合计与分类。' +
+        '用户一口气问好几个月时**一定**这样问一次，⛔ 不要一个月调一次（调不完）。',
       '· ledger.budget —— 用户的预算进度（总预算与各分类预算的额度 / 已用 / 剩余 / 超没超）。' +
         '入参 {"range":"month"}，range 取 week（本周）、month（本月）、year（本年）。',
       '· ledger.assets —— 用户的资产快照（资产合计 / 负债合计 / 净值 ＋ 各账户余额）。无入参。',
-      '  ⚠️ 这三条回的所有金额字段，单位都是**分**（1 元 = 100 分）—— 说给用户听之前先除以 100，' +
+      // ⭐⭐ 0.9.7：取名口 —— 记账提议里的分类 / 账户只能用这里出现过的名字
+      '· ledger.catalog —— 记账**真实存在的**分类树 ＋ 账户 ＋ 默认账户。无入参。' +
+        '⭐ 用户让你记账、或你准备调用 ledger.propose_entry 之前，**先查一次它**：' +
+        'categories 里的一级名与二级名（以及 full）才是本机真有的；defaults 是他设的默认账户。' +
+        '⛔ 绝不凭空编一个分类名或账户名。',
+      '  ⚠️ 这几条回的所有金额字段，单位都是**分**（1 元 = 100 分）—— 说给用户听之前先除以 100，' +
         '别把 3500 分说成「3500 元」。',
+      '  ⚠️⭐ 分类一律按**全称**说（`餐饮-早餐`）：二级分类里有大量同名（「其他」在多个一级下都有），' +
+        '只报二级名会把两笔不同的钱说成一笔。',
     );
   }
   // ⭐⭐ 0.8.5（真机报的「这三块 AI 读不到」）：收藏夹 / 随手记 / 硬件 —— 三条读工具。
@@ -727,10 +747,16 @@ function toolsPrompt(auth) {
   if (a.write.includes('ledger')) {
     lines.push(
       '· ledger.propose_entry —— 提议记一笔账。入参 ' +
-        '{"tool":"ledger.propose_entry","args":{"entries":[{"amount":"35.5","ie":"支出","at":"2026-09-28","category":"餐饮","account":"微信","note":"午饭"}]}}；' +
+        '{"tool":"ledger.propose_entry","args":{"entries":[{"amount":"35.5","ie":"支出","at":"2026-09-28",' +
+        '"category":"餐饮","subcategory":"午饭","account":"微信","note":"午饭"}]}}；' +
         '每条 amount 必填（单位**元**，可以带小数）；ie 取「支出」或「收入」（没说就按支出）；' +
-        'at 是 YYYY-MM-DD（原文没说就留空，服务端会按今天算）；category / account 填用户说的名字' +
-        '（本机找不到就记成「未分类 / 不关联账户」，会在卡上标出来，⛔ 别自己编一个名字）；note 可留空。',
+        'at 是 YYYY-MM-DD（原文没说就留空，服务端会按今天算）；note 可留空。',
+      // ⭐⭐ 0.9.7（老大：「分类和二级分类、账户都要选择真实存在的」）
+      '  ⚠️⭐ category 填**一级**分类名、subcategory 填它下面的**二级**名（没有二级就只填 category）；' +
+        '也可以把全称直接写进 category（如「餐饮-午饭」）。**只能填 ledger.catalog 里出现过的名字** ——' +
+        '本机没有的名字不会被替你新建，卡上会标「分类未匹配」。所以记账前先查一次 ledger.catalog。',
+      '  ⚠️⭐ account 填**账户名**；用户没点名账户时**留空** —— 服务端会用他自己设置的默认账户' +
+        '（先看分类默认、再看收支全局默认）。⛔ 别自己编一个账户名，也别拿「微信」「支付宝」当默认。',
       '  什么时候用它：用户让你「记一笔」「记一下今天花了…」「这笔账也记上」的时候。',
       '  ⚠️ 它**只生成提议**：会变成一张待确认的卡片出现在对话里，由用户点「同意」或「拒绝」来决定 —— ' +
         '你不能直接记账，⛔ 不要说已经记好了，⛔ 也不要用文字把卡片内容抄一遍来假装那张卡片。',
@@ -959,6 +985,179 @@ function hasNativeMarkers(text) {
   return new RegExp(`<${PIPE}{1,2}\\s*DSML\\s*${PIPE}{1,2}`, 'i').test(s);
 }
 
+// ==================== 2026-11-05（真机）：工具调用「回显」泄漏 ====================
+//
+// 现象（老大截图，第 22 轮）：气泡里整段是
+//   `命令 {"tool":"ledger.bill","args":{"range":"month","category":"创业-AI花费"}}`
+//   `[工具结果]`
+//   `{"range":"month","income":0,"expense":14000,"recent":[{"at":"2026-11-03","amount":14000,…}]}`
+// 模型把「我调用了什么 ＋ 我拿到了什么」当成**正文**写了出来。
+// ⚠️ 佐证它是复述而不是我们回灌的原样：字段名是 `expense` / `amount`，
+//    而工具真实返回的是 `expense_fen` / `amount_fen`（单位分）—— 它读完之后自己简写了。
+//
+// ⚠️⭐ 为什么**不**放宽 `parseToolIntent()` 把它认成意图去执行：
+//    R4 的锚点是「解析失败一律不执行」，而这段话的开头是「命令」两个字、不是纯 JSON。
+//    放宽等于让模型的一句**复述**变成一次**真实调用** —— 读工具还好，写工具就是凭空
+//    多一张提议卡（用户没让它记，卡先出来了）。安全边界不动。
+// ⇒ 这里只做**展示与落库的清洗**：把机器段剪掉，人话留下；剪完不剩什么就由调用方
+//    换成一句人话（与原生调用标记那一路同一个出口）。
+
+/**
+ * 功能：量一段**配平**的 JSON 到哪里结束（认字符串里的括号与转义）。
+ *
+ * 说明：⚠️ 刻意**不做 `JSON.parse`** —— 模型吐的这段经常缺引号、或者被长度截断，
+ *      解析必然失败，但「到哪儿结束」仍然量得出来；量完把这段从正文里剪掉就行。
+ * @param {string} s - 整段文本
+ * @param {number} start - 指向 `{` 的下标
+ * @returns {number} 结束下标（**不含**，即 `}` 的后一位）；不配平返回 `-1`
+ */
+function endOfJsonBlock(s, start) {
+  if (s.charAt(start) !== '{') return -1;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < s.length; i += 1) {
+    const ch = s.charAt(i);
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return -1;
+}
+
+/**
+ * 「工具回显」的前缀词 —— 模型把一次调用写成一句话时的开头。
+ * ⚠️ 长的放前面（`工具调用` 要先于 `调用` 命中，否则 `startsWith` 会认错）。
+ * @type {Array.<string>}
+ */
+const TOOL_ECHO_HEADS = ['工具调用', '命令', '调用', '执行'];
+
+/** 工具结果块的标记：我们回灌用全角，模型复述时常写成半角。 @type {Array.<string>} */
+const TOOL_ECHO_MARKS = ['【工具结果】', '[工具结果]'];
+
+/**
+ * 功能：判断**整段输出**是不是「工具调用回显」（模型把调用与结果当正文写了出来）。
+ *
+ * 说明：⚠️ 与 `hasNativeMarkers()` 的分工：那个认 DSML 特殊 token（锚定 `<|`），本函数认
+ *      「命令/调用 ＋ JSON」与「【工具结果】块」这两种**自然语言回显**。
+ *      两者都是**形状判定**，只用来决定「别把这段给人看」，⛔ 都不拿去执行。
+ *      ⚠️ 只认**开头**（`^` 锚定）：「它输出的命令 {…} 这类东西」这种散文引用不认 ——
+ *      与 R4 同一种精神，拿不准就不动。
+ * @param {*} text - 模型这一轮的完整输出
+ * @returns {boolean} 像工具回显返回 true
+ */
+function toolEchoShaped(text) {
+  const t = String(text == null ? '' : text).trimStart();
+  if (!t) return false;
+  if (TOOL_ECHO_MARKS.some((m) => t.startsWith(m))) return true;
+  const head = TOOL_ECHO_HEADS.find((h) => t.startsWith(h));
+  if (!head) return false;
+  // 前缀词后面（跳过空白与冒号）必须紧跟一个 `{` —— 「命令行工具怎么用」不算
+  const rest = t.slice(head.length).replace(/^[\s:：]*/, '');
+  return rest.charAt(0) === '{';
+}
+
+/**
+ * 功能：判断「这段还没打完的输出」是不是**可能**正在长成一段工具回显（流式压制用）。
+ *
+ * 说明：⭐⭐ 与 `toolEchoShaped()` 的分工：那个判**整段**（已经收完，`^` 锚定，用来清洗）；
+ *      本函数判**前缀**（还没收完，用来决定「这一帧先别发出去」）。
+ *      为什么要它：模型吐的是 `命令 {…}`，首字符是中文「命」—— 旧的
+ *      `looksLikeIntentPrefix()` 只认 `{` / `` ` `` / `<`，第一帧就放行了，于是整坨机器语法
+ *      **边流边显示**（2026-11-05 真机截图）。压住只是**一拍**：
+ *      · 词还没打完（「命」）或打完还空着（「命令」）⇒ 继续压，等它到底是不是 JSON；
+ *      · 词后面紧跟 `{` / `` ` `` ⇒ 一路压到轮末（那就是回显）；
+ *      · 词后面是正常文字（「命令行工具怎么用」）⇒ 立刻放行，正常回答最多慢几十毫秒。
+ *      ⚠️ 判据必须与 `TOOL_ECHO_HEADS` / `TOOL_ECHO_MARKS` **同一份** ——
+ *      ⛔ 在 routes 里另抄一份前缀词表（两份口径是本项目最贵的病）。
+ * @param {*} text - 本轮到目前为止攒下的文本
+ * @returns {boolean} 还可能长成回显（继续压着）返回 true
+ */
+function toolEchoPrefixish(text) {
+  const t = String(text == null ? '' : text).trimStart();
+  if (!t) return true; // 一个字都还没有：继续等
+  // 标记：`【工` 这种半截也算（等它打完再判）
+  if (TOOL_ECHO_MARKS.some((m) => m.startsWith(t) || t.startsWith(m))) return true;
+  // 前缀词：`命` / `命令` 都算
+  if (TOOL_ECHO_HEADS.some((h) => h.startsWith(t))) return true;
+  const head = TOOL_ECHO_HEADS.find((h) => t.startsWith(h));
+  if (!head) return false;
+  const rest = t.slice(head.length).replace(/^[\s:：]*/, '');
+  if (!rest) return true; // 词后面还空着：等下一帧
+  return rest.charAt(0) === '{' || rest.charAt(0) === '`';
+}
+
+/**
+ * 功能：把正文里的「工具回显」机器段**剪掉**，只留人话。
+ *
+ * 说明：⭐ 剪两类（都是 `toolEchoShaped()` 认得的那两种形状，但这里**逐处**剪，
+ *      不是整条判定）—— 模型常见写法是「先说半句 → 吐调用 → 吐结果 → 再接着说」，
+ *      整条替换会把那半句人话也一起吃掉：
+ *      · `【工具结果】` / `[工具结果]` ＋ 紧随其后的配平 JSON；
+ *      · `命令` / `调用` / `工具调用` / `执行` ＋ 紧随其后的配平 JSON。
+ *      ⚠️ 只剪**配平**的 JSON（`endOfJsonBlock()` 量得出结束位置）；量不出来就**不动**
+ *      —— 宁可留一段垃圾，也不要把用户真正想问的那半句话剪没。
+ *      ⚠️ 纯函数、不改写、不摘要：除了被剪掉的机器段，其余字符逐字保留（最后只 `trim`）。
+ * @param {*} text - 任意正文
+ * @returns {string} 剪完的正文（可能为空串 = 整条都是机器语法）
+ */
+function stripToolEcho(text) {
+  const s = String(text == null ? '' : text);
+  if (!s) return s;
+  /** @type {Array.<Array.<number>>} 要剪的 `[起, 止)` 区间 */
+  const cuts = [];
+
+  // ① 标记块：标记 → （只允许空白/冒号）→ 配平 JSON
+  for (const mark of TOOL_ECHO_MARKS) {
+    let from = 0;
+    for (;;) {
+      const idx = s.indexOf(mark, from);
+      if (idx < 0) break;
+      let end = idx + mark.length;
+      const brace = s.indexOf('{', end);
+      if (brace >= 0 && /^[\s:：]*$/.test(s.slice(end, brace))) {
+        const close = endOfJsonBlock(s, brace);
+        if (close > 0) end = close;
+      }
+      cuts.push([idx, end]);
+      from = end;
+    }
+  }
+
+  // ② 前缀词 ＋ 配平 JSON
+  const re = /(?:工具调用|命令|调用|执行)\s*[:：]?\s*\{/g;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    const brace = m.index + m[0].length - 1; // 指向 `{`
+    const close = endOfJsonBlock(s, brace);
+    if (close > 0) cuts.push([m.index, close]);
+    re.lastIndex = close > 0 ? close : m.index + m[0].length;
+  }
+
+  if (!cuts.length) return s;
+  cuts.sort((a, b) => a[0] - b[0]);
+  let out = '';
+  let pos = 0;
+  for (const [a, b] of cuts) {
+    if (b <= pos) continue; // 被前一段覆盖（标记块套在前缀块里）
+    if (a > pos) out += s.slice(pos, a);
+    pos = b;
+  }
+  out += s.slice(pos);
+  // ⚠️ 剪掉一段之后常留下两三个连着的换行（被剪的那块前后各有一个）⇒ 折成最多一个空行。
+  //    ⛔ 只折 3 个以上的连续换行：原来就只有一个空行的地方一个字都不动。
+  return out.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 /**
  * 功能：从「整段是原生调用标记」的输出里抽出一条工具意图（与 `parseToolIntent()` 同形）。
  *
@@ -1042,5 +1241,8 @@ module.exports = {
   parseToolIntent,
   nativeCallShaped,
   hasNativeMarkers,
+  toolEchoShaped,
+  toolEchoPrefixish,
+  stripToolEcho,
   parseNativeToolCall,
 };

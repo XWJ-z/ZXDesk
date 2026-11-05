@@ -45,7 +45,7 @@
  *
  * @author zx
  * @date   2026-10-04
- * @since 0.8.54
+ * @since 0.9.7
  * 相关：docs/公共/开发方案/32-团队协作.md §丁 · §丙-2、core/slots.js、modules/teamwork/desktop-teamwork-page.js
  */
 
@@ -1051,40 +1051,48 @@ async function sendComment(root, st, scope) {
   }
   st.busy = true;
   let created = false;
+  // ⚠️⭐ 2026-11-05（「待排期-转为任务：点击无反应」排查中顺带发现的**放大器**）：
+  //    这里原先是「try/catch 收尾，`st.busy = false` 摆在 catch 之后」—— 只要 catch 后面那一段
+  //    （清输入 / 补附件 / 重取评论 / 就地改角标）抛一次，`busy` 就**永久**停在 true。
+  //    后果不是这一处坏，而是**本片段所有写操作**的 `if (st.busy) return;` 从此全部静默失效 ——
+  //    症状就是「点什么都没反应」，且刷新前不会自愈。⇒ 一律 `finally` 收口，⛔ 别再挪出去。
   try {
-    const payload = { body: body };
-    if (isTask) payload.task_id = Number(st.cardFor);
-    const r = await api('POST', '/api/collab/projects/' + st.pid + '/comments', payload);
-    created = true;
-    const cid = r && r.item && r.item.id != null ? Number(r.item.id) : 0;
-    for (const f of pend) {
-      let q = '?name=' + encodeURIComponent(String(f.name == null ? '' : f.name));
-      if (isTask) q += '&task_id=' + encodeURIComponent(String(Number(st.cardFor)));
-      q += '&comment_id=' + encodeURIComponent(String(cid));
-      try {
-        await rawSend('POST', '/api/collab/projects/' + st.pid + '/files' + q, f, {
-          'Content-Type': 'application/octet-stream',
-        });
-      } catch (e) {
-        // ⚠️ 评论已经建好了：一个附件挂了不把整条评论回滚，只把这一句响出来（其余照传）。
-        toast(msgOf(e), true);
+    try {
+      const payload = { body: body };
+      if (isTask) payload.task_id = Number(st.cardFor);
+      const r = await api('POST', '/api/collab/projects/' + st.pid + '/comments', payload);
+      created = true;
+      const cid = r && r.item && r.item.id != null ? Number(r.item.id) : 0;
+      for (const f of pend) {
+        let q = '?name=' + encodeURIComponent(String(f.name == null ? '' : f.name));
+        if (isTask) q += '&task_id=' + encodeURIComponent(String(Number(st.cardFor)));
+        q += '&comment_id=' + encodeURIComponent(String(cid));
+        try {
+          await rawSend('POST', '/api/collab/projects/' + st.pid + '/files' + q, f, {
+            'Content-Type': 'application/octet-stream',
+          });
+        } catch (e) {
+          // ⚠️ 评论已经建好了：一个附件挂了不把整条评论回滚，只把这一句响出来（其余照传）。
+          toast(msgOf(e), true);
+        }
       }
+    } catch (e) {
+      toast(msgOf(e), true);
     }
-  } catch (e) {
-    toast(msgOf(e), true);
+    // ⚠️ 评论建成功后就清空输入与待传文件（即便某个附件没传上，也⛔ 不留下「再点一次又建一条」的坑）。
+    if (created) {
+      if (box) box.value = '';
+      st.pending = [];
+      if (pend.length) await loadFiles(st);
+      await loadComments(st, scope);
+      fillPending(root, st);
+      if (pend.length) afterFilesChanged(root, st);
+      fillComments(root, st, scope);
+      if (isTask) syncCommentCount(root, st);
+    }
+  } finally {
+    st.busy = false;
   }
-  // ⚠️ 评论建成功后就清空输入与待传文件（即便某个附件没传上，也⛔ 不留下「再点一次又建一条」的坑）。
-  if (created) {
-    if (box) box.value = '';
-    st.pending = [];
-    if (pend.length) await loadFiles(st);
-    await loadComments(st, scope);
-    fillPending(root, st);
-    if (pend.length) afterFilesChanged(root, st);
-    fillComments(root, st, scope);
-    if (isTask) syncCommentCount(root, st);
-  }
-  st.busy = false;
 }
 
 /**
@@ -1480,12 +1488,24 @@ async function createTask(root, st) {
  * @param {Object} st - 状态
  * @returns {Promise.<void>}
  */
-async function promoteTask(root, st) {
+async function promoteTask(root, st, tidArg) {
   if (st.busy) return;
-  const t = findTask(st.board, st.promoteFor);
-  if (!t) return;
+  // ⭐⭐ 2026-11-05：**编号从按钮上取**（`data-tid`），与手机端同一口径 —— 不再靠
+  //    `st.promoteFor` ＋ `st.board` 去「找」那条任务（状态对象换过一份就必然落空）。
+  const tid = Number(tidArg) > 0 ? Number(tidArg) : Number(st.promoteFor);
+  if (!(tid > 0)) {
+    toast('这条待排期已经不在了，关掉弹层重开一次', true);
+    return;
+  }
+  // ⚠️⭐ 2026-11-05：电脑端的弹层**就住在 root 里**（`showModal()` 的壳由 `paint()` 拼进
+  //    root.innerHTML）⇒ 这里按 root 查是对的，⛔ 别照抄手机端那份（那边正文搬到了宿主
+  //    的 `#sheet-body`，DOM 里根本没有 `.collab-modal*`，见 `mobile-teamwork-board.js`）。
+  //    ⚠️ 取不到时**必须吭声**：静默 return 在界面上与「按钮坏了」完全同形。
   const box = root.querySelector('.collab-modal-promote');
-  if (!box) return;
+  if (!box) {
+    toast('弹层没打开，关掉重开一次', true);
+    return;
+  }
   /**
    * 功能：取弹层里某一格的值。
    * @param {string} role - `data-role`
@@ -1532,7 +1552,7 @@ async function promoteTask(root, st) {
   if (status) body.status = status;
   st.busy = true;
   try {
-    await api('PUT', '/api/collab/projects/' + st.pid + '/tasks/' + Number(t.id), body);
+    await api('PUT', '/api/collab/projects/' + st.pid + '/tasks/' + tid, body);
     toast('已转为任务');
     st.promoteFor = 0;
     await reloadBoard(root, st);
@@ -2511,7 +2531,11 @@ function promoteModalHtml(st, b) {
     '</div>' +
     kindBlockHtml('pm', t) +
     '<div class="collab-modal-foot">' +
-    '<button class="collab-btn primary" type="button" data-act="collab-promote-save">转为任务</button>' +
+    // ⚠️⭐ 2026-11-05：`data-tid` 是这个弹层**唯一的任务身份来源**（与手机端同一口径）——
+    //    保存时按它发请求，不再靠 `st.promoteFor` 回查（状态对象换过一份就查不到）。
+    '<button class="collab-btn primary" type="button" data-act="collab-promote-save" data-tid="' +
+    esc(t.id != null ? String(t.id) : '') +
+    '">转为任务</button>' +
     '<button class="collab-btn" type="button" data-act="collab-promote-close">取消</button>' +
     '</div>';
   return showModal('转为任务', inner, 'collab-promote-close', 'collab-modal-promote');
@@ -3742,7 +3766,7 @@ function onClick(root, st, e) {
   } else if (act === 'collab-promote-close') {
     st.promoteFor = 0;
     paint(root, st);
-  } else if (act === 'collab-promote-save') promoteTask(root, st);
+  } else if (act === 'collab-promote-save') promoteTask(root, st, t.dataset.tid);
   // ⭐ 0.8.54：删待排期 —— 先开确认弹层（记下是哪条），确认后才真删
   else if (act === 'collab-task-del') {
     closeAllModals(st);

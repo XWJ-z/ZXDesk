@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：UpdateManifest.kt
+ * 职责：版本清单的数据结构与解析
+ */
+
 package com.zxdesk.core.update
 
 import com.zxdesk.core.connection.MiniJson
@@ -128,7 +134,7 @@ object UpdateRules {
 
     /**
      * 是否必须更新：服务端点名 `force`，或本机版本低于清单里的最低支持版本。
-     * 只在「确实有新版」时才谈强制 —— 否则用户在最新版上会被一个无意义的红字拦住。
+     * 只在「确实有新版」时才谈强制 —— 否则在最新版上会被一条无意义的错误提示拦住。
      */
     fun requiresUpdate(manifest: UpdateManifest, currentVersion: String, currentCode: Long): Boolean {
         if (!isNewerThan(manifest, currentVersion, currentCode)) return false

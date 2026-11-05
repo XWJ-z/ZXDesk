@@ -1,12 +1,21 @@
 /**
- * 功能：`chrome.storage.local` 的**唯一**读写口（分层纪律 2：其它模块只传值，⛔ 自己碰 storage）。
+ * store.js —— `chrome.storage.local` 的唯一读写口
  *
- * 数据模型（方案 §五）：
- * - `edge:conn`  连接信息 —— ⛔ 只存地址与缓存，**不存任何凭据**（Cookie 每次用前现读）；
- * - `edge:cache` 侧边栏首屏缓存（TTL 60 s，M3 接入）；
- * - `edge:update` 版本检测结果（启动时写一次，气泡与角标都从这里读）；
- * - `pref:eula` 许可协议接受记录（`{version, at}`；未同意前不发起版本检测）。
+ * 功能：连接记录、列表缓存、版本检测结果、许可协议记录、SW 续跑结果的读写都从这里走。
+ *
+ * 数据模型：
+ * - `edge:conn`      连接信息 —— ⛔ 只存地址与缓存，**不存任何凭据**（Cookie 每次用前现读）；
+ * - `edge:cache`     侧边栏首屏缓存（TTL 60 s）；
+ * - `edge:update`    版本检测结果（启动时写一次，气泡与角标都从这里读）；
+ * - `edge:last-conn` SW 自动续跑的结果（带 `at`，读取方只认 2 分钟内的）；
+ * - `pref:eula`      许可协议接受记录（`{version, at}`；未同意前不发起版本检测）。
  * 迁移位：`v` —— 读到不认识的 `v` ⇒ 当没连过（清空重来），⛔ 不猜。
+ *
+ * ⛔ 其它模块只传值，不直接碰 storage（分层纪律）。
+ *
+ * @author zx
+ * @since 0.1.0
+ * 相关：Project/Edge/README.md
  */
 
 const KEY_CONN = 'edge:conn';
@@ -40,7 +49,7 @@ export async function clearConn() {
   await chrome.storage.local.remove([KEY_CONN, KEY_CACHE]);
 }
 
-/** 侧边栏首屏缓存（M3 接入；TTL 判定也在这里做，调用方只管取） */
+/** 侧边栏首屏缓存（TTL 判定也在这里做，调用方只管取） */
 export async function getCache(maxAgeMs = 60_000) {
   const c = await readKey(KEY_CACHE);
   if (!c) return null;
@@ -57,7 +66,7 @@ export async function clearCache() {
   await chrome.storage.local.remove(KEY_CACHE);
 }
 
-// ---- 0.1.4：授权一次过----
+// ---- 授权一次过 ----
 
 const KEY_LAST = 'edge:last-conn';
 
@@ -71,7 +80,7 @@ export async function setLastConn(data) {
 }
 
 /**
- * 连接意图：`storage.session`（浏览器活着就在，授权与否都不丢——任务单硬规则 2）。
+ * 连接意图：`storage.session`（浏览器活着就在，授权与否都不丢）。
  * 写入方是设置页（在授权手势里，⛔ 绕道消息会丢手势）；这里只管 SW 侧「取走即清」。
  */
 export async function setPending(pc) {
@@ -90,7 +99,7 @@ export async function takePending() {
   return pc;
 }
 
-// ---- 0.1.6：版本检测结果 ----
+// ---- 版本检测结果 ----
 
 const KEY_UPDATE = 'edge:update';
 
@@ -111,7 +120,7 @@ export async function setUpdate(patch) {
   return next;
 }
 
-// ---- 0.1.6：许可协议接受记录 ----
+// ---- 许可协议接受记录 ----
 
 /**
  * 偏好键（`pref:` 前缀与主题、打开方式同一套；不走 `v:1` 迁移位）。

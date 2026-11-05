@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：Model.kt
+ * 职责：数据源模式、账号作用域与登录入口的模型定义
+ */
+
 package com.zxdesk.core.datasource
 
 import com.zxdesk.core.connection.FnSession
@@ -46,6 +52,13 @@ data class Entry(
      * ⛔ 不再走门户、⛔ 也不等那个根本不存在的 `Trim-MC-token`。
      */
     val fnSession: FnSession? = null,
+    /**
+     * FNID 解析时顺带拿到的**局域网地址**（`data.ipv4` 里的第一个），没有就为 null。
+     *
+     * 只用于排障文案：中继域名在手机侧解析失败 / 连不上时，把「你在家的话可以填这个」说出来。
+     * ⚠️ 不自动切换 —— 局域网走的是设备自签证书，要人确认指纹；偷偷换过去等于绕过那道确认。
+     */
+    val lanHint: String? = null,
 ) {
     /** WebView 该从哪一页开始。 */
     val startUrl: String

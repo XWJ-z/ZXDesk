@@ -34,9 +34,17 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.34
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/07-前端-电脑版与手机版.md、docs/公共/开发方案/07-统一网关入口.md
  */
+import {
+  cacheGet,
+  cachePut,
+  guardWrite,
+  markNetworkFailure,
+  markNetworkSuccess,
+} from './cache.js';
+
 let notify = () => {}; // 由各端入口注入本地 toast
 
 /**
@@ -136,20 +144,36 @@ export async function api(method, path, body, opts) {
   const ms = o.timeout === undefined ? API_TIMEOUT_MS : o.timeout;
   const timer = ms > 0 ? setTimeout(() => ctrl.abort(), ms) : null;
   opt.signal = ctrl.signal;
+  // 离线时的写请求直接拦：等到 15 秒超时才报错，用户会以为「点了没反应」
+  guardWrite(method);
+
   let r;
   try {
     r = await fetch(BASE + path, opt);
   } catch (e) {
+    markNetworkFailure();
     // ⚠️ 只认自己设的那个 abort：用户主动取消（别的调用方传的 signal）不该被说成超时
-    if (e && e.name === 'AbortError' && timer) {
+    const timedOut = !!(e && e.name === 'AbortError' && timer);
+    // ⭐ 0.2.15：GET 一律先试缓存回放（断网、超时、连接被拒都能出内容）；写请求绝不回放
+    const back = replay(method, path);
+    if (back !== null) return back;
+    if (timedOut) {
       const et = new Error('请求超时了，请刷新重试');
       et.status = 0;
       throw et;
+    }
+    if (String(method).toUpperCase() !== 'GET') {
+      const err = new Error('网络不通，这次修改没有保存');
+      err.status = 0;
+      err.offline = true;
+      throw err;
     }
     throw e;
   } finally {
     if (timer) clearTimeout(timer);
   }
+  // 能拿到响应头就说明网络是通的（哪怕业务上是 4xx/5xx）
+  markNetworkSuccess();
   const j = await r.json().catch(() => null);
   if (r.status === 401) {
     backToLogin();
@@ -162,5 +186,33 @@ export async function api(method, path, body, opts) {
     err.status = r.status;
     throw err;
   }
+  // 写穿：只有成功的 GET 才更新快照，且整条覆盖（不存在「缓存比服务器新」的窗口）
+  if (String(method).toUpperCase() === 'GET' && j !== null) cachePut(path, j);
   return j;
+}
+
+/** 上次「用的是缓存」的提示时间：60 秒内只提示一次，别让每个请求都弹一条。 */
+let replayNoticeAt = 0;
+
+/**
+ * 功能：断网时用缓存顶上（0.2.15）。
+ *
+ * 说明：只服务 GET。命中时**顺带提示一次** —— 不提示的话用户会以为看到的是实时数据，
+ *      在旧列表上做判断。`null` 是「没命中」的哨兵值：响应体本身也可能是 `null`
+ *      （非 JSON 的 200），所以不能用返回 `null` 表示命中。
+ *
+ * @param {string} method - HTTP 方法
+ * @param {string} path - 请求路径
+ * @returns {*} 命中的快照数据；没命中返回 null
+ */
+function replay(method, path) {
+  if (String(method).toUpperCase() !== 'GET') return null;
+  const hit = cacheGet(path);
+  if (!hit) return null;
+  const now = Date.now();
+  if (now - replayNoticeAt > 60000) {
+    replayNoticeAt = now;
+    notify('网络不通，显示的是上次缓存的内容（只读）', true);
+  }
+  return hit.data;
 }

@@ -1,5 +1,7 @@
 /**
- * 公告：拉取 `/api/notices/<platform>`、校验、本地缓存、已读记录。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：notice.js
+ * 职责：公告：拉取 `/api/notices/<platform>`、校验、本地缓存、已读记录
  *
  * 与「版本更新」的区别：公告是纯文本内容，一条坏数据不该让整屏消失 ⇒
  * 逐条校验，坏条目跳过并记日志（更新清单则相反：任何一项不合格都整份拒收）。
@@ -239,8 +241,10 @@ export class NoticeService {
     this.marquee = result.marquee;
     this.marqueeSource = result.marquee ? 'pinned' : result.hasMarquee ? 'none' : 'latest';
     if (this.marqueeSource === 'latest') this.marquee = this.items[0]?.title || '';
-    this.writeCache();
+    // ⚠️ 先 applyItems 再写缓存：缓存里的 `updated` 取的是 state 的值，
+    //    顺序反了会把「上一批」的时间戳写进去（下次启动读缓存永远是旧的）。
     this.applyItems(result.updated);
+    this.writeCache();
     this.log(
       'info',
       `公告已更新：${result.items.length} 条（未读 ${this.state.unread}）｜公告条：${

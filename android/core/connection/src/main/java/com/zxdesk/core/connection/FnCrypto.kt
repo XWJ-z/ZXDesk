@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：FnCrypto.kt
+ * 职责：飞牛 WS 登录用到的密码学原语，AES-256、RSA PKCS#1 v1.5、HMAC 签名
+ */
+
 package com.zxdesk.core.connection
 
 import java.security.KeyFactory
@@ -11,13 +17,13 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * 飞牛 WS 登录用的密码学（照 fnOS 桌面 bundle 的真实实现，2026-10-23 抓包核对）。
+ * 飞牛 WS 登录用到的密码学（按登录协议实现，设备上逐项验证）。
  *
- * ⚠️ 与网上社区文档/任务单不一致的两处（实测为准）：
- * 1. **AES 是 256 位不是 128 位** —— 密钥是 32 个 `[0-9a-zA-Z]` 字符（bundle：`gY=$q.create(mUe(hY),32)`），
+ * ⚠️ 两处容易实现错的地方（以设备验证为准）：
+ * 1. **AES 是 256 位不是 128 位** —— 密钥是 32 个 `[0-9a-zA-Z]` 字符，
  *    按 UTF-8 字节当 key；16 字符的做法服务端会**静默丢掉那一帧**（不报错，只等超时）。
- * 2. **RSA 是 PKCS1 v1.5 不是 OAEP** —— 桌面走的是 `JSEncrypt.encrypt(key)`（`uY=!1` 分支），
- *    信封里也就不带 `v` 字段（`v: uY?1:undefined`）。
+ * 2. **RSA 是 PKCS1 v1.5 不是 OAEP** —— 协议用公钥直接加密密钥段，
+ *    信封里也就不带 `v` 字段。
  */
 object FnCrypto {
     private const val ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -26,7 +32,7 @@ object FnCrypto {
     private const val AES = "AES/CBC/PKCS5Padding"
     private const val RSA = "RSA/ECB/PKCS1Padding"
 
-    /** 32 个字母数字；bundle 用的就是 62 字符表随机取 32 位。 */
+    /** 32 个字母数字：62 字符表随机取 32 位。 */
     fun randomAesKey(random: java.util.Random = java.util.Random()): String =
         buildString(KEY_LENGTH) { repeat(KEY_LENGTH) { append(ALPHABET[random.nextInt(ALPHABET.length)]) } }
 

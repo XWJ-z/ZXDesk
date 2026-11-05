@@ -9,13 +9,13 @@
     <title>ZXDesk 工作台</title>
     <link rel="stylesheet" href="app.css" />
   </head>
-  <body class="screen-mode">
-    <!-- 顶栏 = **纯文字菜单栏**（0.1.4）：去掉 ZX 徽标与后退/前进/刷新图标，改成 连接 / 视图 / 帮助 三个文字菜单 -->
+  <body class="screen-starting">
+    <!-- 顶栏 = **纯文字菜单栏**：文件 / 查看 / 工具 / 帮助（Windows 规范四组，0.2.6 重排） -->
     <header id="menubar" class="menubar" hidden>
       <nav class="menu-group">
-        <button class="menu-btn" type="button" data-menu="connect">连接</button>
-        <button class="menu-btn" type="button" data-menu="view">视图</button>
-        <button class="menu-btn" type="button" data-menu="settings">设置</button>
+        <button class="menu-btn" type="button" data-menu="file">文件</button>
+        <button class="menu-btn" type="button" data-menu="view">查看</button>
+        <button class="menu-btn" type="button" data-menu="tools">工具</button>
         <button class="menu-btn" type="button" data-menu="help">帮助</button>
         <!-- 公告条：菜单栏里「帮助」之后的那一项（DSH 同位置）。
              宽度随内容、有上限，超长省略号；点开公告窗口看历史。 -->
@@ -45,6 +45,10 @@
     </div>
 
     <div id="toast" class="toast" hidden></div>
+
+    <!-- 「切换账号」弹窗（0.2.6）：连接页账号框旁的「切换」与「文件 → 切换账号」共用这一处。
+         ⚠️ 打开时主进程会把远程视图藏起来 —— WebContentsView 永远画在 DOM 之上，不藏就被网页盖住。 -->
+    <div id="modal" class="modal" hidden></div>
 
     <!-- ⚠️ 用**经典脚本**，不用 type="module"：file:// 下的 ES module 会被 Chromium 按
          「null origin + CORS」拦掉（表现就是壳一片空白、按钮全无反应）。

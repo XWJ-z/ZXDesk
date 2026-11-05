@@ -28,6 +28,16 @@ test('菜单 / 快捷键 / 探针都走 fire()，不对返回值直接 .catch', 
   assert.match(main, /fire\(\(\) => controller\?\.openUpdate\(\), '检查更新失败'\)/);
 });
 
+test('探网关用分区 session.fetch（默认 session 没有访问码 Cookie ⇒ 登录来回跳）', () => {
+  assert.match(main, /probeFetcher:/, 'Controller 要注入 probeFetcher');
+  assert.match(main, /typeof remoteView\.session\?\.fetch === 'function'/, '要判 Session.fetch 在不在');
+  assert.match(main, /remoteView\.session\.fetch\(input, init\)/, '探测必须走远程视图那个分区');
+  // 说明：net.fetch 跑在默认 session 上 —— 它既没有 persist:zxdesk 的访问码 Cookie，也不走 TOFU。
+  // 0.2.4 真机「访问码过了还一直登录中，好几次才进」就是它探出 ACCESS_CODE 导致的。
+  const controller = fs.readFileSync(path.join(root, 'src', 'main', 'controller.js'), 'utf8');
+  assert.match(controller, /this\.probeFetcher \|\| this\.fetcher/, '探网关要优先用分区 fetch');
+});
+
 test('fire 本身：同步返回值不炸、Promise 异常进日志', () => {
   // 把 fire 抽出来单测（主进程文件不能 import，直接取函数源码跑一遍）
   const start = main.indexOf('function fire(action, label) {');
@@ -37,7 +47,6 @@ test('fire 本身：同步返回值不炸、Promise 异常进日志', () => {
 
   const logged = [];
   const logger = { error: (label, error) => logged.push([label, String(error)]) };
-  // eslint-disable-next-line no-new-func
   const factory = new Function('logger', `${body}; return fire;`);
   const fire = factory(logger);
 

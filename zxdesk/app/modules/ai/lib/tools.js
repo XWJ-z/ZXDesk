@@ -29,7 +29,7 @@
  *
  * @author zx
  * @date   2026-09-18
- * @since 0.8.5
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/18-ai辅助任务.md、docs/公共/开发方案/16-AI辅助任务-3期-AI工具调用与授权.md
  */
 
@@ -145,7 +145,10 @@ function execOnce(tool, store, uid, name, args, now, table) {
       ? { ok: true, status: 200, kind: 'read', result: out }
       : { ok: true, status: 200, kind: 'write', proposal: out };
   } catch (e) {
-    const status = e && e.statusCode ? e.statusCode : 500;
+    // ⭐ 0.9.7：两种错误形状都要认 —— `httpError`（core/http-util）挂 `statusCode`，
+    //    `core/store/helpers.js` 的 `badRequest` 挂的是 `status`；只认前者会把 store 层抛的
+    //    入参错（如分类重名的 400）抬成 500，模型看到「内部错误」就不知道该怎么改说法了。
+    const status = e && (e.statusCode || e.status) ? e.statusCode || e.status : 500;
     const fallback = tool.mode === 'read' ? '读取数据时出错了，请稍后再试' : '整理任务时出错了，请稍后再试';
     return { ok: false, status, message: status === 400 ? e.message : fallback };
   }

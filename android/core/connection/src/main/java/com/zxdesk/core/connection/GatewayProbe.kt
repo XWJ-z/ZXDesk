@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：GatewayProbe.kt
+ * 职责：网关响应的判定，按正文区分应用页、访问码页与未登录
+ */
+
 package com.zxdesk.core.connection
 
 /** 网关在 `/app/zxdesk/` 下可能给出的四种响应（决定界面下一步走哪一屏）。 */
@@ -22,9 +28,9 @@ enum class GatewayPage {
  * 网关响应的判定规则。
  *
  * 为什么不用「轮询 Cookie 里有没有 `Trim-MC-token`」当唯一判据：
- * 那个 cookie 名是社区/审核报告里写的，**没法在这台机器上真登录验证**；
+ * 那个 cookie 名属于网关既有约定，**没法在本机真登录验证**；
  * 名字一旦不对，就会一直等到超时。这里改成直接问服务端：
- * 原生 GET `<base>/app/zxdesk/login.html`（带 WebView 的 Cookie），看正文（2026-10-23 实测）。
+ * 原生 GET `<base>/app/zxdesk/login.html`（带 WebView 的 Cookie），以正文为准。
  */
 object GatewayBody {
     private const val INVALID_TOKEN = "invalid token"
@@ -61,6 +67,21 @@ object GatewayBody {
     }
 }
 
+/**
+ * 一次探测的结果。
+ *
+ * 为什么要比 [GatewayPage] 多一档：`probe()` 把网络异常也归进 [GatewayPage.UNKNOWN]，
+ * 而「回前台重连」必须分得开两件事 ——
+ * **网络不通**（等它恢复就行，⛔ 不能把人踢回登录页）与**会话失效**（要换 token 或重登）。
+ */
+sealed interface GatewayProbeResult {
+    /** 服务端真的回了内容，按正文归类。 */
+    data class Page(val page: GatewayPage) : GatewayProbeResult
+
+    /** 连不上：DNS 失败、连接被拒、读写超时。 */
+    data object Unreachable : GatewayProbeResult
+}
+
 class GatewaySessionProbe(
     private val baseUrl: String,
     private val gatewayPath: String = ConnectionPlanner.DEFAULT_GATEWAY_PATH,
@@ -70,22 +91,36 @@ class GatewaySessionProbe(
     fun isReady(cookieHeader: String?): Boolean = probe(cookieHeader) == GatewayPage.APP
 
     /** 拉一次 `/login.html`，看它到底是什么页面（登录后用它判「要不要访问码」）。 */
-    fun probe(cookieHeader: String?): GatewayPage {
-        val connection = (java.net.URL("$baseUrl$gatewayPath/login.html").openConnection()
-            as java.net.HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = timeoutMs
-            readTimeout = timeoutMs
-            instanceFollowRedirects = false
-            setRequestProperty("Accept", "text/html,application/xhtml+xml")
-            if (!cookieHeader.isNullOrBlank()) setRequestProperty("Cookie", cookieHeader)
+    fun probe(cookieHeader: String?): GatewayPage = when (val result = probeDetailed(cookieHeader)) {
+        is GatewayProbeResult.Page -> result.page
+        GatewayProbeResult.Unreachable -> GatewayPage.UNKNOWN
+    }
+
+    /**
+     * 同 [probe]，但把「连不上」单独报出来。
+     *
+     * ⚠️ 只有**建立连接 / 读响应**抛异常才算 [GatewayProbeResult.Unreachable]；
+     * 服务端给了非 200 或认不出的正文仍算 [GatewayProbeResult.Page]，那是服务端在说话，不是网络断。
+     */
+    fun probeDetailed(cookieHeader: String?): GatewayProbeResult {
+        val connection = try {
+            (java.net.URL("$baseUrl$gatewayPath/login.html").openConnection() as java.net.HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = timeoutMs
+                readTimeout = timeoutMs
+                instanceFollowRedirects = false
+                setRequestProperty("Accept", "text/html,application/xhtml+xml")
+                if (!cookieHeader.isNullOrBlank()) setRequestProperty("Cookie", cookieHeader)
+            }
+        } catch (_: Exception) {
+            return GatewayProbeResult.Unreachable
         }
         return try {
-            if (connection.responseCode != 200) return GatewayPage.UNKNOWN
+            if (connection.responseCode != 200) return GatewayProbeResult.Page(GatewayPage.UNKNOWN)
             val body = connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
-            GatewayBody.classify(body)
+            GatewayProbeResult.Page(GatewayBody.classify(body))
         } catch (_: Exception) {
-            GatewayPage.UNKNOWN
+            GatewayProbeResult.Unreachable
         } finally {
             connection.disconnect()
         }

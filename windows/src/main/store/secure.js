@@ -1,5 +1,7 @@
 /**
- * 加密落盘（`safeStorage`）。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：secure.js
+ * 职责：加密落盘（`safeStorage`）
  *
  * ⚠️ 只用**异步 API**（`isAsyncEncryptionAvailable` / `encryptStringAsync` / `decryptStringAsync`）：
  * 同步那三个在 Electron 46 移除，且同步版在部分平台会阻塞主线程。

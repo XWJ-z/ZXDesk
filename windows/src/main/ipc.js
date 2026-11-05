@@ -1,5 +1,7 @@
 /**
- * IPC 通道白名单。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：ipc.js
+ * 职责：IPC 通道白名单
  *
  * 两条规矩：
  * 1. **只认白名单**里的通道名 —— 壳不能凭字符串调任意主进程能力；
@@ -11,13 +13,22 @@ export const CHANNEL = Object.freeze({
   STATE_GET: 'zxdesk:state:get',
   ACTION: 'zxdesk:action',
   DIAG_COPY: 'zxdesk:diag:copy',
+  DOC_GET: 'zxdesk:doc:get',
   MENU: 'zxdesk:menu',
   WINDOW_MINIMIZE: 'zxdesk:window:minimize',
   WINDOW_CLOSE: 'zxdesk:window:close',
 });
 
-/** 顶栏文字菜单只允许这三组（⛔ 不让壳凭字符串弹任意菜单）。 */
-export const MENU_ALLOWLIST = Object.freeze(['connect', 'view', 'settings', 'help']);
+/** 顶栏文字菜单只允许这几组（⛔ 不让壳凭字符串弹任意菜单）。按 Windows 规范分四组。 */
+export const MENU_ALLOWLIST = Object.freeze(['file', 'view', 'tools', 'help']);
+
+/**
+ * 信息窗口允许取的两份随包文档。
+ *
+ * ⛔ 不做「传路径读文件」的通用通道：kind 是枚举，路径由主进程自己拼，
+ * 壳里即使被注入脚本也只能取这两份。
+ */
+export const DOC_ALLOWLIST = Object.freeze(['eula', 'releases']);
 
 export const ACTION_ALLOWLIST = Object.freeze([
   'mode.select',
@@ -28,6 +39,12 @@ export const ACTION_ALLOWLIST = Object.freeze([
   'connect.togglePassword',
   'connect.remember',
   'connect.clearSaved',
+  'account.switch',
+  'accounts.open',
+  'accounts.close',
+  'accounts.toggleAdd',
+  'accounts.input',
+  'accounts.submit',
   'twofa.trust',
   'twofa.showEmail',
   'twofa.showTotp',
@@ -97,6 +114,21 @@ export function registerIpc(ipcMain, deps) {
     const text = deps.controller.diagnosticsText();
     if (!deps.copyText) return false;
     return await deps.copyText(text);
+  });
+
+  ipcMain.handle(CHANNEL.DOC_GET, async (event, kind) => {
+    if (!trusted(event)) return { ok: false, error: '来源不可信' };
+    if (!DOC_ALLOWLIST.includes(kind)) {
+      logger(`拒绝未登记的文档：${kind}`);
+      return { ok: false, error: '这份文档不在白名单里' };
+    }
+    if (!deps.readDoc) return { ok: false, error: '没有文档来源' };
+    try {
+      return await deps.readDoc(kind);
+    } catch (e) {
+      logger(`读取文档失败（${kind}）：${e.message}`);
+      return { ok: false, error: e.message || '读取失败' };
+    }
   });
 
   ipcMain.handle(CHANNEL.MENU, async (event, which) => {

@@ -1,15 +1,21 @@
 /**
- * 功能：SW 入口 —— 消息路由 + 会话感知 + 收藏动作（任务单 §五/§六）。
+ * sw.js —— Service Worker 入口（消息路由 / 会话感知 / 收藏动作 / 版本检测）
+ *
+ * 功能：`conn:*` / `bm:*` / `vault:*` / `update:*` 消息都在这里路由；收藏动作三个入口
+ *      共用 `quickSave()`；SW 启动时恢复右键菜单与工具栏打开方式。
  *
  * 分层纪律：
  * 1. 全插件**只有这里经 `lib/*` 发网络请求**；UI 一律 `chrome.runtime.sendMessage`；
  * 2. 只有 `lib/store.js` 碰 `chrome.storage`；
  * 3. 消息名与文案只在 `lib/messages.js`。
  *
- * 收藏动作（M3）三个入口共用 `quickSave()`：
- * - 右键菜单（连接后才建；`page` / `link`，有 `linkUrl` 收链接）；
- * - `Alt+Shift+S`（activeTab 随命令授予）；
- * - popup 表单走 `bm:create` 消息（inline 反馈，不用角标）。
+ * ⚠️ 右键菜单只在连接成功后创建（`page` / `link`，有 `linkUrl` 时收链接）。
+ * ⚠️ MV3 的 SW 会被回收：内存态（`loginWait`）丢了不会自己恢复，
+ *    靠 UI 下一次 `conn:status` 真握手纠正，⛔ 不能指望它常驻。
+ *
+ * @author zx
+ * @since 0.1.0
+ * 相关：Project/Edge/README.md
  */
 import { MSG, BM_TEXT } from './lib/messages.js';
 import { connect, status, disconnect, onCookieChanged } from './lib/connect.js';
@@ -20,6 +26,9 @@ import { hasAccepted } from './lib/eula.js';
 import { getConn, getEula, clearCache, getCache, setCache, getLastConn, setLastConn, takePending } from './lib/store.js';
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  // `bm:highlight` 是 UI↔UI 的消息（popup 让侧边栏滚到那一条）—— SW **不接**。
+  // ⚠️ 一旦这里回了 `unknown_message`，发送方会当成「已送达并收到回执」，那 4 次重试永远只跑第一发。
+  if (msg && msg.type === 'bm:highlight') return false;
   route(msg)
     .then(sendResponse)
     .catch((e) => sendResponse({ state: 'failed', error: 'network', detail: String((e && e.message) || e) }));
@@ -38,7 +47,7 @@ async function route(msg) {
     case MSG.recheck:
       return status();
     case MSG.lastConn:
-      return getLastConn(); // SW 自动续跑的结果（0.1.4 硬规则 3 的展示口）
+      return getLastConn(); // SW 自动续跑的结果（授权后 popup 被关掉时 UI 从这里收割）
     case MSG.disconnect:
       await removeMenus();
       return disconnect();
@@ -49,9 +58,9 @@ async function route(msg) {
     case MSG.bmRemove:
       return bmRemove(payload);
     case MSG.bmUpdate:
-      return bmUpdate(payload); // 0.1.5 E2
+      return bmUpdate(payload);
     case MSG.vaultStatus:
-      return vaultStatusMsg(); // 0.1.5 E3
+      return vaultStatusMsg();
     case MSG.vaultEntry:
       return vaultEntryMsg(payload);
     case MSG.pageContext:
@@ -62,7 +71,7 @@ async function route(msg) {
       await setCache(payload);
       return { ok: true };
     case MSG.updateInfo:
-      return updateInfo(); // 0.1.6
+      return updateInfo();
     case MSG.updateCheck:
       return updateCheckNow(); // 设置里的「检查更新」
     case MSG.updateSeen:
@@ -83,8 +92,8 @@ async function afterStart(st) {
 }
 
 /**
- * 功能：`conn:detect` —— 只读 activeTab 那一瞬的地址（方案 §4.1）。
- * ⛔ 不扫全部标签、不碰历史（红线 §十三.5）；`activeTab` 已授予这一瞬的 url 可见性。
+ * 功能：`conn:detect` —— 只读 activeTab 那一瞬的地址。
+ * ⛔ 不扫全部标签、不碰历史；`activeTab` 已授予这一瞬的 url 可见性。
  */
 async function detect() {
   try {
@@ -113,7 +122,7 @@ async function pageContext() {
   return { url: '', title: '' };
 }
 
-// ---- 收藏消息（M3/M4）----
+// ---- 收藏消息 ----
 
 /** 功能：从 `getConn()` 取可用 base；没连/没验过 ⇒ null（⛔ 不拿旧记录硬发）。 */
 async function requireBase() {
@@ -150,7 +159,7 @@ async function bmRemove(p) {
   return r;
 }
 
-/** 功能：0.1.5 E2 编辑 —— ⛔ 不透传 `url`，只放行 title / tags。 */
+/** 功能：编辑一条 —— ⛔ 不透传 `url`，只放行 title / tags。 */
 async function bmUpdate(p) {
   const base = await requireBase();
   if (!base) return { ok: false, code: 'not_connected' };
@@ -164,7 +173,7 @@ async function bmUpdate(p) {
   return r;
 }
 
-// ---- 0.1.5 E3：密码库只读（只透传，⛔ 这里不落任何存储、不打任何日志）----
+// ---- 密码库只读（只透传，⛔ 这里不落任何存储、不打任何日志）----
 
 async function vaultStatusMsg() {
   const base = await requireBase();
@@ -208,7 +217,7 @@ getConn()
   })
   .catch(() => {});
 
-/** 角标：成功 `✓` 2 s 复原；失败 `!` 同样 —— 复原成「有新版本」标（0.1.6 起角标兼职两件事）。 */
+/** 角标：成功 `✓` 2 s 复原；失败 `!` 同样 —— 复原成「有新版本」标（角标兼职两件事：收藏反馈与新版本提示）。 */
 function badge(ok) {
   const t = ok ? '✓' : '!';
   chrome.action.setBadgeText({ text: t });
@@ -244,12 +253,12 @@ chrome.commands.onCommand.addListener(async (name) => {
   }
 });
 
-/** 功能：会话感知（方案 §4.3）—— `zxdesk_sid` 变化 ⇒ 登录等待轮询插队（已连接态按需 status，不常驻）。 */
+/** 功能：会话感知 —— `zxdesk_sid` 变化 ⇒ 登录等待轮询插队（已连接态按需 status，不常驻）。 */
 chrome.cookies.onChanged.addListener(({ cookie }) => {
   onCookieChanged(cookie.name);
 });
 
-// ================= 0.1.4：授权一次过（硬规则 3） =================
+// ================= 授权一次过 =================
 
 /**
  * 功能：拿到新 host 权限 ⇒ 有 pendingConnect 就自动续跑连接——**与任何页面是否还活着无关**
@@ -272,12 +281,12 @@ chrome.permissions.onAdded.addListener(async () => {
   }
 });
 
-// ================= 0.1.4：工具栏打开方式（任务单 §五） =================
+// ================= 工具栏打开方式 =================
 
 /**
  * 功能：按 `pref:openMode` 切换点图标的动作（弹窗 ↔ 侧边栏）。
  * ⚠️ `setPopup({popup:''})` 后点图标触发 `action.onClicked`，此时已被 sidePanel 拦截，二者不冲突；
- * ⚠️ Edge 版本不支持 `sidePanel.setPanelBehavior` 时降级为只开弹窗（不报错，§五）。
+ * ⚠️ Edge 版本不支持 `sidePanel.setPanelBehavior` 时降级为只开弹窗（不报错）。
  */
 async function applyOpenMode(mode) {
   try {
@@ -303,7 +312,7 @@ async function bootOpenMode() {
     /* storage 瞬态 ⇒ 用 manifest 默认弹窗 */
   }
 }
-// 四触发点（§五）：安装、启动、设置变更、（设置页保存经 storage.onChanged 已覆盖）
+// 四触发点：安装、启动、设置变更、（设置页保存经 storage.onChanged 已覆盖）
 chrome.runtime.onInstalled.addListener(bootOpenMode);
 chrome.runtime.onStartup.addListener(bootOpenMode);
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -311,9 +320,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 bootOpenMode(); // SW 冷启动兜底（onInstalled/onStartup 不保证每次都醒）
 
-// ================= 0.1.6：版本检测（只在浏览器启动与安装/更新时各跑一次） =================
+// ================= 版本检测（只在浏览器启动与安装/更新时各跑一次） =================
 
-/** 功能：同意过许可协议没有 —— 没同意就一次都不发（协议 §四.4 的承诺）。读不到也当没同意。 */
+/** 功能：同意过许可协议没有 —— 没同意就一次都不发（对用户的承诺）。读不到也当没同意。 */
 async function eulaAccepted() {
   try {
     return hasAccepted(await getEula());
@@ -371,7 +380,7 @@ async function dismissUpdateMsg(p) {
 
 /** 功能：按已存的检测结果画「NEW」角标 —— 收藏动作的 ✓/! 反馈过后由它复原。 */
 async function paintUpdateBadge() {
-  let has = false;
+  let has;
   try {
     has = !!(await readUpdate());
   } catch (_e) {

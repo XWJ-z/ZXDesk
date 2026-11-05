@@ -1,5 +1,7 @@
 /**
- * 下载镜像候选。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：mirrors.js
+ * 职责：下载镜像候选
  *
  * 为什么需要：GitHub Releases 在国内经常连不上或被限速，而安装包只能从 Release 下。
  * 做法是**不信任任何单一通道**——服务端下发的地址照用，同时给每个 github.com 地址

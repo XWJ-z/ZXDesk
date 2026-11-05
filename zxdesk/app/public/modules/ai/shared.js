@@ -26,7 +26,7 @@
  *
  * @author zx
  * @date   2026-09-15
- * @since 0.9.5
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/18-ai辅助任务.md、docs/公共/开发方案/11-AI辅助任务-1期.md、
  *      docs/公共/开发方案/14-AI辅助任务-2期.md、core/slots.js
  */
@@ -2084,17 +2084,28 @@ function ledgerItemHtml(it) {
   const ie = String(s.ie || '') === '收入' ? '收入' : '支出';
   const day = /^\d{4}-\d{2}-\d{2}/.test(String(s.at || '')) ? String(s.at).slice(0, 10) : '';
   const cat = String(s.category_name || '').trim();
+  // ⭐ 0.9.7：二级分类允许重名 ⇒ 卡上把**一级 / 二级**分开写（`餐饮 / 其他`），不是只写「其他」
+  const catParent = String(s.category_parent || '').trim();
+  const catLabel = cat ? (catParent ? `${catParent} / ${cat}` : cat) : '';
   const want = String(s.category_want || '').trim();
+  const catWhy = String(s.category_why || '').trim();
   const acct = String(s.account_name || '').trim();
   const wantAcct = String(s.account_want || '').trim();
   const bits = [`${ie} ${amount} 元`];
   if (day) bits.push(day);
-  bits.push(cat ? `分类 ${cat}` : want ? `分类未匹配（AI 说的是「${want}」）` : '未分类');
-  if (acct) bits.push(`账户 ${acct}`);
-  else if (wantAcct) bits.push(`账户未匹配（AI 说的是「${wantAcct}」）`);
+  bits.push(
+    cat
+      ? `分类 ${catLabel}`
+      : want
+        ? `分类未匹配（AI 说的是「${want}」${catWhy ? `，${catWhy}` : ''}）`
+        : '未分类',
+  );
+  // ⭐ 0.9.7：`account_default` = 这一格来自用户设置的默认账户（模型没点名账户）
+  if (acct) bits.push(s.account_default ? `账户 ${acct}（默认）` : `账户 ${acct}`);
+  if (wantAcct) bits.push(`账户未匹配（AI 说的是「${wantAcct}」，已改用默认账户）`);
   return (
     `<div class="ai-prop-item">` +
-    `<div class="ai-prop-title">${esc(cat || want || '一笔账')}</div>` +
+    `<div class="ai-prop-title">${esc(catLabel || want || '一笔账')}</div>` +
     `<div class="ai-prop-meta">${esc(bits.join(' · '))}</div>` +
     (s.note ? `<div class="ai-prop-note">${esc(String(s.note))}</div>` : '') +
     `</div>`

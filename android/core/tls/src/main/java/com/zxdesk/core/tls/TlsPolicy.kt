@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：TlsPolicy.kt
+ * 职责：自签证书的 TOFU 判定，只信任本设备证书，指纹变化按轮换重确认
+ */
+
 package com.zxdesk.core.tls
 
 /** 已确认的本机设备证书。 */
@@ -28,7 +34,7 @@ interface TofuStore {
  * 自签证书 TOFU 判定：只认本设备证书（`O=fnOS` + `CN=fnOS`）；
  * 指纹一致放行，指纹变化按「轮换」重确认，subject 不符拒绝。
  *
- * ⚠️ 2026-10-23 实测（真机 10.1.2.3:64999）：
+ * ⚠️ 实测（10.1.2.3:64999）：
  * `X509Certificate.subjectX500Principal.name` 返回 **`CN=fnOS,O=fnOS`** ——
  * **CN 在前**，且逗号后没有空格。原先按 `O=fnOS, CN=fnOS` 写的正则两组都匹配不上，
  * 结果是把自家设备一律拒掉。⇒ 改成按属性解析，不依赖顺序与空格。

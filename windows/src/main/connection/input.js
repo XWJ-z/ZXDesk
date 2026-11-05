@@ -1,5 +1,7 @@
 /**
- * 输入识别（移植自 `Project/Android/core/connection/InputParser.kt`，2026-10-25）。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：input.js
+ * 职责：输入识别（移植自 `Project/Android/core/connection/InputParser.kt`）
  *
  * 判定顺序**不可改**（改了就会把域名当 FNID、把端口当主机）：
  * 完整 URL → `[v6]:port` → `host:port` → 裸 IPv6 → IPv4 → 含 `.` 的域名 → FNID → 认不出。

@@ -8,7 +8,7 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.54
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/07-前端-电脑版与手机版.md
  */
 
@@ -272,12 +272,27 @@ export function secHead(title, dot, note) {
  * @param {string} [dot] - 可选，标题前的圆点颜色；缺省时不画圆点
  * @param {string} [note] - 可选，右侧备注文案；缺省时为空
  * @param {boolean} [folded] - 可选，当前是否处于收起状态（缺省展开）
+ * @param {string} [sub] - 可选，标题下面那行小字（⭐ 0.9.7 加）—— **收起时也看得见**，
+ *      写「这块里装的是什么」（例：版本数据 → 「版本号、数据存放与各端最新版本」）。
+ *      ⚠️ 别写成讲解：一行、十来字，说清里面有什么就行。
+ *      ⚠️ 它**不是**图标：2026-10-19 老大明确要求设置页除屏头齿轮外不留任何图标（图标墙不携带信息），
+ *      区分度只能靠**文字层级**来做（标题 + 副标题 + 分组），⛔ 别再往标题行塞 emoji / SVG。
  * @returns {string} 标题行（`<button>`）的 HTML 字符串
  */
-export function secHeadFold(id, title, dot, note, folded) {
-  return `<button class="sec-head fold${folded ? ' on' : ''}" type="button" data-act="sec-toggle"
+export function secHeadFold(id, title, dot, note, folded, sub) {
+  const cap = String(sub == null ? '' : sub).trim();
+  // ⚠️ 有副标题时标题那一侧变成**一列**（`.sec-tt`），没有时仍是原来那个单行 `<span>`
+  //    —— 后者被「更多」页与既有断言逐字依赖，⛔ 不要统一成一种写法。
+  const titleHtml = dot
+    ? `<span class="dot" style="background:${dot}"></span>${esc(title)}`
+    : esc(title);
+  return `<button class="sec-head fold${folded ? ' on' : ''}${cap ? ' has-cap' : ''}" type="button" data-act="sec-toggle"
     data-sec="${esc(id)}" aria-expanded="${folded ? 'false' : 'true'}">
-    <span class="sec-title">${dot ? `<span class="dot" style="background:${dot}"></span>` : ''}${esc(title)}</span>
+    ${
+      cap
+        ? `<span class="sec-tt"><span class="sec-title">${titleHtml}</span><span class="sec-cap">${esc(cap)}</span></span>`
+        : `<span class="sec-title">${titleHtml}</span>`
+    }
     <span class="sec-note">${esc(note || '')}<svg class="sec-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></span>
   </button>`;
 }

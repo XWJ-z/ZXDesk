@@ -88,7 +88,8 @@ test('主进程与壳的每个相对 import 都指向真实文件（node --check
 test('package.json：type/mode/版本/依赖纪律', () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   assert.equal(pkg.type, 'module');
-  assert.equal(pkg.version, '0.2.2');
+  // 版本号只要求 semver（具体号由「版本号三处一致」那条盯着 APP_VERSION，⛔ 别在这里再抄一遍）
+  assert.match(pkg.version, /^\d+\.\d+\.\d+$/);
   assert.equal(pkg.productName, 'ZXDesk');
   assert.equal(pkg.main, 'src/main/index.js');
   assert.deepEqual(pkg.dependencies, {}, 'dependencies 必须为空（零运行时依赖）');
@@ -228,7 +229,8 @@ test('壳把主进程的 busy / error 合并回来（否则「验证中…」和
 test('顶栏是文字菜单栏：没有徽标、没有图标按钮、没有内联 SVG', () => {
   const html = fs.readFileSync(path.join(shellDir, 'index.html'), 'utf8');
   assert.match(html, /id="menubar"/, '应该有菜单栏容器');
-  for (const menu of ['connect', 'view', 'help']) {
+  // Windows 规范四组（0.2.6 重排；旧口径是照 Android 抽屉分 connect/settings）
+  for (const menu of ['file', 'view', 'tools', 'help']) {
     assert.match(html, new RegExp(`data-menu="${menu}"`), `缺菜单：${menu}`);
   }
   assert.ok(!html.includes('brand-mark'), '0.1.4 去掉 ZX 徽标');
@@ -253,12 +255,92 @@ test('菜单栏仍是 44px，远程视图的偏移不用改', () => {
   assert.match(view, /TOOLBAR_HEIGHT = 44/);
 });
 
+/**
+ * 0.2.6：菜单栏**常驻**（Windows 规范）。
+ *
+ * ⚠️ 两个容易回退的点：
+ * ① `no-toolbar` 是**布局**类（内容区高度要不要减 44px），必须跟 `menubar.hidden` 走；
+ *    以前它跟「是不是浏览屏」走 —— 菜单常驻之后连接页会多出 44px、表单被顶出屏幕。
+ * ② 访问码屏会把 `menuGroup` 藏起来，回连接页必须重置，否则菜单凭空消失。
+ */
+test('菜单栏常驻：no-toolbar 跟 menubar.hidden 走，菜单组回连接页要还原', () => {
+  const app = fs.readFileSync(path.join(shellDir, 'app.js'), 'utf8');
+  assert.match(app, /el\.menubar\.hidden = !showMenubar/, '菜单栏只在启动动画时藏');
+  assert.match(app, /classList\.toggle\('no-toolbar', !showMenubar\)/, '布局类必须跟着菜单栏走');
+  assert.ok(
+    !/classList\.toggle\('no-toolbar', !browsingLike\)/.test(app),
+    '⛔ 不能再用「是不是浏览屏」控制布局（菜单常驻后会多出 44px）',
+  );
+  // menuGroup.hidden 必须在 browsingLike 分支之外 —— 它在 if 里面的话回连接页不会还原
+  const groupAt = app.indexOf("el.menuGroup.hidden = screen === 'access'");
+  const branchAt = app.indexOf('if (browsingLike) {');
+  assert.ok(groupAt > 0 && groupAt < branchAt, 'menuGroup 的隐藏要在 browsingLike 分支之前还原');
+});
+
 test('「显示 / 隐藏」是独立按钮，不换行', () => {
   const css = fs.readFileSync(path.join(shellDir, 'app.css'), 'utf8');
   const block = css.slice(css.indexOf('.row .link-btn {'), css.indexOf('.row .link-btn:hover'));
   assert.match(block, /flex:\s*0 0 auto/);
   assert.match(block, /white-space:\s*nowrap/);
   assert.match(block, /height:\s*44px/);
+});
+
+/**
+ * 0.2.6：切换账号的两个入口 —— 连接页账号框右侧的「切换」按钮，与菜单「文件 → 切换账号」，
+ * 打开的是同一个弹窗。
+ */
+test('连接页账号框右侧有「切换」按钮，点开的是同一个弹窗', () => {
+  const app = fs.readFileSync(path.join(shellDir, 'app.js'), 'utf8');
+  const start = app.indexOf('function viewConnect');
+  const body = app.slice(start, app.indexOf('function viewTwofa'));
+  // 账号输入框与切换按钮要在同一个 .row 里（按钮在输入框右侧，不是另起一行）
+  const rowAt = body.indexOf('class="row"');
+  const userAt = body.indexOf('id="f-user"');
+  const btnAt = body.indexOf('data-action="accounts.open"');
+  assert.ok(rowAt > 0 && userAt > rowAt && btnAt > userAt, '按钮要跟在账号输入框后面、同处一行');
+  assert.match(body, /切换<\/button>/, '按钮文案就是「切换」');
+});
+
+test('切换账号弹窗：遮罩容器在、且渲染函数只认主进程给的数据', () => {
+  const html = fs.readFileSync(path.join(shellDir, 'index.html'), 'utf8');
+  assert.match(html, /id="modal"/, '壳里要有弹窗容器');
+  const app = fs.readFileSync(path.join(shellDir, 'app.js'), 'utf8');
+  assert.match(app, /function renderAccounts\(acc\)/);
+  assert.match(app, /renderAccounts\(state\.accounts\)/, 'render 要接上弹窗状态');
+  // ⚠️ 弹窗必须画在 browsingLike 早退之前，否则浏览页里打不开
+  const callAt = app.indexOf('renderAccounts(state.accounts)');
+  const earlyReturn = app.indexOf('if (browsingLike) {');
+  assert.ok(callAt > 0 && callAt < earlyReturn, '弹窗渲染要排在 browsingLike 早退之前');
+
+  const css = fs.readFileSync(path.join(shellDir, 'app.css'), 'utf8');
+  assert.match(css, /\.modal\[hidden\]\s*\{[^}]*display:\s*none/s, '隐藏态要由 CSS 兜住');
+  assert.match(css, /\.acc-item\.current\s*\{/, '当前账号要有区分');
+});
+
+test('切换账号弹窗：**水平垂直都居中**，且超高时能滚到头', () => {
+  const css = fs.readFileSync(path.join(shellDir, 'app.css'), 'utf8');
+  const modal = css.slice(css.indexOf('.modal {'), css.indexOf('.modal[hidden]'));
+  const card = css.slice(css.indexOf('.modal-card {'), css.indexOf('.modal-head {'));
+
+  assert.match(modal, /display:\s*flex/);
+  // ⚠️ 正则要锚在**声明行**上：注释里也提到这两个值（说明为什么不这么写），不能误伤
+  assert.equal(/^\s*align-items:\s*flex-start/m.test(modal), false, '⛔ 顶部对齐就是「没有垂直居中」');
+  assert.equal(
+    /^\s*align-items:\s*center/m.test(modal),
+    false,
+    '⛔ center + overflow-y:auto 时内容超高会裁掉顶部且滚不上去（老坑）',
+  );
+  assert.match(card, /^\s*margin:\s*auto/m, '靠 margin:auto 居中：放得下四边均分，放不下自动塌成 0');
+  assert.match(modal, /overflow-y:\s*auto/, '账号多了要能滚');
+});
+
+test('新增账号表单：敲字不发 IPC（否则每次推送都重画、光标跳走）', () => {
+  const app = fs.readFileSync(path.join(shellDir, 'app.js'), 'utf8');
+  const modalInput = app.slice(app.indexOf("el.modal.addEventListener('input'"), app.indexOf("el.modal.addEventListener('change'"));
+  assert.ok(!modalInput.includes('send('), '输入时⛔ 不要发 IPC，只写本地副本');
+  // 提交时才从 DOM 读值
+  assert.match(app, /document\.getElementById\('a-address'\)/);
+  assert.match(app, /document\.getElementById\('a-password'\)/);
 });
 
 test('「记住密码」勾选会先写回本地副本（否则提交时被旧值盖回去）', () => {
@@ -284,18 +366,20 @@ test('「显示 / 隐藏」按钮仍是独立小按钮（不换行）', () => {
 
 // ---------------------------------------------------------------- 0.1.6：设置菜单 / 托盘 / 自启
 
-test('顶栏有「设置」菜单，且仍然没有图标', () => {
+test('「设置」在工具菜单里（顶栏不再单独占一格），且仍然没有图标', () => {
   const html = fs.readFileSync(path.join(shellDir, 'index.html'), 'utf8');
-  assert.match(html, /data-menu="settings"[^>]*>设置</, '顶栏要有「设置」');
-  for (const menu of ['connect', 'view', 'settings', 'help']) {
-    assert.match(html, new RegExp(`data-menu="${menu}"`), `缺菜单：${menu}`);
-  }
+  assert.match(html, /data-menu="tools"[^>]*>工具</, '顶栏要有「工具」');
+  assert.ok(!html.includes('data-menu="settings"'), '「设置」已并入工具菜单，⛔ 不要再单占一格');
   assert.ok(!/<svg/i.test(html), '仍然不许有内联 SVG 图标');
+
+  const main = fs.readFileSync(path.join(root, 'src', 'main', 'index.js'), 'utf8');
+  const tools = main.slice(main.indexOf('tools: ['), main.indexOf('help: helpItems'));
+  assert.match(tools, /label: '设置'/, '工具菜单里得有「设置」');
 });
 
-test('主进程：菜单白名单含 settings；托盘 / 快捷方式 / 自启的落点都在', () => {
+test('主进程：菜单白名单是 Windows 规范四组；托盘 / 快捷方式 / 自启的落点都在', () => {
   const ipc = fs.readFileSync(path.join(root, 'src', 'main', 'ipc.js'), 'utf8');
-  assert.match(ipc, /MENU_ALLOWLIST = Object\.freeze\(\['connect', 'view', 'settings', 'help'\]\)/);
+  assert.match(ipc, /MENU_ALLOWLIST = Object\.freeze\(\['file', 'view', 'tools', 'help'\]\)/);
 
   const main = fs.readFileSync(path.join(root, 'src', 'main', 'index.js'), 'utf8');
   assert.match(main, /new Tray\(/, '托盘');
@@ -331,7 +415,7 @@ test('快捷方式图标指 exe 自己（不再用 asar 里的 icon.ico）', () 
   assert.match(shortcuts, /iconIndex = 0/);
 });
 
-// ---------------------------------------------------------------- 2026-10-27：整页错误屏已删除
+// ---------------------------------------------------------------- 整页错误屏已删除
 
 test('没有「打不开页面」整页错误屏了：错误只走菜单栏提示', () => {
   const app = fs.readFileSync(path.join(shellDir, 'app.js'), 'utf8');

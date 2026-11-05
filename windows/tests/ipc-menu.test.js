@@ -8,9 +8,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { ACTION_ALLOWLIST, CHANNEL, MENU_ALLOWLIST, registerIpc } from '../src/main/ipc.js';
+import { ACTION_ALLOWLIST, CHANNEL, DOC_ALLOWLIST, MENU_ALLOWLIST, registerIpc } from '../src/main/ipc.js';
 
-function setup({ trusted = true } = {}) {
+function setup({ trusted = true, readDocThrows = false } = {}) {
   const handlers = new Map();
   const ipcMain = {
     handle: (channel, fn) => handlers.set(channel, fn),
@@ -18,6 +18,7 @@ function setup({ trusted = true } = {}) {
   const menus = [];
   const actions = [];
   const logs = [];
+  const docs = [];
   registerIpc(ipcMain, {
     controller: {
       getState: () => ({ screen: 'browsing' }),
@@ -27,17 +28,26 @@ function setup({ trusted = true } = {}) {
     isTrustedSender: () => trusted,
     onMenu: (which) => menus.push(which),
     copyText: async () => true,
+    readDoc: async (kind) => {
+      docs.push(kind);
+      if (readDocThrows) throw new Error('读不了');
+      return { ok: true, kind };
+    },
     logger: (m) => logs.push(m),
   });
-  return { handlers, menus, actions, logs };
+  return { handlers, menus, actions, logs, docs };
 }
 
-test('菜单白名单：connect / view / settings / help 放行', async () => {
+test('菜单白名单：file / view / tools / help 放行（Windows 规范四组）', async () => {
   const { handlers, menus } = setup();
   for (const which of MENU_ALLOWLIST) {
     assert.equal(await handlers.get(CHANNEL.MENU)({}, which), true, which);
   }
-  assert.deepEqual(menus, ['connect', 'view', 'settings', 'help']);
+  assert.deepEqual(menus, ['file', 'view', 'tools', 'help']);
+  // 旧的四组（照 Android 抽屉）⛔ 不能还留在白名单里
+  for (const legacy of ['connect', 'settings']) {
+    assert.equal(MENU_ALLOWLIST.includes(legacy), false, `旧的菜单名还在：${legacy}`);
+  }
 });
 
 test('菜单白名单：未登记的名字一律拒（并留日志）', async () => {
@@ -67,4 +77,30 @@ test('动作白名单：没登记的字符串直接拒，不会打到 controller
   const result = await handlers.get(CHANNEL.ACTION)({}, 'os.exec', { cmd: 'rm' });
   assert.equal(result.ok, false);
   assert.deepEqual(actions, []);
+});
+
+test('文档白名单：只放行 eula / releases，路径由主进程拼', async () => {
+  const { handlers, docs } = setup();
+  for (const kind of DOC_ALLOWLIST) {
+    const result = await handlers.get(CHANNEL.DOC_GET)({}, kind);
+    assert.equal(result.ok, true, kind);
+  }
+  assert.deepEqual(docs, ['eula', 'releases']);
+
+  const denied = await handlers.get(CHANNEL.DOC_GET)({}, '../../etc/passwd');
+  assert.equal(denied.ok, false);
+  assert.deepEqual(docs, ['eula', 'releases'], '没登记的 kind ⛔ 不进 readDoc');
+});
+
+test('文档通道：来源不可信一律拒；readDoc 抛错兜成 {ok:false}', async () => {
+  const untrusted = setup({ trusted: false });
+  const denied = await untrusted.handlers.get(CHANNEL.DOC_GET)({}, 'eula');
+  assert.equal(denied.ok, false);
+  assert.deepEqual(untrusted.docs, [], '不可信来源连 readDoc 都不该进');
+
+  const broken = setup({ readDocThrows: true });
+  const failed = await broken.handlers.get(CHANNEL.DOC_GET)({}, 'eula');
+  assert.equal(failed.ok, false);
+  assert.match(failed.error, /读不了/);
+  assert.ok(broken.logs.some((l) => l.includes('读取文档失败')), '失败要留一行日志');
 });

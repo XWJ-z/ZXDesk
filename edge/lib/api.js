@@ -1,10 +1,18 @@
 /**
- * 功能：REST 封装 —— 超时、错误码归一（方案 §三）。⛔ 只有 SW（经 `sw.js` → `lib/*`）调这里，UI 一律走消息。
+ * api.js —— REST 封装（超时 + 错误码归一）
  *
- * ⭐ M0 真机裁决（2026-10-24，见任务单回单）：会话通道**只用 `credentials:'include'`**——
- * 扩展拿到 host 权限后浏览器自动带 Cookie；显式 `Cookie` 头是禁改头会被剥（L1 弃用）。
- * 探测还发现 `cookies.getAll({url})` 可能返回 0 条而 `cookies.get` 找得到 ⇒
- * 登录态判定**只认 health 的 `authenticated`**，不依赖自己拼头。
+ * 功能：`fetchJson` 发一个 JSON 请求并把失败收口成 `{code}` 异常；`fetchHealth` 是唯一的握手口，
+ *      用一次 `/api/health` 同时判出「是 ZXDesk / 未登录 / 网关要登录 / 访问码 / 不是它」。
+ *
+ * ⛔ 只有 SW（`sw.js` → `lib/*`）调这里，UI 一律走消息。
+ * ⚠️ 会话通道**只用 `credentials:'include'`**：扩展拿到 host 权限后浏览器自动带 Cookie，
+ *    显式 `Cookie` 头是禁改头、会被浏览器剥掉。
+ * ⚠️ 登录态判定只看 health 的 `authenticated`：`cookies.getAll({url})` 在 Edge 上可能返回 0 条
+ *    而 `cookies.get` 找得到，自己数 Cookie 会误判成未连接。
+ *
+ * @author zx
+ * @since 0.1.0
+ * 相关：Project/Edge/README.md
  */
 
 const HEALTH_TIMEOUT = 3000;
@@ -24,7 +32,7 @@ export async function fetchJson(url, opt = {}) {
   try {
     res = await fetch(url, {
       method,
-      credentials: 'include', // ⭐ 唯一通道（M0 裁决）
+      credentials: 'include', // ⭐ 唯一通道（不手工拼 Cookie 头）
       redirect: 'follow',
       headers: { Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined,

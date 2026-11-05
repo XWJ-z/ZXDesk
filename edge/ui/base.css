@@ -1,17 +1,23 @@
 /**
- * 0.1.4 base.css —— 三屏（popup / sidepanel / settings）共用的组件样式。
+ * base.css —— 三屏（popup / sidepanel / settings）共用的组件样式。
  * ⛔ 布局（壳尺寸、卡片摆位）不住这里；颜色/字号只吃 tokens.css 变量。
  */
 
-/* ---- 表单 ---- */
+/* ---- 表单 ----
+   ⚠️ `padding` 与 `line-height` 定在**基础层**。
+   原来只有边框没有内距 ⇒ 各屏自己补，补出了 20 / 27 / 31 / 36px 四种高度，
+   同一张表单里的「标题」与「网址」都不是一套（15px 粗体 vs 12px 常规）。
+   现在所有文本输入默认 36px 高；要更紧的**必须显式覆盖**，别靠"没写"。 */
 input,
 select {
   font: inherit;
+  line-height: 1.4;
   color: var(--ink);
   box-sizing: border-box;
   border: 1px solid var(--line);
   border-radius: var(--radius-input);
   background: var(--surface);
+  padding: 8px 10px;
 }
 input::placeholder {
   color: var(--ink-2);
@@ -154,28 +160,20 @@ h1 {
   font-size: 12px;
   color: var(--ink-2);
 }
-.f-title {
-  flex: 1;
-  min-width: 0;
-  font-size: 15px;
-  font-weight: 600;
-  border: 0;
-  border-radius: 8px;
-  padding: 4px 6px;
-  background: transparent;
-}
-.f-title:hover {
-  background: var(--bg);
-}
+/* 标题与网址：**同一套字段样式**（字号 / 内距 / 边框 / 底色 / 圆角全部由基础层给）。
+   原来 `.f-title` 是 15px/600 + 透明底、`.f-url` 是 12px + 灰底，
+   连 placeholder 都各走一套（一个粗大字、一个细灰字），并排看像两种控件。 */
+.f-title,
 .f-url {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  color: var(--ink);
+}
+/* ⚠️ 提示文字一律常规字重、次要色 —— ⛔ 不继承标题的加粗（那会让提示看着像已填内容） */
+.f-title::placeholder,
+.f-url::placeholder {
   color: var(--ink-2);
-  background: var(--bg);
-  border: 0;
-  border-radius: 8px;
-  padding: 6px 8px;
+  font-weight: 400;
 }
 .flabel-line {
   margin: 4px 0 6px;
@@ -218,16 +216,13 @@ h1 {
 .tag-add select {
   flex: none;
   width: 88px;
-  padding: 4px;
-  font-size: 12px;
+  padding: 8px 4px; /* 横向留白小：88px 要尽量多塞下分类名；纵向与 input 同高 */
+  font-size: 13px;
 }
 .tag-add input {
   flex: 1;
   min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  font-size: 12px;
-  padding: 4px 8px;
+  font-size: 13px;
 }
 .btn-subtle {
   flex: none;
@@ -235,8 +230,8 @@ h1 {
   border-radius: 8px;
   background: var(--surface);
   color: var(--ink);
-  font-size: 12px;
-  padding: 4px 10px;
+  font-size: 13px;
+  padding: 8px 10px;
 }
 .btn-subtle:hover {
   background: var(--bg);

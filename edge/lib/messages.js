@@ -1,35 +1,40 @@
 /**
- * 功能：消息名与错误码文案的**唯一出处**（分层纪律 3：UI 与 SW 都从这里取，⛔ 字符串各写一遍）。
+ * messages.js —— 消息名与全部界面文案的唯一出处
  *
- * ⛔ 各屏自拼中文是退回条件——文案只住在本文件 `ERR_TEXT`。
+ * 功能：`MSG` 是 UI↔SW 的消息名；`ERR_TEXT` 是错误码到文案的映射；其余常量是各屏的界面文案。
+ *
+ * ⛔ UI 只做「code → 文案」映射，各屏自拼中文一律不允许。
+ * ⛔ 密码库明文不经过这里：文案只有标签，条目内容一个字都不存。
+ *
+ * @author zx
+ * @since 0.1.0
+ * 相关：Project/Edge/README.md
  */
 
-/** UI→SW 消息名（方案 §3.1） */
+/** UI→SW 的消息名 —— 键名即协议，⛔ 改名要两端同改 */
 export const MSG = {
   detect: 'conn:detect', // {}                        ⇒ {origin, gatewayHint} | {origin:null}
   start: 'conn:start', //   {input, origin?}          ⇒ Status
   status: 'conn:status', // {}                        ⇒ Status
   recheck: 'conn:recheck', // {}                      ⇒ Status
   disconnect: 'conn:disconnect', // {}                ⇒ {ok:true}
-  bmCreate: 'bm:create', //   {url, title?, tags?}    ⇒ {ok:true, item} | {ok:false, code}   （M2）
-  bmList: 'bm:list', //       {q?, tag?}              ⇒ {items, total, tags}                 （M3）
-  bmRemove: 'bm:remove', //   {id}                    ⇒ {ok:true}                            （M3）
-  pageContext: 'page:context', // {}                  ⇒ {url, title}                         （M2）
-  bmCacheGet: 'bm:cache-get', // {}                    ⇒ cache|null（edge:cache，TTL 60s）    （M4）
-  bmCacheSet: 'bm:cache-set', // {items,total,tags}    ⇒ {ok:true}                            （M4）
-  lastConn: 'conn:last', //    {}                      ⇒ lastConnResult|null（SW 自动续跑结果）（0.1.4）
-  // ---- 0.1.5 ----
-  bmUpdate: 'bm:update', //    {id, title?, tags?}      ⇒ {ok:true,item} | {ok:false,code}      （E2）
-  vaultStatus: 'vault:status', // {}                  ⇒ {ok, initialized, unlocked}           （E3）
-  vaultEntry: 'vault:entry', //  {id}                 ⇒ {ok:true, entry:{title,username,password}} | {ok:false, code:'vault_locked'|'vault_gone'}（E3）
-  // ---- 0.1.6 ----
+  bmCreate: 'bm:create', //   {url, title?, tags?}    ⇒ {ok:true, item} | {ok:false, code}
+  bmList: 'bm:list', //       {q?, tag?}              ⇒ {items, total, tags}
+  bmRemove: 'bm:remove', //   {id}                    ⇒ {ok:true}
+  pageContext: 'page:context', // {}                  ⇒ {url, title}
+  bmCacheGet: 'bm:cache-get', // {}                    ⇒ cache|null（edge:cache，TTL 60s）
+  bmCacheSet: 'bm:cache-set', // {items,total,tags}    ⇒ {ok:true}
+  lastConn: 'conn:last', //    {}                      ⇒ lastConnResult|null（SW 自动续跑结果）
+  bmUpdate: 'bm:update', //    {id, title?, tags?}      ⇒ {ok:true,item} | {ok:false,code}
+  vaultStatus: 'vault:status', // {}                  ⇒ {ok, initialized, unlocked}
+  vaultEntry: 'vault:entry', //  {id}                 ⇒ {ok:true, entry:{title,username,password}} | {ok:false, code:'vault_locked'|'vault_gone'}
   updateInfo: 'update:info', //  {}                    ⇒ {ok:true, update:{current,latest,url,code}|null}
   updateCheck: 'update:check', // {}                   ⇒ {ok, fresh, newer?, update?}（设置里手动查一次）
   updateSeen: 'update:seen', //  {}                    ⇒ {ok:true}（气泡已展示 ⇒ 撤角标）
   updateDismiss: 'update:dismiss', // {version}        ⇒ {ok:true}（这一版不再提示）
 };
 
-/** 错误码 → 文案（一期 §4.6 + 二期 §六） */
+/** 错误码 → 文案 */
 export const ERR_TEXT = {
   address_invalid: '地址格式不对。可输 FNID（如 my-nas）、10.1.2.3:8990 或域名；局域网主机名请填 IP 或带端口',
   not_zxdesk: '这个地址上没有 ZXDesk —— 确认端口或路径',
@@ -41,7 +46,7 @@ export const ERR_TEXT = {
   http_error: '服务器返回了错误',
   network: '连不上，检查地址与网络后重试',
   duplicate: '这个网址已经收藏过了',
-  // ---- 二期新增（§六）----
+  // ---- FNID 与中继 ----
   fn_id_invalid: 'FNID 只能是小写字母、数字和 -，5~32 位，字母开头',
   fn_id_not_found: '找不到这个 FNID',
   fn_offline: '这台 NAS 好像离线了（FNID 没有可用地址）',
@@ -55,7 +60,7 @@ export function errText(code) {
   return ERR_TEXT[code] || '出错了，请重试';
 }
 
-/** 收藏动作与列表的界面文案（M3/M4 + 0.1.3 交互重做；⛔ UI 自拼中文） */
+/** 收藏动作与列表的界面文案（⛔ UI 自拼中文） */
 export const BM_TEXT = {
   save: '收藏',
   saving: '收藏中…',
@@ -90,16 +95,19 @@ export const BM_TEXT = {
   btnCancel: '取消',
   today: '今天',
   yesterday: '昨天',
-  // ---- 0.1.5 E2：行内编辑 ----
+  // ---- 行内编辑 ----
   edit: '编辑',
   editSave: '保存',
   editSaving: '保存中…',
   editGone: '这条已经不在了',
   editFail: '保存失败，请重试',
+  // ---- 添加网址的自动识别 ----
+  suggest: '建议',
+  suggestTitle: '这个站点用过的标签，点一下加上',
 };
 
 /**
- * 0.1.5 E3：密码库只读（⛔ 各屏自拼中文；明文只在 UI 内存里过一遍，⛔ 不进这里以外的任何地方）
+ * 密码库只读（⛔ 各屏自拼中文；明文只在 UI 内存里过一遍，⛔ 不进这里以外的任何地方）
  */
 export const VAULT_TEXT = {
   key: '🔑 ••••', // 掩码**只 4 个点**：6 个点在 CJK 字体下会折行、撑高整排（手机端 0.8.15 教训）
@@ -123,7 +131,7 @@ export const VAULT_TEXT = {
   close: '关闭',
 };
 
-/** 0.1.4 设置页与双形态文案（同样只住这里，⛔ 各屏自拼） */
+/** 设置页与双形态文案（同样只住这里，⛔ 各屏自拼） */
 export const UI_TEXT = {
   // 设置页
   setTitle: '设置',
@@ -143,7 +151,7 @@ export const UI_TEXT = {
   modePopup: '弹窗',
   modePanel: '侧边栏',
   aboutLine: (v) => `ZXDesk 收藏夹 ${v} · 只读展示`,
-  // 授权引导（0.1.4 起：设置视图嵌在 popup/侧边栏里，不再开整页）
+  // 授权引导（设置视图嵌在 popup/侧边栏里，不开整页）
   needAuth: '还没授权这个站点 —— 已切到设置，点一次「授权并连接」',
   sBack: '返回',
   // 菜单项
@@ -151,7 +159,7 @@ export const UI_TEXT = {
   mMore: '更多',
   // 双形态
   viewAllInPanel: '在侧边栏看全部',
-  // 关于：版本与手动检查（0.1.6）
+  // 关于：版本与手动检查
   check: '检查更新',
   checking: '检查中…',
   checkNewest: (v) => `已是最新版本（${v}）`,
@@ -177,7 +185,7 @@ export const UI_TEXT = {
   },
 };
 
-/** 0.1.6 新版本气泡文案（启动时检测到新版才出现） */
+/** 新版本气泡文案（启动时检测到新版才出现） */
 export const UPDATE_TEXT = {
   title: (v) => `有新版本 ${v}`,
   /** 有提取码时一并给出；服务端换成别的下载地址就没有码，文案跟着变，⛔ 不写死 */
@@ -187,7 +195,7 @@ export const UPDATE_TEXT = {
   close: '关闭提示',
 };
 
-/** 0.1.6 许可协议面板文案（首次启动的同意门槛 / 设置里的重新阅读） */
+/** 许可协议面板文案（首次启动的同意门槛 / 设置里的重新阅读） */
 export const EULA_UI = {
   title: '许可协议',
   agree: '我已阅读并同意本许可协议',

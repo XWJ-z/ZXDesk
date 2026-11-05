@@ -45,12 +45,13 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.9.5
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/04-多用户与账号.md、07-前端-电脑版与手机版.md、13-决策记录.md（决策 67 / 76）、
  *      docs/公共/开发方案/21-记账2期-记账.md（§7.6 /）
  */
 
 import { api, BASE } from '../../core/api.js';
+import { cacheClear } from '../../core/cache.js';
 import { isBackupZip, orgCounts, readZipManifest } from '../../core/backup.js';
 import { $, esc, formatBytes, skeletonHtml } from '../../core/dom.js';
 import { MAX_NAV_TABS, entryOn, moduleItems, navTabItems, navTabsWire } from '../../core/modules.js';
@@ -165,7 +166,7 @@ export function acctSectionHtml(me) {
   if (!me) return '';
   return `
     <div class="sec sec-card${foldCls('acct')}" id="sec-acct">
-      ${secHeadFold('acct', '账号设置', '#0ea5e9', '', isFolded('acct'))}
+      ${secHeadFold('acct', '账号设置', '#0ea5e9', '', isFolded('acct'), '昵称、用户名、密码与退出登录')}
       <div class="m-acct">
         <span class="m-ava">${esc(initialOf(me))}</span>
         <span class="m-acct-main">
@@ -228,7 +229,7 @@ export function adminSectionHtml() {
   //    （整块不渲染），合成之后那会把「整体备份」一起藏掉，而且两块之间会闪。
   return `
     <div class="sec sec-card${foldCls('admin')}" id="sec-admin">
-      ${secHeadFold('admin', '管理员设置', '#4f46e5', '仅管理员', isFolded('admin'))}
+      ${secHeadFold('admin', '管理员设置', '#4f46e5', '仅管理员', isFolded('admin'), '成员账号、整体备份与日志')}
       <div class="sec-sub">成员账号</div>
       <button class="mrow" type="button" data-act="reg-toggle" style="width:100%;font:inherit;text-align:left">
         <span class="mtxt">自主注册<small>${on ? '知道地址的人都能自己注册账号' : '只有管理员能添加成员'}</small></span>
@@ -357,7 +358,7 @@ export function dataSectionHtml() {
   }
   return `
     <div class="sec sec-card${foldCls('data', true)}" id="sec-data">
-      ${secHeadFold('data', '版本数据', '#0ea5e9', '', isFolded('data', true))}
+      ${secHeadFold('data', '版本数据', '#0ea5e9', '', isFolded('data', true), '版本号、数据存放与各端最新版本')}
       <div class="card sec-flat">
         <dl class="kv">
           <dt>应用版本</dt><dd>v${esc(h.version || '—')}${versionBadgeHtml()}</dd>
@@ -603,6 +604,9 @@ export async function doLogout() {
   } catch (_e) {
     /* 本来就已经掉线了也无所谓，照样回登录页 */
   }
+  // ⭐ 0.2.15：退出就把离线快照清掉 —— 这台设备可能换账号，上一个账号的只读数据
+  //    绝不能在断网时被下一个人看到（缓存按路径存，不区分账号）。
+  cacheClear();
   location.href = BASE + '/login.html';
 }
 
@@ -1112,7 +1116,7 @@ function modRowsHtml(list) {
 function backupSectionHtml() {
   return `
     <div class="sec sec-card${foldCls('backup')}" id="sec-backup">
-      ${secHeadFold('backup', '备份与恢复', '#64748b', '我的数据', isFolded('backup'))}
+      ${secHeadFold('backup', '备份与恢复', '#64748b', '我的数据', isFolded('backup'), '导出、导入与整体备份')}
       <button class="mrow" type="button" data-act="export" style="width:100%;font:inherit;text-align:left">
         <span class="mtxt">导出我的数据<small>下载一份文件：你的项目、任务、课表、收藏、数码和密码</small></span>
         <span class="mval">下载</span>
@@ -1276,7 +1280,7 @@ function moduleSectionHtml(p, me) {
   if (!state.modules) {
     return `
     <div class="sec sec-card${foldCls(secId)}" id="sec-${secId}">
-      ${secHeadFold(secId, p.label, '#4f46e5', '', isFolded(secId))}
+      ${secHeadFold(secId, p.label, '#4f46e5', '', isFolded(secId), p.desc)}
       ${skeletonHtml(3)}
     </div>`;
   }
@@ -1313,8 +1317,7 @@ function moduleSectionHtml(p, me) {
   //    ⇒ 现在折叠态与 `isFolded()` 真正对上（仍默认收起，与「其余全部折叠」那条指令一致）。
   return `
     <div class="sec sec-card${foldCls(secId)}" id="sec-${secId}">
-      ${secHeadFold(secId, p.label, '#4f46e5', '', isFolded(secId))}
-      <div class="card sec-flat"><div class="mrow plain" style="padding:0">${esc(p.desc || '')}</div></div>
+      ${secHeadFold(secId, p.label, '#4f46e5', '', isFolded(secId), p.desc)}
       ${goto}
       ${cards}
       ${panes}
@@ -1352,19 +1355,135 @@ export function renderSettings() {
   // ⭐⭐ 第五轮（「设置中的首页导航栏移动到更多中」）：那一小段**又搬走了** ——
   //    它是「底栏摆哪些功能」，属于目录（「更多」），不属于「这个功能怎么配」（设置）。
   //    ⇒ 设置页从此**没有任何**导航栏相关的行，与电脑端 11 栏仍然逐条对得上。
+  // ⭐⭐ 0.9.7（老大 2026-11-04：「手机端的设置优化，现在区分度不高，不好快速查找和定位」）：
+  //    现场是 **11 张长得一模一样的卡**：同一个字号、同一颗 7px 小圆点、同一个箭头，
+  //    收起之后每张卡只剩一行字 ⇒ 一屏扫下去只有「一串名词」，找东西只能逐张点开。
+  //    ⚠️ 上一轮的教训还在（2026-10-19 第四轮）：**不许用图标提区分度**
+  //    （老大原话：一屏十来个图标，读起来像图标墙，而它们不携带任何信息）。
+  //    ⇒ 这一轮只动**文字层级**与**分区**，三件事：
+  //      ① 每张卡的标题下加一行小字（`secHeadFold()` 的第 6 个参数）—— 收起时也看得见；
+  //      ② 把 11 张卡分成两段（应用与账号 / 功能模块），段标题给视线一个落点；
+  //      ③ 顶部加一个**筛选框**（纯前端过滤，不取数）。
+  //    ⚠️ 栏数与顺序**一个字没动**：仍是那 11 栏，仍与电脑端一一对应。
   el.innerHTML = `
     <div class="set-screen-head">
       <h2>设置</h2>
       <p>版本数据 · 账号 · 备份与恢复，以及每个模块的开关与设置</p>
     </div>
-    ${dataSectionHtml()}
-    ${isAdmin ? adminSectionHtml() : ''}
-    ${acctSectionHtml(me)}
-    ${backupSectionHtml()}
-    ${moduleSectionsHtml(me)}
+    ${setQueryHtml()}
+    <section class="set-part">
+      <div class="set-grp">应用与账号</div>
+      ${dataSectionHtml()}
+      ${isAdmin ? adminSectionHtml() : ''}
+      ${acctSectionHtml(me)}
+      ${backupSectionHtml()}
+    </section>
+    <section class="set-part">
+      <div class="set-grp">功能模块</div>
+      ${moduleSectionsHtml(me)}
+    </section>
+    <div class="set-empty" hidden>没有匹配的设置项 —— 换个词试试（如「备份」「密码」「AI」）</div>
     <div class="set-screen-foot">ZXDesk工作台 · 手机版 · 与电脑版共用同一套数据</div>`;
   ensureAdminData();
   mountSlotSections();
+  bindSetQuery();
+  applySetFilter();
+}
+
+/**
+ * 功能：设置页顶部那个筛选框的 HTML。
+ *
+ * 说明：⭐ 0.9.7 加 —— 11 张卡摊在一屏多，靠「扫」找一项要来回翻；敲两个字直接把它留下。
+ *      ⚠️ 输入框里那句灰字是**功能说明**（「搜设置项」），不是示例值 ——
+ *      2026-09-21 那条「去掉所有灰色提示语」针对的是记账表单里写死的**示例**（换个类型就误导），
+ *      与本处不冲突（收藏夹与硬件管理的搜索框同理，也带 placeholder）。
+ *      ⚠️ 清空键用 `id` 在本地绑，⛔ 不挂 `data-act` —— 那是全局动作表，
+ *      加一个名字就得在 `app.js` 的 `onAction` 里再登记一处。
+ *
+ * @returns {string} 筛选框（含放大镜图标）的 HTML
+ */
+function setQueryHtml() {
+  const q = String(state.setQuery || '');
+  return `
+    <div class="set-q">
+      <svg class="set-q-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+      <input id="set-q" type="search" role="searchbox" name="q" autocomplete="off" enterkeyhint="search"
+        value="${esc(q)}" placeholder="搜设置项" aria-label="筛选设置项" />
+      <button id="set-q-clear" class="set-q-x" type="button" aria-label="清空筛选">${q ? '&times;' : ''}</button>
+    </div>`;
+}
+
+/**
+ * 功能：给筛选框挂 `input` / 清空（每次重画后重新挂 —— 输入框是新建的节点）。
+ *
+ * 说明：⭐ 0.9.7 加。⚠️ 输入是**纯前端过滤**（`applySetFilter()` 只切 `hidden`），
+ *      ⛔ 不重画整屏、不取数 —— 重画会把光标和刚敲的字一起弄丢。
+ *      也**不防抖**：筛的是已经画在屏幕上的那十几张卡，几十个字符的比较，没有等待的理由。
+ *
+ * @returns {void}
+ */
+function bindSetQuery() {
+  const box = $('#set-q');
+  if (box) {
+    box.addEventListener('input', () => {
+      state.setQuery = box.value;
+      const x = $('#set-q-clear');
+      if (x) x.textContent = box.value ? '×' : '';
+      applySetFilter();
+    });
+  }
+  const clr = $('#set-q-clear');
+  if (clr) {
+    clr.addEventListener('click', () => {
+      state.setQuery = '';
+      const b = $('#set-q');
+      if (b) {
+        b.value = '';
+        b.focus();
+      }
+      clr.textContent = '';
+      applySetFilter();
+    });
+  }
+}
+
+/**
+ * 功能：按 `state.setQuery` 把不匹配的卡收起来（纯前端，只动 `hidden`）。
+ *
+ * 说明：⭐ 0.9.7 加。判据是**这张卡此刻的全部可见文字**（`textContent`）——
+ *      标题、副标题、卡里那几行都在里面，所以「密码」能命中「账号设置」里的「修改密码」，
+ *      「备份」既能命中「备份与恢复」也能命中「管理员设置」里的「整体备份」。
+ *      ⚠️ 因此**副标题必须写在头部**（见 `secHeadFold()` 的第 6 个参数）：写在卡里的话，
+ *      卡是收起的、文字不在屏幕上，搜到了却看不出来。
+ *      ⚠️ 命中时**顺手把那张卡展开**（去掉 `folded`）：不展开的话用户看到的是一个标题，
+ *      还得再点一下才能看到搜到的那一行 —— 那就不叫「快速定位」了。
+ *      ⚠️ 清空筛选**不还原**折叠状态：还原会让刚看到的行又缩回去（要收就自己点标题）。
+ *
+ * @returns {void}
+ */
+function applySetFilter() {
+  const el = $('#view-settings');
+  if (!el) return;
+  const q = String(state.setQuery || '')
+    .trim()
+    .toLowerCase();
+  let shown = 0;
+  for (const part of el.querySelectorAll('.set-part')) {
+    let inPart = 0;
+    for (const card of part.querySelectorAll('.sec-card')) {
+      const hit = !q || card.textContent.toLowerCase().includes(q);
+      card.hidden = !hit;
+      if (hit) {
+        inPart++;
+        if (q) card.classList.remove('folded');
+      }
+    }
+    // 一段里一张都没剩 ⇒ 连段标题一起收掉（否则屏幕上孤零零挂着「功能模块」四个字）
+    part.hidden = inPart === 0;
+    shown += inPart;
+  }
+  const empty = $('.set-empty');
+  if (empty) empty.hidden = shown > 0;
 }
 
 /**

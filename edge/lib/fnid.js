@@ -1,13 +1,19 @@
 /**
- * 功能：FNID 解析（二期方案 §二）—— 照自家 Android 实现移植（`Project/Android/core/connection`，
- *      2026-10-23 真机跑通），⛔ 不抄 Seek、⛔ 不「剥 `.fnos.net` 后缀」猜 FNID。
+ * fnid.js —— FNID 解析（飞牛 FN Connect 的 `fn/con` 协议）
+ *
+ * 功能：`resolveFnId` 把 FNID 换成中继域名与端口；`fnSignHeader` / `authxHeader` 算两个签名头；
+ *      `isFnId` 判形状；`portalUrl` 给登录门户地址。
  *
  * 协议：`POST {端点}/api/v1/fn/con`，主 `https://5ddd.com`，备 `https://fnos.net`；8 s 超时。
  * 错误分类：`code!==0` ⇒ `fn_id_not_found`（⛔ 不再问备用端点）；`data` 无地址 ⇒
  * `fn_offline`；两条端点都失败 ⇒ `fn_unreachable`。
  *
- * ⛔ 纯逻辑 + 一个 fetch，不碰 `chrome.*`（Node 可单测）；请求通道与业务请求无关，
- *    解析服务不依赖 ZXDesk 会话，不需要 credentials。
+ * ⚠️ 签名常量与 Android 端逐字一致，集中在这里，⛔ 不要分散或就地改。
+ * ⛔ 纯逻辑 + 一个 fetch，不碰 `chrome.*`（Node 可单测）；解析服务不依赖 ZXDesk 会话，不带 credentials。
+ *
+ * @author zx
+ * @since 0.1.2
+ * 相关：Project/Edge/README.md
  */
 import { md5Hex } from './md5.js';
 

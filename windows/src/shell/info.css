@@ -1,0 +1,203 @@
+/* 信息窗口样式（许可协议 / 打赏与支持 / 更新日志）
+ *
+ * 与主壳、公告、更新窗口同一套浅色令牌（照 fnOS 端 tokens.css 同源）。
+ * ⛔ 不用深色、不引外部字体 / 图片 / CDN；二维码用随包 PNG。
+ */
+
+:root {
+  color-scheme: light;
+  --primary: #4f46e5;
+  --primary-soft: #eef2ff;
+  --primary-soft-text: #312e81;
+  --background: #f5f7fb;
+  --surface: #ffffff;
+  --text: #1f2430;
+  --muted: #5c6470;
+  --border: #e4e9f1;
+  --error: #dc2626;
+  --radius: 12px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--background);
+  color: var(--text);
+  font-family: 'Microsoft YaHei UI', 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.75;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.sub {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.body {
+  flex: 1;
+  overflow: auto;
+  padding: 18px 20px 24px;
+}
+
+.status {
+  margin: 24px 0;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.status.error {
+  color: var(--error);
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+}
+
+/* 许可协议：章节标题与正文都按 txt 的 `#` 约定渲染 */
+.doc h2 {
+  margin: 22px 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.doc h2:first-child {
+  margin-top: 0;
+}
+
+.doc p {
+  margin: 0 0 10px;
+  color: var(--text);
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+/* 打赏与支持 */
+.donate-lead {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.donate-note {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.qr-row {
+  display: flex;
+  gap: 14px;
+}
+
+.qr-item {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+}
+
+.qr-item img {
+  width: 100%;
+  height: 300px;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.qr-item span {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* 更新日志 */
+.release {
+  padding: 16px 20px;
+}
+
+.release + .release {
+  margin-top: 12px;
+}
+
+.release-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.release-version {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.release-date {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.release ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.release li {
+  margin: 4px 0;
+  font-size: 13px;
+}
+
+.release-note {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ghost {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ghost:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}

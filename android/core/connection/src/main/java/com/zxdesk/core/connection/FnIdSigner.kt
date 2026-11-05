@@ -1,15 +1,21 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：FnIdSigner.kt
+ * 职责：FN Connect 查询签名的计算
+ */
+
 package com.zxdesk.core.connection
 
 import java.security.MessageDigest
 
 /**
- * FN Connect 查询签名（社区逆向，未公开）。
+ * FN Connect 查询签名（未公开协议，按查询请求的实际格式实现）。
  * ⚠️ 接口可能变更：常量集中在这里，失败时只改这一个文件。
  */
 object FnIdSigner {
     const val CONNECT_PATH = "/api/v1/fn/con"
 
-    // 来自社区实现（fnphoto-tv / FeiNiuMusic / fnnas-api）
+    // 查询接口的固定参数：接口若变更，只改这三个常量
     const val AUTHX_PREFIX = "NDzZTVxnRKP8Z0jXg1VAMonaG8akvh"
     const val AUTHX_API_KEY = "zIGtkc3dqZnJpd29qZXJqa2w7c"
     private const val CONNECT_SECRET = "anna"

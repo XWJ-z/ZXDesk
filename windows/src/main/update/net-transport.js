@@ -1,5 +1,7 @@
 /**
- * 下载模块的 Electron 传输层：把 `net.request` 包成
+ * ZXDesk工作台 Windows 客户端
+ * 文件：net-transport.js
+ * 职责：下载模块的 Electron 传输层：把 `net.request` 包成
  * `transport(url, { headers, onResponse, onError }) => { abort }`。
  *
  * 为什么用 `net.request` 而不是 `net.fetch`：下载要进度与断点续传，

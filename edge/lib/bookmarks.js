@@ -1,12 +1,18 @@
 /**
- * 功能：收藏夹 REST（任务单 §五 M3 / §六 M4）—— ⛔ 只有 SW 经这里发请求，UI 一律走消息。
+ * bookmarks.js —— 收藏夹的 REST 通路（列表 / 新建 / 编辑 / 删除）
  *
- * 服务端口径（`Project/fnos` bookmarks/store.js 实证）：
+ * 功能：四个动作各一个函数，全部只走 SW 发出的请求，返回归一化的 `{ok, code}`。
+ *
+ * 服务端口径（`Project/fnos` 的 `bookmarks/store.js` 实证）：
  * - `POST /api/bookmarks {url, title?, tags:[分类名…]}` —— **只传分类名**（`ensureTag` 自动建），
- *   ⛔ 不传 id、⛔ 不先调 `/api/bookmarks/tags` 建分类（退回条件 6）；
+ *   ⛔ 不传 id、⛔ 不先调 `/api/bookmarks/tags` 建分类；
  * - 同账号 URL 重复 ⇒ 400 + `error` 含「已经收藏过」（原样字符串比对，不归一化）；
  * - `GET /api/bookmarks?q=&tag=` ⇒ `{items, total, tags}`，`tags` 末尾有 `{id:'none',name:'未分类'}` 哨兵；
- * - `DELETE /api/bookmarks/:id` ⇒ 204；不存在/越权统一 404。
+ * - `DELETE /api/bookmarks/:id` ⇒ **200 `{ok:true}`**（不是 204；`writeResult` 见 `core/http-util.js`）；不存在/越权统一 404。
+ *
+ * @author zx
+ * @since 0.1.0
+ * 相关：Project/Edge/README.md
  */
 import { fetchJson } from './api.js';
 
@@ -60,11 +66,13 @@ export async function removeBookmark(base, id) {
 }
 
 /**
- * 功能：编辑一条（0.1.5 E2）—— 只带要改的字段，`tags` 是**整体替换**（服务端 `ensureTag` 自动建新分类）。
+ * 功能：编辑一条 —— 只带要改的字段，`tags` 是**整体替换**（服务端 `ensureTag` 自动建新分类）。
  * ⛔ **绝不带 `url`**：带上会被当成「改网址」，撞到同账号下已有的同一网址就 400
  *    而编辑标题这个动作跟网址毫无关系。
  * @param {{title?:string, tags?:string[]}} patch
  * @returns {Promise<{ok:true,item:object}|{ok:false, code:string}>} 404 ⇒ `bookmark_gone`（越权与不存在同码）
+ *   ⚠️ `item` **不是改后的条目**：服务端 `PUT` 走 `writeResult`，只回 `{ok:true}`
+ *      ⇒ 调用方要显示新标题/新标签时用本地那份，别指望响应体（真改了值以服务端为准，下次刷新对齐）。
  */
 export async function updateBookmark(base, id, patch) {
   const body = {};

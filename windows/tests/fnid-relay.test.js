@@ -267,7 +267,7 @@ test('页面加载失败：留在浏览模式，错误只进菜单栏提示（�
   const { controller } = makeController({ saved, loadResult: () => false });
   await controller.boot();
   const st = controller.getState();
-  // 2026-10-27：整页错误屏已删除 —— 一次网络抖动不该把整窗刷白并打断浏览
+  // 整页错误屏已删除 —— 一次网络抖动不该把整窗刷白并打断浏览
   assert.equal(st.screen, 'browsing', '不换屏');
   assert.equal(st.browsing.error, '页面没有加载出来，检查网络后点「重试」。', '提示落在菜单栏');
   assert.equal(st.error.title, '打不开页面', '诊断里仍留着标题');

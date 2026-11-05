@@ -22,11 +22,12 @@
  *
  * @author zx
  * @date   2026-09-10
- * @since 0.9.5
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/07-前端-电脑版与手机版.md
  */
 
 import { api, setNotifier } from '../core/api.js';
+import { mountOfflineBanner } from '../core/cache.js';
 // ⭐ 0.9.1：「关于我们 / 联系与反馈」两份抽屉内容 —— 与电脑版弹窗共用同一份（`core/about.js`）
 import { aboutBodyHtml, contactBodyHtml } from '../core/about.js';
 import { addDays, fmtLong, mondayOf, todayStr, weekName } from '../core/date.js';
@@ -2432,77 +2433,7 @@ export function applyPrefsVisibility() {
  *      （首次进场与「返回手势退回来」这两条路要用它，否则历史会越堆越长）
  * @returns {void}
  */
-/**
- * ⚠️⚠️ **临时诊断**（0.8.18第三次回报「收藏夹 → 任务，**整屏一起平移**」）
- *      —— ⛔ 定位到元凶之后**必须把本函数连同 `switchTab()` 里那一句调用整块删掉**。
- *
- * 为什么要有它：这台开发机上**所有逐帧仪器都封顶**（rAF 恒 18.1ms、把 `#view-webpass`
- * 整棵子树逐元素矩形逐帧对拍**一个元素都不动**），可真机上确实在动。⇒ 只能让**真机自己上报**：
- * 换屏那 700ms 里逐帧采一遍「谁可能在动」的候选量，只要有任何一项与第一帧不同，就弹一条
- * toast 把**变了的那几项**报出来。⚠️ 正常情况**什么都不显示**（不打扰日常使用）；
- * 出问题的那一次会自报家门 —— 这比再猜一轮便宜得多。
- *
- * ⚠️ 候选量是按那句「整屏一起平移（连顶栏底栏一起动）」挑的：那说明动的是**所有东西的
- * 共同祖先或视口**，⇒ 视觉视口（`visualViewport` 的 offset/height/scale，浏览器工具栏收展、
- * 聚焦平移都动它）、窗口内高、文档滚动、以及外壳 / 顶栏 / 主体 / 底栏 / 收藏夹屏的左上角坐标。
- * @returns {void}
- */
-function shakeDiagWatch() {
-  /** 取一轮样本。 @returns {Object.<string,string>} 各项的「当前值」 */
-  const pick = () => {
-    const at = (sel) => {
-      const el = document.querySelector(sel);
-      if (!el) return null;
-      const b = el.getBoundingClientRect();
-      return `${Math.round(b.left)},${Math.round(b.top)}`;
-    };
-    const vv = window.visualViewport;
-    return {
-      视觉视口: vv ? `${Math.round(vv.offsetTop)},${Math.round(vv.offsetLeft)} ${Math.round(vv.height)}x${Math.round(vv.width)}@${vv.scale}` : 'n/a',
-      窗口内高: String(Math.round(window.innerHeight)),
-      文档滚动: `${Math.round(window.scrollY)},${Math.round(window.scrollX)}`,
-      外壳: at('.phone'),
-      顶栏: at('.topbar'),
-      主体: at('#app'),
-      底栏: at('#tabbar'),
-      收藏夹屏: at('#view-webpass'),
-    };
-  };
-  const base = pick();
-  /** @type {Map.<string,string>} 变了的那几项（只记第一次变化） */
-  const moved = new Map();
-  let n = 0;
-  const tick = () => {
-    if (n++ > 45) return;
-    const now = pick();
-    for (const k of Object.keys(base)) {
-      // ⚠️⭐ 豁免「出现 / 消失」：各屏靠 `.hidden`（`display:none`）换场，矩形会在 `0,0` 与
-      //    真实坐标之间跳 —— 那是**按设计收工**，不是抖动。少了这一条，每次换屏都误报
-      //    （实测踩过两次：`503,90 → 0,0` 与反向的 `0,0 → 503,90`），这条诊断就废了。
-      const gone = (v) => v === '0,0';
-      if (now[k] !== base[k] && !gone(now[k]) && !gone(base[k]) && !moved.has(k)) {
-        moved.set(k, `${base[k]} → ${now[k]}`);
-      }
-    }
-    requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
-  window.setTimeout(() => {
-    // ⚠️⭐ 只有「**屏幕上的东西**动了」才算 —— 原始视口高度（`视觉视口` / `窗口内高`）在
-    //    外壳钉住之后仍然会跟着宿主抖 2px，那是**无害**的（正是被 `pinShellHeight()` 挡掉的那两件），
-    //    拿它当判据会**天天误报**。它们只作为**附注**跟着一起打出来（真出事时有用）。
-    const VISIBLE = ['外壳', '顶栏', '主体', '底栏', '收藏夹屏', '文档滚动'];
-    if (![...moved.keys()].some((k) => VISIBLE.includes(k))) return;
-    const txt = [...moved].map(([k, v]) => `${k} ${v}`).join('；');
-    // ⚠️ 走 toast 是刻意的：真机上用户看得见、能截图，而不需要他接触任何开发者工具。
-    toast(`抖诊断：${txt}`, true);
-  }, 900);
-}
-
 export function switchTab(tab, opts) {
-  // ⚠️⚠️ 临时诊断（见 `shakeDiagWatch()` 的说明）—— 定位到元凶后**连同这一句一起删掉**。
-  //    挂在函数**第一行**：基准必须是「按下去之前」那一帧的样子。
-  shakeDiagWatch();
   const prev = state.tab; // ⭐ 0.8.5：判「这次是往下一层，还是平级 / 往上跳」，见 syncHistory()
   state.tab = tab;
   // ⭐ 课表 2 期：离开「倒计时屏」（课表 / 今天看板）时先摘掉定时器 ——
@@ -2914,7 +2845,7 @@ const VIEWPORT_WOBBLE_PX = 24;
 /**
  * 功能：把**应用外壳的高度**钉住 —— 忽略几 px 的视口高度变化（0.8.18 第三轮）。
  *
- * 说明：⭐⭐ 真机实测（本版那段临时诊断截图回报）——「收藏夹 → 任务」那一下：
+ * 说明：⭐⭐ 真机实测（用户截图回报）——「收藏夹 → 任务」那一下：
  *      `视觉视口 718x366 → 716x366`、`window.innerHeight 718 → 716`、`底栏 16,614 → 16,612`。
  *      也就是**视口掉了 2px**，而锚在底部的底栏跟着上移 2px（顶栏 / 主体 / 外壳都没动）。
  *      屏幕上就是三回报的「抖一下」。
@@ -3486,6 +3417,9 @@ const TITLES = {
 };
 
 setNotifier(toast); // ⭐ 把本端的 toast 注册给 core/api.js（两端的提示是两套 DOM，不能合并）
+// ⭐ 0.2.15 离线只读：挂一次常驻横幅（断网时出现），并接管浏览器的 online / offline 事件。
+//    ⚠️ 必须在 `init()` 之前 —— 首屏那几个请求就可能已经失败，横幅要能立刻出现。
+mountOfflineBanner();
 // ⭐ 0.7.7-⑯：把本端的顶栏重画器注册给 ui.js —— 模块（对话）在自己屏内换骨头之后要能请宿主重画一次
 //    顶栏，但它不许 import 本文件（会绕成环）。放在这里与 setNotifier 同一个套路。
 setChromePainter(updateChrome);

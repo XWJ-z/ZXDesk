@@ -29,7 +29,7 @@
  *
  * @author zx
  * @date   2026-09-10
- * @since 0.9.5
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/07-前端-电脑版与手机版.md、docs/公共/开发方案/07-统一网关入口.md
  */
 
@@ -52,7 +52,9 @@
     if (!s) return '';
     try {
       const usp = new URLSearchParams(s);
-      usp.delete('view');
+      // ⭐ 0.9.6：`view=desktop` 要带到下一屏（见 index.html 里同一处说明）；
+      //    `view=mobile` 仍是临时预览，丢掉。
+      if (usp.get('view') !== 'desktop') usp.delete('view');
       const out = usp.toString();
       return out ? '?' + out : '';
     } catch (_e) {
@@ -231,6 +233,19 @@
       if (l.data && l.data.mustSetup) {
         window.location.replace(BASE + '/setup.html' + carrySearch());
         return;
+      }
+      // ⭐ 0.2.15：登录成功就把离线快照清掉 —— 这台设备可能换了账号，上一个账号的
+      //    只读缓存（任务 / 记账 / 密码库条目）不能在断网时被下一个人看到。
+      //    ⚠️ 键前缀与 `core/cache.js` 的 PREFIX 必须一致（登录页是经典脚本，没法 import）。
+      try {
+        const stale = [];
+        for (let i = 0; i < localStorage.length; i += 1) {
+          const k = localStorage.key(i);
+          if (k && k.indexOf('zxdesk.cache.v1:') === 0) stale.push(k);
+        }
+        stale.forEach(k => localStorage.removeItem(k));
+      } catch (_e) {
+        /* 存储不可用：本来也没有缓存 */
       }
       // ⚠️ 带上查询串（见 `carrySearch()`）—— 丢掉它会被飞牛网关重新弹访问码
       window.location.replace(BASE + '/' + carrySearch());

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'none'; font-src 'self'"
+    />
+    <title>信息</title>
+    <link rel="stylesheet" href="info.css" />
+  </head>
+  <body>
+    <!-- 一个窗口三种只读内容：?doc=eula|donate|releases（白名单在主进程与 info.js 各判一次） -->
+    <header class="head">
+      <div>
+        <h1 id="title">信息</h1>
+        <p class="sub" id="subtitle">ZXDesk 工作台 · Windows 桌面端</p>
+      </div>
+      <button class="ghost" type="button" id="close">关闭</button>
+    </header>
+
+    <main class="body" id="body">
+      <p class="status" id="status">正在读取…</p>
+    </main>
+
+    <script src="info.js" defer></script>
+  </body>
+</html>

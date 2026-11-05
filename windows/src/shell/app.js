@@ -1,5 +1,7 @@
 /**
- * 壳的界面逻辑（原生 ESM，无框架、无构建）。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：app.js
+ * 职责：壳的界面逻辑（原生 ESM，无框架、无构建）
  *
  * 分工：**这里只管显示与转发** —— 一旦要「做决定」（连接 / 登录 / 证书 / 会话）就发给主进程。
  * 密码不落 localStorage、不写 console；表单值只在内存里。
@@ -19,6 +21,7 @@ const el = {
   noticeBarText: document.getElementById('notice-bar-text'),
   menuError: document.getElementById('menu-error'),
   menuErrorText: document.getElementById('menu-error-text'),
+  modal: document.getElementById('modal'),
 };
 
 let state = null;
@@ -27,6 +30,13 @@ let lastScreen = null;
 let form = null;
 /** 两步验证的本地副本（验证码同理）。 */
 let twofa = null;
+/**
+ * 「切换账号」弹窗里那张**新增账号**表单的本地副本。
+ *
+ * 与 `form` 一样必须本地留一份：主进程每推一次状态就重画一次弹窗，
+ * 不本地存的话用户敲一个字、光标就跳回开头（甚至整段消失）。
+ */
+let accountForm = null;
 
 const esc = (value) =>
   String(value ?? '')
@@ -100,10 +110,32 @@ function render(next) {
       };
     }
   }
+  // 「新增账号」表单同理：用户正在敲的字优先，busy / error 听主进程的
+  if (state.accounts) {
+    const server = state.accounts.form || {};
+    accountForm = {
+      ...server,
+      ...(accountForm || {}),
+      // 这几个字段完全由主进程说了算
+      showPassword: server.showPassword ?? accountForm?.showPassword ?? false,
+      https: server.https ?? accountForm?.https ?? true,
+      rememberPassword: server.rememberPassword ?? accountForm?.rememberPassword ?? true,
+    };
+  } else {
+    accountForm = null;
+  }
 
+  /**
+   * 菜单栏**常驻**（照 Windows 规范）：连接页也要能「切换账号 / 设置 / 帮助 / 检查更新」。
+   * 只有启动动画（`starting`）那一瞬不显示 —— 那时还在恢复会话，菜单里的事都做不了。
+   * ⚠️ 访问码屏把文字菜单换成「返回 / 刷新 / 已输入完成」，那是同一行，见下面 `menuGroup.hidden`。
+   * ⚠️ `no-toolbar` 是**布局**类（内容区高度要不要减去菜单栏），必须跟着 `menubar.hidden` 走；
+   *    以前它跟「是不是浏览屏」走，菜单栏常驻之后连接页会多出 44px、表单被顶出屏幕。
+   */
   const browsingLike = screen === 'browsing' || screen === 'access';
-  el.menubar.hidden = !browsingLike;
-  document.body.classList.toggle('no-toolbar', !browsingLike);
+  const showMenubar = screen !== 'starting';
+  el.menubar.hidden = !showMenubar;
+  document.body.classList.toggle('no-toolbar', !showMenubar);
   document.body.className = document.body.className
     .split(' ')
     .filter((c) => !c.startsWith('screen-'))
@@ -114,11 +146,16 @@ function render(next) {
   renderMenuError(state.browsing);
   renderNoticeBadge(state.notices);
   renderNoticeBar(state.notices);
+  // 弹窗在浏览页也要画（「文件 → 切换账号」是从浏览页打开的），所以要排在 browsingLike 的早退之前
+  renderAccounts(state.accounts);
+
+  // ⚠️ 这个开关要在 `browsingLike` 分支**之外**：访问码屏把它藏起来之后，
+  // 回连接页若不重置，菜单栏就只剩右边那几个按钮（菜单凭空消失）
+  if (el.menuGroup) el.menuGroup.hidden = screen === 'access';
+  if (el.accessActions) el.accessActions.hidden = screen !== 'access';
 
   if (browsingLike) {
     // 远程视图盖在内容区上；访问码屏把文字菜单换成「返回 / 刷新 / 已输入完成」
-    if (el.menuGroup) el.menuGroup.hidden = screen === 'access';
-    if (el.accessActions) el.accessActions.hidden = screen !== 'access';
     el.content.className = 'content empty';
     el.content.innerHTML = '';
     if (state.panel) renderPanel();
@@ -126,11 +163,27 @@ function render(next) {
   }
 
   el.content.className = 'content';
-  if (screen === 'mode') el.content.innerHTML = viewMode();
+  if (screen === 'starting') el.content.innerHTML = viewStarting();
+  else if (screen === 'mode') el.content.innerHTML = viewMode();
   else if (screen === 'connect') el.content.innerHTML = viewConnect();
   else if (screen === 'twofa') el.content.innerHTML = viewTwofa();
   else if (screen === 'cert') el.content.innerHTML = viewCert();
   else el.content.innerHTML = viewConnect();
+}
+
+/**
+ * 「正在启动…」：静默启动 / 自动登录时先给人一句人话。
+ * ⛔ 不先闪一屏登录表单再跳走 —— 那是 Android 0.2.17 专门改掉的观感。
+ */
+function viewStarting() {
+  const s = state.starting || {};
+  return `
+    <div class="wrap starting">
+      <span class="spinner big" aria-hidden="true"></span>
+      <h1>ZXDesk 工作台</h1>
+      <p class="subtitle">${esc(s.progress || '正在启动…')}</p>
+      ${s.note ? `<p class="hint">${esc(s.note)}</p>` : ''}
+    </div>`;
 }
 
 function viewMode() {
@@ -179,11 +232,15 @@ function viewConnect() {
         <input id="f-https" type="checkbox" ${f.https ? 'checked' : ''} ${f.busy ? 'disabled' : ''} />
         HTTPS 安全访问
       </label>
-      <p class="hint">只有显式填 <span class="mono">IP:8990</span>（或关掉 HTTPS）才直连，不需要飞牛账号。</p>
+      <p class="hint">局域网地址也走飞牛网关（<span class="mono">64999</span>），要填飞牛账号。只有显式写 <span class="mono">IP:8990</span> 才是应用自己的端口、不过网关。</p>
       <div class="divider"></div>
       <label class="field">
         <span class="field-label">飞牛账号</span>
-        <input id="f-user" type="text" spellcheck="false" autocomplete="off" value="${esc(f.user)}" ${f.busy ? 'disabled' : ''} />
+        <div class="row">
+          <input id="f-user" type="text" spellcheck="false" autocomplete="off" value="${esc(f.user)}" ${f.busy ? 'disabled' : ''} />
+          <!-- 切换账号：点开同一个弹窗（与「文件 → 切换账号」是同一处） -->
+          <button class="link-btn" type="button" data-action="accounts.open" title="切换 / 新增账号">切换</button>
+        </div>
       </label>
       <label class="field">
         <span class="field-label">密码</span>
@@ -373,7 +430,150 @@ function formatFingerprint(value) {
   return (text.match(/.{1,2}/g) || []).join(':').toUpperCase();
 }
 
+// ---------------------------------------------------------------- 切换账号弹窗
+
+/**
+ * 「切换账号」弹窗（0.2.6）。
+ *
+ * 两个入口共用同一份状态：连接页「飞牛账号」右侧的「切换」按钮、菜单「文件 → 切换账号」。
+ * 里面既能挑一个已有账号切过去，也能展开表单**新增账号**（填完直接登录）。
+ *
+ * ⚠️ 数据完全来自主进程（`state.accounts`）：壳只负责画与转发，账号清单与凭据都在主进程。
+ */
+function renderAccounts(acc) {
+  if (!acc) {
+    el.modal.hidden = true;
+    el.modal.innerHTML = '';
+    return;
+  }
+  const items = Array.isArray(acc.items) ? acc.items : [];
+  /**
+   * ⭐ 防「敲字丢焦点」：主进程每推一次状态都会重走这里，无条件重画 `innerHTML` 会把
+   * 用户正在输入的框整个换掉（光标跳回开头 / 整段消失）。
+   * 签名里**故意不含表单字段值**（那是本地副本说了算），只有列表 / 展开态 / 错误 /
+   * 是否明文显示密码变了才重画。
+   */
+  const sig = JSON.stringify([items, Boolean(acc.adding), acc.error || '', Boolean(accountForm?.showPassword)]);
+  if (!el.modal.hidden && el.modal.dataset.sig === sig) return;
+  el.modal.dataset.sig = sig;
+  const list = items.length
+    ? items
+        .map(
+          (item) => `
+      <button class="acc-item ${item.current ? 'current' : ''}" type="button" data-action="account.switch"
+              data-address="${esc(item.address)}" data-user="${esc(item.user)}" data-https="${item.https ? '1' : '0'}">
+        <span class="acc-item-main">
+          <span class="acc-user">${esc(item.user)}</span>
+          <span class="acc-addr">${esc(item.address)}</span>
+        </span>
+        ${item.current ? '<span class="badge">当前</span>' : '<span class="acc-go">切换</span>'}
+      </button>`,
+        )
+        .join('')
+    : '<p class="hint">还没有登录过的账号。用下面的「添加账号」加一个。</p>';
+
+  el.modal.hidden = false;
+  el.modal.innerHTML = `
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="acc-title">
+      <div class="modal-head">
+        <h2 id="acc-title">切换账号</h2>
+        <button class="link-btn" type="button" data-action="accounts.close">关闭</button>
+      </div>
+      <p class="subtitle">换个人继续用：会先退出当前账号，再用选中的账号重新登录。</p>
+      <div class="acc-list">${list}</div>
+      <div class="divider"></div>
+      <button class="link-btn" type="button" data-action="accounts.toggleAdd">
+        ${acc.adding ? '收起添加表单' : '＋ 添加账号'}
+      </button>
+      ${acc.adding ? accountFormHtml(accountForm || {}) : ''}
+      ${acc.error ? `<p class="error-line" role="alert">${esc(acc.error)}</p>` : ''}
+    </div>`;
+}
+
+/** 弹窗里那张「新增账号」表单（字段 id 用 `a-` 前缀，与连接页的 `f-` 分开，⛔ 不要混）。 */
+function accountFormHtml(f) {
+  return `
+    <div class="acc-form">
+      <label class="field">
+        <span class="field-label">地址 / FNID</span>
+        <input id="a-address" type="text" spellcheck="false" autocomplete="off"
+               placeholder="10.1.2.3 或 my-nas" value="${esc(f.address || '')}" />
+      </label>
+      <label class="switch">
+        <input id="a-https" type="checkbox" ${f.https !== false ? 'checked' : ''} />
+        HTTPS 安全访问
+      </label>
+      <label class="field">
+        <span class="field-label">飞牛账号</span>
+        <input id="a-user" type="text" spellcheck="false" autocomplete="off" value="${esc(f.user || '')}" />
+      </label>
+      <label class="field">
+        <span class="field-label">密码</span>
+        <div class="row">
+          <input id="a-password" type="${f.showPassword ? 'text' : 'password'}" autocomplete="off"
+                 value="${esc(f.password || '')}" />
+          <button class="link-btn" type="button" data-action="accounts.togglePassword">${f.showPassword ? '隐藏' : '显示'}</button>
+        </div>
+      </label>
+      <label class="check">
+        <input id="a-remember" type="checkbox" ${f.rememberPassword !== false ? 'checked' : ''} />
+        记住密码
+      </label>
+      <button class="primary-btn" type="button" data-action="accounts.submit">登录这个账号</button>
+    </div>`;
+}
+
 // ---------------------------------------------------------------- 事件
+
+/**
+ * 「切换账号」弹窗的事件。
+ *
+ * ⚠️ 输入只写本地副本、**不发 IPC**：发一次主进程就推一次状态，弹窗重画，光标跳走。
+ *    真正要提交时才从 DOM 读值（见 `accounts.submit`）。
+ */
+el.modal.addEventListener('click', (event) => {
+  const target = event.target.closest('[data-action]');
+  if (!target) return;
+  const action = target.dataset.action;
+  // 账号项带地址 / 账号，通用通道发不出这些参数
+  if (action === 'account.switch') {
+    return send('account.switch', {
+      address: target.dataset.address || '',
+      user: target.dataset.user || '',
+      https: target.dataset.https !== '0',
+    });
+  }
+  if (action === 'accounts.submit') {
+    return send('accounts.submit', {
+      address: document.getElementById('a-address')?.value ?? accountForm?.address ?? '',
+      user: document.getElementById('a-user')?.value ?? accountForm?.user ?? '',
+      password: document.getElementById('a-password')?.value ?? accountForm?.password ?? '',
+      https: document.getElementById('a-https')?.checked ?? accountForm?.https !== false,
+      rememberPassword: document.getElementById('a-remember')?.checked ?? accountForm?.rememberPassword !== false,
+    });
+  }
+  if (action === 'accounts.togglePassword') {
+    // 这一项要让 input 的 type 在 password / text 之间切换 ⇒ 必须重画，所以走 IPC
+    if (accountForm) accountForm.showPassword = !accountForm.showPassword;
+    return send('accounts.input', { showPassword: Boolean(accountForm?.showPassword) });
+  }
+  return send(action, {});
+});
+
+el.modal.addEventListener('input', (event) => {
+  const id = event.target.id || '';
+  const value = event.target.value;
+  if (!accountForm || !id.startsWith('a-')) return;
+  const field = id.slice(2);
+  if (field === 'address' || field === 'user' || field === 'password') accountForm[field] = value;
+});
+
+el.modal.addEventListener('change', (event) => {
+  const id = event.target.id || '';
+  if (!accountForm) return;
+  if (id === 'a-https') accountForm.https = event.target.checked;
+  else if (id === 'a-remember') accountForm.rememberPassword = event.target.checked;
+});
 
 el.content.addEventListener('click', async (event) => {
   const target = event.target.closest('[data-action]');

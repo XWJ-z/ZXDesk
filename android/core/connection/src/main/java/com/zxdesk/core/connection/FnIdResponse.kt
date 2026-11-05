@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：FnIdResponse.kt
+ * 职责：FN Connect 查询响应的解析
+ */
+
 package com.zxdesk.core.connection
 
 /**

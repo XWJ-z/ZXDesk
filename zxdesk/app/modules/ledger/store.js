@@ -71,7 +71,7 @@
  *
  * @author zx
  * @date   2026-09-20
- * @since 0.9.5
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/23-记账.md、docs/公共/开发方案/20-记账1期-资产管家.md
  */
 const { badRequest, notFoundErr } = require('../../core/store/helpers.js');
@@ -115,6 +115,18 @@ const { buildCsv } = require('../../core/sheet/csv.js');
 const PAGE_SIZE = 30;
 /** 备注历史候选的上限 —— ⭐ C-17：20 条（由**服务端一处**给，⛔ 不让两端各自 distinct） */
 const NOTE_LIMIT = 20;
+
+/**
+ * 备注**发给 AI** 时的长度上限（2026-11-05）。
+ *
+ * 说明：⚠️ 与 `routes.js` 的 `NOTE_MAX`（录入侧那道上限）**同值 200** —— 这不是巧合：
+ *      能录多长就该能读多长，否则模型看到的是半句话（「上次那笔备注说…」后面没了）。
+ *      ⭐ 这里仍然留一道兜底：早期版本没有长度校验，库里的历史行可能超长；
+ *      截断**只在超长时发生**，正常备注逐字不变。
+ *      ⛔ 别把它调小成几十字 —— 那正是「给了备注却答不对」的来路。
+ * @type {number}
+ */
+const NOTE_READ_MAX = 200;
 
 /** 搜索一次最多回几行（⛔ 不限的话一个「一」字能把整年的账全捞出来、手机端直接卡住）。 */
 const SEARCH_LIMIT = 60;
@@ -4185,13 +4197,18 @@ module.exports = {
    *      · 分类占比走 `categoryBucketsOf()` ＋ `pctRowsOf()`（⛔ 不在这里另写一份分桶）。
    *      ⚠️⭐ `range` 是**四档枚举**（`today` / `week` / `month` / `year`），区间由**服务端**
    *      按 `nowMs` 现算 —— 模型不许自己给日期（窄契约：能用枚举就用枚举）。
-   *      ⚠️ ⛔ **不回备注正文**（`note` 是用户写的自由文本，出网面刻意不含它）；
+   *      ⚠️ ⭐ **2026-11-05 起备注会回**（老大：「AI 获取不到记账的备注信息」）——
+   *      `recent[]` 多了 `note`（原文，超出 `NOTE_READ_MAX` 才截）；此前刻意不含它。
    *      账户回**名字**（id 对模型没有意义），导入行没有账户 ⇒ 空串。
    *      ⚠️ 只读路径：⛔ 不写库。
+   *      ⭐⭐ 0.9.7：分类一律给**全称**（`name` = `一级-二级`，另带 `leaf` 与 `parent`）——
+   *      二级分类允许重名，只给叶子名会被模型合并成一笔（老大 2026-11-04 的反馈）。
+   *      分类筛选也认全称；叶子名撞上多个分类时**400 并列出候选**，⛔ 不静默挑一个。
    *
    * @param {number} uid - 账号 id
    * @param {string} range - `'today'` / `'week'` / `'month'` / `'year'`
    * @param {number} nowMs - 现在（epoch 毫秒）
+   * @param {{from: string, to: string, category: string}} [opt] - 自定义区间与分类筛选
    * @returns {{range: string, from: string, to: string, today: string, income_fen: number,
    *      expense_fen: number, net_fen: number, count: number, categories: Array.<Object>,
    *      income_categories: Array.<Object>, recent: Array.<Object>}} 区间账单口径
@@ -4230,14 +4247,80 @@ module.exports = {
     } else if (r !== 'today' && !custom) {
       throw badRequest('范围只能是 today / week / month / year 这四个之一');
     }
-    const cats = new Map(this._bk.listLedgerCategories(me).map((c) => [Number(c.id), c]));
-    const rowsAll = statRowsOf(this, me, from, to, cats);
+    const catList = this._bk.listLedgerCategories(me);
+    const cats = new Map(catList.map((c) => [Number(c.id), c]));
+    // ⭐⭐ 0.9.7（AI 把两个同名二级分类合并计算）：给模型的分类名一律是**全称**
+    //    （一级 = 名字；二级 = `父名-名`，与 `lib/categories.js` 的 `fullNameOf()` 同一口径）。
+    //    ⚠️ 为什么必须：二级分类**允许重名**（「其他」在餐饮、交通下各有一条），而
+    //    `statRowsOf()` 给的 `name` 只是**叶子名** ⇒ 两笔不同的钱会落进同一档，
+    //    AI 报出来的分类合计就是错的（而且不报错）。这里只在**本方法内**把 `name` 换成全称，
+    //    ⛔ 不改 `statRowsOf()` / `categoryBucketsOf()` 的口径（图表与账单屏按叶子名分桶是既有行为）。
+    const fullOf = (c) => fullNameOf(catList, c);
+    const leafOf = (c) => String((c && c.name) || '');
+    const parentNameOf = (c) => {
+      const pid = c && c.parent_id != null ? Number(c.parent_id) : 0;
+      const p = pid ? cats.get(pid) : null;
+      return p ? String(p.name || '') : '';
+    };
+    const rowsAll = statRowsOf(this, me, from, to, cats).map((x) => {
+      if (x.source !== LEDGER_SOURCE || x.category_id == null) return x;
+      const c = cats.get(Number(x.category_id));
+      if (!c) return x;
+      return { ...x, name: fullOf(c), cat_leaf: leafOf(c), cat_parent: parentNameOf(c) };
+    });
     // ⭐ 0.8.55：**分类筛选**（可选）。`wantCat` 只在「本机真有这个分类」时才生效 ——
     //   ⛔ 不替你新建分类，也⛔ 不把「分类名写错」当成「这个分类花了 0 元」（那两句在界面上完全两回事）。
+    //   ⭐⭐ 0.9.7：认**全称**（`餐饮-早餐`）与**叶子名**（`早餐`）；叶子名撞上多个分类时**拒绝**
+    //   并列出候选全称（⛔ 不静默挑一个 —— 那正是「钱记进了别的分类」的来路）。
+    //   筛一级分类时**连它的二级一起算**（用户说的「餐饮」当然是整棵树）。
     const wantCat = String(o.category == null ? '' : o.category).trim();
-    const catNames = new Set([...cats.values()].map((c) => String(c.name || '')));
-    const catFound = wantCat ? catNames.has(wantCat) : null;
-    const rows = wantCat && catFound ? rowsAll.filter((x) => String(x.name || '') === wantCat) : rowsAll;
+    const normCat = (v) => String(v == null ? '' : v).replace(/\s+/g, '');
+    const wantKey = normCat(wantCat);
+    let target = null;
+    let catFound = null;
+    if (wantCat) {
+      const fullHit = catList.filter((c) => normCat(fullOf(c)) === wantKey);
+      const leafHit = fullHit.length ? [] : catList.filter((c) => normCat(leafOf(c)) === wantKey);
+      if (fullHit.length || leafHit.length) {
+        const pool = fullHit.length ? fullHit : leafHit;
+        if (pool.length > 1) {
+          const names = pool.map((c) => `「${fullOf(c)}」`).join('、');
+          throw badRequest(`「${wantCat}」在本机有多个分类（${names}），请用「一级-二级」全称再查一次`);
+        }
+        target = pool[0];
+        catFound = true;
+      } else {
+        catFound = false;
+      }
+    }
+    const okIds = new Set();
+    const okNames = new Set();
+    const okLeafs = new Set();
+    if (target) {
+      const tid = Number(target.id);
+      okIds.add(tid);
+      okNames.add(normCat(fullOf(target)));
+      okLeafs.add(normCat(leafOf(target)));
+      // 一级 ⇒ 子分类一起算（判据是 `parent_id`，⛔ 不比名字）
+      for (const c of catList) {
+        if (c.parent_id == null || Number(c.parent_id) !== tid) continue;
+        okIds.add(Number(c.id));
+        okNames.add(normCat(fullOf(c)));
+        okLeafs.add(normCat(leafOf(c)));
+      }
+    }
+    const rows =
+      target === null
+        ? rowsAll
+        : rowsAll.filter((x) => {
+            // ⚠️ 导入行只有**原文名**（没有我们的 `category_id`）⇒ 只能按叶子名匹配；
+            //    同名二级分不出来是这条口径的已知代价（数据里本来就没有这个信息）。
+            if (x.source !== LEDGER_SOURCE) {
+              const k = normCat(x.name);
+              return okLeafs.has(k) || okNames.has(k);
+            }
+            return x.category_id != null && okIds.has(Number(x.category_id));
+          });
     const sums = sumOf(rows, now, from, to);
     // ⚠️ 笔数 / 最近几笔都只看**已经发生的**（`at <= now`）：`statRowsOf` 取的是整段区间，
     //    里面可能有「记到明天」的那一笔 —— 把它数进来会让「今天花了多少」变成一句假话。
@@ -4246,17 +4329,46 @@ module.exports = {
       return !!at && at <= now;
     });
     const acctName = new Map(this._bk.listLedgerAccounts(me).map((a) => [Number(a.id), String(a.name || '')]));
+    /** 功能：给占比表那几行补上「一级 / 二级」（`name` 已经是全称，这里只补拆开的两段）。 @param {Array.<Object>} list - `pctRowsOf()` 的产物 @returns {Array.<Object>} 补完的行 */
+    const decorateCats = (list) =>
+      (Array.isArray(list) ? list : []).map((x) => {
+        const c = x && x.category_id != null ? cats.get(Number(x.category_id)) : null;
+        return {
+          ...x,
+          leaf: c ? leafOf(c) : String((x && x.name) || ''),
+          parent: c ? parentNameOf(c) : '',
+        };
+      });
+    // ⭐⭐ 2026-11-05（老大：「AI 获取不到记账的备注信息」）：最近几笔**带上备注**。
+    //    ⚠️⭐ **备注与账户名都不在合并流里** —— `selectLedgerEntriesBetween()` 刻意只回六列
+    //    （`id/at/ie/amount_fen/category_id/refund_of`，见那边的说明），所以 `x.note` 与
+    //    `x.account_id` 都是 `undefined`。
+    //    ⚠️⚠️ 顺带查实一个压了很久的洞：这一格 `account` **从 0.8.4 起一直是空串** ——
+    //    原来那句 `acctName.get(Number(x.account_id))` 取的是 `NaN`，查不到就静默回 `''`，
+    //    提示词里「最近几笔带账户名」等于从没兑现过（不报错、不显眼，只有真去问才会发现）。
+    //    ⇒ 一次 `getLedgerEntry()`（主键，**最多 10 次**）同时补齐这两格。
+    //    ⛔ 别改成给 `statRowsOf()` 加第七列：那条路是账单 / 预算 / 趋势 / 搜索共用的统计口，
+    //    为 10 行备注让每次月统计都多搬一列文本不划算（`ledgerSearch()` 也正因为这个才另建索引）。
+    //    ⚠️ 备注口径：**原样给全文**（`NOTE_READ_MAX` 只在历史脏数据上兜底，正常备注一字不截）——
+    //    截成几十字会让模型答半句话，那比不提供更糟。
+    //    ⚠️ 导入行没有备注也没有账户（三方账单据里就没有这两列）⇒ 空串，⛔ 不是 `undefined`
+    //    （模型会把缺键读成「这个工具不支持备注」，空串才是「这一笔没写」）。
+    const rowOf = (x) => (x && x.source === LEDGER_SOURCE ? this._bk.getLedgerEntry(me, Number(x.ref_id)) : null);
     const recent = live
       .slice()
       .sort((a, b) => String(b.at).localeCompare(String(a.at)) || Number(b.ref_id || 0) - Number(a.ref_id || 0))
       .slice(0, 10)
-      .map((x) => ({
-        at: String(x.at),
-        ie: String(x.ie || ''),
-        amount_fen: Math.trunc(Number(x.fen)) || 0,
-        category: String(x.name || ''),
-        account: x.source === LEDGER_SOURCE ? String(acctName.get(Number(x.account_id)) || '') : '',
-      }));
+      .map((x) => {
+        const row = rowOf(x);
+        return {
+          at: String(x.at),
+          ie: String(x.ie || ''),
+          amount_fen: Math.trunc(Number(x.fen)) || 0,
+          category: String(x.name || ''),
+          account: row ? String(acctName.get(Number(row.account_id)) || '') : '',
+          note: row ? String(row.note == null ? '' : row.note).slice(0, NOTE_READ_MAX) : '',
+        };
+      });
     return {
       range: custom ? 'custom' : r,
       // ⭐ 0.8.55：自定义区间回**闭区间**那对日期（内部 `to` 是排他上界，`shiftDaysOf(-1)` 还回去）
@@ -4273,8 +4385,14 @@ module.exports = {
       // ⚠️ 净额 = 收入 − 支出（支出已是净额，见 `sumOf()`）—— 与 `cardOf()` 同一式子。
       net_fen: sums.income_fen - sums.expense_fen,
       count: live.length,
-      categories: pctRowsOf(categoryBucketsOf(rows, now, from, to, false), sums.expense_fen).slice(0, 10),
-      income_categories: pctRowsOf(categoryBucketsOf(rows, now, from, to, true), sums.income_fen).slice(0, 10),
+      // ⭐⭐ 0.9.7：分类带上**一级 / 二级**（`name` = 全称、`leaf` = 二级名、`parent` = 一级名）。
+      //    ⚠️ 二级分类允许重名（「其他」在多个一级下都有）⇒ 只给叶子名会让模型把两笔钱合并成一笔。
+      categories: decorateCats(
+        pctRowsOf(categoryBucketsOf(rows, now, from, to, false), sums.expense_fen).slice(0, 10),
+      ),
+      income_categories: decorateCats(
+        pctRowsOf(categoryBucketsOf(rows, now, from, to, true), sums.income_fen).slice(0, 10),
+      ),
       recent,
     };
   },

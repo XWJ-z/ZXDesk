@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：ApkDownloader.kt
+ * 职责：APK 下载与三重校验，字节数、SHA256、包内版本
+ */
+
 package com.zxdesk.core.update
 
 import java.io.File

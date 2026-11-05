@@ -12,9 +12,13 @@
          2) ?view=mobile   应急出口：强制去 /mobile/（想在电脑上预览手机版时用）
          3) 其余按设备判定 —— 触屏 → /mobile/，否则留在电脑版
          ⚠️ 判定必须「保守」：现在两边都没有切换按钮了，判错就是把用户关在错的那一边。
-            因此只在「主指针是手指（pointer: coarse）」或「只有触屏、没有任何精确指针」时才当手机：
+            ⭐⭐ 0.9.7 起**第一道闸是「短边」**（见下面的 `viewShort`）：短边 ≥ 600 的设备
+            （平板 / 电脑显示器）**一律电脑版**，后面的 UA / 指针 / 宽度判定都不再参与。
+            手机无论横竖屏，短边都只有 320~430；平板 7 寸就是 600 起 —— 这条界线比宽度稳得多。
+            过了第一道闸（即确实是手机尺寸），再按老规矩判：
+            只在「主指针是手指（pointer: coarse）」或「只有触屏、没有任何精确指针」时才当手机：
             触屏笔记本（有鼠标 = pointer: fine）不会被抢走；
-            并且要求 innerWidth <= 1024，大屏触屏设备仍给电脑版。
+            并且要求 innerWidth <= 1024。
             **绝不用窗口宽度单独判定** —— 那会把「窗口拉窄的电脑浏览器」弹进手机版（0.0.8 踩过）。
          出问题时（matchMedia 缺失、异常）一律留在电脑版。 */
       (function () {
@@ -53,7 +57,11 @@
           if (!s) return '';
           try {
             var usp = new URLSearchParams(s);
-            usp.delete('view'); // 我们自己的参数不往下一屏带
+            /* ⭐ 0.9.6：`view=desktop` 必须带到下一屏。
+               安卓壳在平板上会加 `?view=desktop`，把「这台设备要电脑版」的决定交给前端；
+               而跳板页一跳就把 `view` 删掉 ⇒ 下一屏的 index.html 又按自动判定选回手机版，
+               壳层的决定等于白做。`view=mobile` 仍然丢掉：那是临时预览，不该黏在后续每一跳上。 */
+            if (usp.get('view') !== 'desktop') usp.delete('view');
             var out = usp.toString();
             return out ? '?' + out : '';
           } catch (e) {
@@ -67,6 +75,21 @@
           return;
         }
         var mm = window.matchMedia;
+        /* ⭐⭐ 0.9.7：**短边闸门 —— 平板一律电脑版**（老大 2026-11-04 真机）。
+           现场：平板横屏、在飞牛桌面里以**自由窗口**打开，窗口够宽但高度只有几百；
+           老判据 `isPhone && innerWidth <= 1024` / `innerWidth <= 768` 会命中，
+           平板上于是只剩一条窄窄的手机卡片（截图：1080×706 的窗口里塞着手机版）。
+           ⇒ 先用短边（屏幕或窗口的较小边）挡一道，**它跟窗口怎么拖、UA 怎么写都无关**：
+              手机  320~430（横屏时短边是手机高度，一样小）
+              平板  ≥600（7 寸 600 / 10 寸 800 / 12 寸 1000+）
+           短边 ≥ 600 直接留电脑版，后面的 UA / 指针 / 宽度判定都不再参与。
+           ⛔ 别改回「只看 innerWidth」：自由窗口一缩就会重犯，0.9.6 就是这么漏的。
+           ⚠️ 与 `core/static.js` 的 `isPhoneUA()` 是**同一条分工**：服务端只拦 iPhone / iPod / Windows Phone
+           这三种「一眼是手机、绝不可能是平板」的 UA，Android 全交给这里 —— 只有这里能读到视口。
+           0.9.6 / 0.9.7 前两次修不动的真因就是服务端先手 302 把它送去了 /mobile/（本文件压根没执行）。
+           两处必须一起看：只改这里，平板会被服务端抢走；只改服务端，手机可能落回电脑版。 */
+        var viewShort = Math.min(window.innerWidth || 0, window.innerHeight || 0);
+        if (viewShort >= 600) return;
         var coarse = !!(mm && mm('(pointer: coarse)').matches);
         var fine = !!(mm && mm('(pointer: fine)').matches);
         var fingers = navigator.maxTouchPoints > 0 || 'ontouchstart' in window;
@@ -80,14 +103,23 @@
            Android 平板 UA 里没有 `Mobile`，仍给电脑版。 */
         var ua = navigator.userAgent || '';
         var phoneUa = /Android.+Mobile|iPhone|iPod|Windows Phone/i.test(ua);
-        if (phoneUa) {
+        /* ⭐ 0.9.6：UA 判定必须**再加一道宽度上限**。
+           2026-11-03 真机（平板 TXZ-W20 / Android 16）：它的 UA 里带 `Mobile`
+           （不少国产 ROM 与定制 WebView 都这么写），而屏幕是 1117 CSS px ——
+           只看 UA 就把它判成手机、跳去 /mobile/，平板上只剩窄窄一列。
+           iPhone / iPod / Windows Phone 的 UA 只在手机上出现，加这条不影响它们；
+           Android 平板只要够宽就留在电脑版。
+           ⚠️ 0.9.7 起短边闸门（上面那条）已经在**前**把它拦住了；这里保留宽度上限是第二道保险 ——
+           万一哪天短边闸门被挪走，宽平板仍不会被 UA 抢走。 */
+        if (phoneUa && window.innerWidth <= 1024) {
           location.replace(base + '/mobile/' + carrySearch() + location.hash);
           return;
         }
         /* 再兜一层：**窄屏就是手机**（768 以下）。
            ⚠️ 这一条**故意不看任何触摸特征** —— 实测飞牛 App 的 WebView 连
            `navigator.maxTouchPoints` 都给 0，带 `fingers` 就等于没兜底（上一版就是这么漏的）。
-           代价是「电脑浏览器窗口拉到 768 以下」也会进手机版，那种情况用 `?view=desktop` 出来。 */
+           ⚠️ 0.9.7 起它只对**短边 < 600** 的设备生效（手机），平板早在前一道闸门就留在电脑版了 ——
+           「电脑窗口拉到 768 以下」不再被弹进手机版（窗口矮不代表屏幕小）。 */
         if (window.innerWidth <= 768) {
           location.replace(base + '/mobile/' + carrySearch() + location.hash);
           return;
@@ -968,6 +1000,7 @@
     <link rel="modulepreload" href="core/about.js" />
     <link rel="modulepreload" href="core/api.js" />
     <link rel="modulepreload" href="core/backup.js" />
+    <link rel="modulepreload" href="core/cache.js" />
     <link rel="modulepreload" href="core/bookmarks.js" />
     <link rel="modulepreload" href="modules/teamwork/teamwork-stream.js" />
     <!-- ⭐ 0.7.5 番茄钟（方案 17 §4.6）：**秒级共用时钟** —— 全项目唯一的「现在」的秒级提供者。

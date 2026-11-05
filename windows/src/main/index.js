@@ -1,5 +1,7 @@
 /**
- * ZXDesk 工作台 · Windows 壳（Electron 主进程入口）。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：index.js
+ * 职责：ZXDesk 工作台 · Windows 壳（Electron 主进程入口）
  *
  * 启动顺序（每一步都写 `data/logs/boot.log`，首跑翻车时这就是验尸包）：
  * ① 参数判定（`--diagnose` / `--smoke`）→ ② 绿色路径（`app.setPath`，必须在 ready 之前）
@@ -22,6 +24,7 @@ import {
   ipcMain,
   nativeImage,
   net,
+  powerMonitor,
   safeStorage,
   session,
   shell,
@@ -31,7 +34,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
-import { applyCookies, clearCookies } from './browser/cookies.js';
+import { applyCookies, applyGatewayCookies, clearCookies } from './browser/cookies.js';
 import { RemoteView } from './browser/view.js';
 import { Controller } from './controller.js';
 import { runDiagnose } from './diagnose.js';
@@ -39,7 +42,9 @@ import { registerIpc } from './ipc.js';
 import { createBootSequence } from './boot.js';
 import { Logger } from './log.js';
 import { DEFAULT_NOTICE_URL, NoticeService } from './notice.js';
+import { AccountStore } from './store/accounts.js';
 import { CredentialStore } from './store/credentials.js';
+import { GatewayCookieStore } from './store/gateway.js';
 import { dataFiles, resolveDataDir } from './store/paths.js';
 import { PrefsStore } from './store/prefs.js';
 import { SecureStore } from './store/secure.js';
@@ -238,6 +243,97 @@ function openNoticeWindow() {
 }
 
 /**
+ * 信息窗口（单例）：许可协议 / 打赏与支持 / 更新日志。
+ *
+ * 三者都是「只读、无网络、不参与状态机」的静态内容，共用一个窗口与一套页面：
+ * URL 只带 `?doc=`，正文由主进程按白名单读随包文件（见 `readInfoDoc`）。
+ * 为什么不开在壳里：`WebContentsView` 盖在 DOM 之上，自绘弹层要么藏视图（背后白屏）、
+ * 要么被网页盖住；独立窗口两头都不占（与更新 / 公告窗口同一处置）。
+ */
+let infoWin = null;
+
+/** 窗口尺寸与标题；正文文件由 `readInfoDoc` 按 kind 拼死（⛔ 不做通用路径读）。 */
+const INFO_DOCS = Object.freeze({
+  eula: { title: '许可协议', width: 680, height: 760 },
+  donate: { title: '打赏与支持', width: 620, height: 640 },
+  releases: { title: '更新日志', width: 640, height: 720 },
+});
+
+function openInfoWindow(doc) {
+  const meta = INFO_DOCS[doc];
+  if (!meta) return;
+
+  if (infoWin && !infoWin.isDestroyed()) {
+    // 同一窗口换内容：直接重新加载，不叠第二个窗
+    infoWin.setTitle(meta.title);
+    infoWin.loadFile(path.join(shellDir, 'info.html'), { query: { doc } });
+    infoWin.show();
+    infoWin.focus();
+    return;
+  }
+
+  infoWin = new BrowserWindow({
+    width: meta.width,
+    height: meta.height,
+    minWidth: 460,
+    minHeight: 420,
+    parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
+    modal: false,
+    show: false,
+    title: meta.title,
+    backgroundColor: '#F5F7FB',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(shellDir, 'preload.cjs'),
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      webviewTag: false,
+      spellcheck: false,
+    },
+  });
+
+  const wc = infoWin.webContents;
+  wc.on('will-navigate', (event, url) => {
+    if (!url.startsWith(shellBase)) {
+      event.preventDefault();
+      logger.warn(`信息窗口尝试导航到 ${url}，已阻止`);
+    }
+  });
+  wc.on('will-attach-webview', (event) => event.preventDefault());
+
+  infoWin.once('ready-to-show', () => infoWin.show());
+  infoWin.on('closed', () => {
+    infoWin = null;
+    logger.info('信息窗口已关闭');
+  });
+
+  infoWin.loadFile(path.join(shellDir, 'info.html'), { query: { doc } });
+  logger.info(`信息窗口已打开：${doc}`);
+}
+
+/**
+ * 信息窗口的正文来源（DTO 只给文本 / 结构化数据，⛔ 不给路径）。
+ *
+ * 两份文件都在 `src/shell/assets`（随包）：
+ * 许可协议与安装包内那份同源，更新日志是 Windows 端自己的版本记录。
+ */
+async function readInfoDoc(kind) {
+  if (kind === 'eula') {
+    const file = path.join(shellDir, 'assets', 'eula.txt');
+    return { ok: true, kind, text: await fs.promises.readFile(file, 'utf8') };
+  }
+  if (kind === 'releases') {
+    const file = path.join(shellDir, 'assets', 'releases.json');
+    const raw = await fs.promises.readFile(file, 'utf8');
+    const parsed = JSON.parse(raw);
+    return { ok: true, kind, releases: Array.isArray(parsed.releases) ? parsed.releases : [] };
+  }
+  return { ok: false, error: '未登记的文档' };
+}
+
+/**
  * 检查更新窗口（单例）。
  *
  * 为什么是独立窗口而不是 `dialog.showMessageBox`：更新要展示版本号、更新说明、**下载进度**，
@@ -328,6 +424,8 @@ function buildController() {
   const secure = new SecureStore({ safeStorage, logger: (m) => logger.warn(m) });
   const sessions = new SessionStore(secure, files.session, (m) => logger.warn(m));
   const credentials = new CredentialStore(secure, files.credential, (m) => logger.warn(m));
+  const accounts = new AccountStore(files.accounts, (m) => logger.warn(m));
+  const gatewayCookies = new GatewayCookieStore(secure, files.gateway, (m) => logger.warn(m));
   const tofu = new TofuStore(files.tofu, (m) => logger.warn(m));
 
   // 更新服务：网络走 `net.fetch` / `net.request`（Chromium 网络栈，系统 CA 与代理都生效）
@@ -364,12 +462,26 @@ function buildController() {
     onProbe: (page) => {
       fire(() => controller?.onProbe(page), '探针处理失败');
     },
+    // 页面 401 要跳登录页：先静默续会话（返回 true = 拦下这次导航）
+    onLoginRedirect: () => Boolean(controller?.onLoginPageBlocked()),
+    /**
+     * 子资源 401：网页先弹「登录已过期」红气泡、几百毫秒后才跳登录页。
+     * 这一段没有导航事件，只能从网络层的 401 提前接手（Android 0.3.1 第十二条）。
+     */
+    onUnauthorized: () => Boolean(controller?.onLoginPageBlocked()),
+    /**
+     * 网页会话（`zxdesk_sid`）被下发：立刻存一份。
+     * ZXDesk 账号的登录是页面里的 XHR，成功后不整页导航 ⇒ 没有 `did-finish-load` ⇒
+     * 等下一次探针就永远等不到（「每次都要重新登录 ZXDesk 账号」的真因）。
+     */
+    onWebSession: () => fire(() => controller?.captureWebSession(), '保存网页会话失败'),
     onLoadFail: ({ code, description, url }) => {
       // 界面只给一句人话；错误码与地址进 detail（只出现在「复制诊断」里）
       controller?.notifyError('打不开页面', '页面没有加载出来，检查网络后点「重试」。', { code, description, url });
     },
-    onTitleChange: (title) => {
-      if (title) mainWindow?.setTitle('ZXDesk 工作台');
+    onTitleChange: () => {
+      // 页面标题不带连接信息（那是网页自己的 title）；窗口标题统一由 updateWindowTitle 维护
+      updateWindowTitle(controller?.getState());
     },
     // 远程视图有焦点时壳收不到 keydown ⇒ 快捷键在主进程截完再转成动作
     onShortcut: (name) => {
@@ -382,6 +494,8 @@ function buildController() {
     prefs,
     sessions,
     credentials,
+    accounts,
+    gatewayCookies,
     tofu,
     view: remoteView,
     logger,
@@ -407,12 +521,30 @@ function buildController() {
         return { ok: false, message: '打不开浏览器，请手动复制地址访问。' };
       }
     },
-    // `/app/ticket` 与 FNID 解析都走 `net.fetch`：它走 **Chromium 网络栈**，
-    // 于是自签证书确认（setCertificateVerifyProc）对原生请求同样生效（任务书 §7.5「两条路共用一份判定」）。
+    // `/app/ticket` 与 FNID 解析走 `net.fetch`（Chromium 网络栈，系统 CA 与代理生效）。
+    // ⚠️ 它用的是**默认 session**：分区的访问码 Cookie 与 TOFU 判定都不在它身上 ——
+    // 所以探网关必须用下面的 `probeFetcher`，不能图省事共用这一个。
     fetcher: (input, init) => net.fetch(input, init),
+    /**
+     * 探网关专用的 fetch：**绑远程视图那个分区**（`persist:zxdesk`）。
+     *
+     * `net.fetch` 用的是默认 session —— 拿不到访问码凭据、也不走分区的 TOFU 判定。
+     * 开了访问码的 NAS 上，用它探网关会永远判成「还要访问码」，登录成功又被送回第 ④ 步
+     * （0.2.4 第一版真机「登录好几次才进去」的根因）。`ses.fetch` 与页面共用同一份 Cookie / 证书判定。
+     */
+    probeFetcher:
+      typeof remoteView.session?.fetch === 'function'
+        ? (input, init) => remoteView.session.fetch(input, init)
+        : undefined,
     cookies: {
       partition: REMOTE_PARTITION,
       apply: (fnSession, target) => applyCookies(fnSession, target, remoteView.session.cookies, (m) => logger.warn(m)),
+      /**
+       * 回注网关凭据（访问码 Cookie）。分区不落会话级 Cookie，所以必须每次启动自己写回去，
+       * 否则「每次开应用都要重新输一次访问码」。
+       */
+      applyGateway: (list, target) =>
+        applyGatewayCookies(list, target, remoteView.session.cookies, (m) => logger.warn(m)),
       // 传 **Session**（不是 session.cookies）：Electron 的 Cookies 没有 clear()
       clear: () => clearCookies(remoteView.session, (m) => logger.warn(m)),
       // 捕获 ZXDesk 网页会话（zxdesk_sid）用；只取名字匹配的那条由 controller 过滤
@@ -421,6 +553,22 @@ function buildController() {
           return await remoteView.session.cookies.get({ url });
         } catch {
           return [];
+        }
+      },
+      /**
+       * 远程视图分区里的 Cookie 头（`name=value; …`）。
+       * 用途只有一个：开了「访问码」的 NAS 上，原生 WS 握手与原生探测要带上过访问码时种下的凭据
+       * （Electron 的 cookie 罐就是 Android 那边的 `CookieManager`）。
+       */
+      header: async (url) => {
+        try {
+          const list = await remoteView.session.cookies.get({ url });
+          return list
+            .filter((cookie) => cookie?.name && cookie?.value)
+            .map((cookie) => `${cookie.name}=${cookie.value}`)
+            .join('; ');
+        } catch {
+          return '';
         }
       },
       // 回注网页会话（参数由 cookies.webSessionSpec 校验 host 后给出）
@@ -436,6 +584,8 @@ function buildController() {
       },
     },
     notify: (state) => {
+      // Windows 规范：连接身份（哪台设备、哪条链路）属于标题栏，不属于菜单栏
+      updateWindowTitle(state);
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('zxdesk:state', state);
       // 公告 / 更新窗口订阅同一份状态：已读、下载进度都要立刻反映到它们自己的界面上
       if (noticeWin && !noticeWin.isDestroyed()) noticeWin.webContents.send('zxdesk:state', state);
@@ -447,6 +597,24 @@ function buildController() {
 }
 
 // ---------------------------------------------------------------- ④ 壳窗口
+
+/**
+ * 窗口标题：`ZXDesk 工作台` 或 `ZXDesk 工作台 — <主机> · <链路>`。
+ *
+ * 为什么要放进标题栏：菜单栏按 Windows 规范重排之后，那里只剩下「文件 / 查看 / 工具 / 帮助」；
+ * 「我现在连的是哪台设备」按 Windows 习惯属于标题栏（标题栏本来就该回答「这份文档 / 这个连接是谁」）。
+ */
+function updateWindowTitle(state) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const browsing = state?.browsing || {};
+  const identity = [browsing.host, browsing.linkLabel].filter(Boolean).join(' · ');
+  const title = identity ? `ZXDesk 工作台 — ${identity}` : 'ZXDesk 工作台';
+  try {
+    if (mainWindow.getTitle() !== title) mainWindow.setTitle(title);
+  } catch {
+    /* 窗口正在销毁：忽略 */
+  }
+}
 
 function createWindow({ smoke = false } = {}) {
   // 护栏：以后谁再把顺序调乱，日志里会是一句人话，而不是 null.get
@@ -518,6 +686,9 @@ function createWindow({ smoke = false } = {}) {
     mainWindow.on(event, () => remoteView?.layout?.());
   }
   mainWindow.on('close', saveBounds);
+  // 回到前台（切回窗口 / 从托盘恢复）探一次会话：15 秒防抖在 controller 里，
+  // 探活只诊断、不重建页面；真正重连由页面 401 或探针 invalid token 触发。
+  mainWindow.on('focus', () => fire(() => controller?.onForeground(), '回前台探活失败'));
   // 「关闭到托盘」：点 X 只隐藏（真退出要先把 isQuitting 置 true）
   mainWindow.on('close', (event) => {
     if (isQuitting || !prefs?.get().closeToTray) return;
@@ -629,6 +800,9 @@ app.whenReady().then(async () => {
 
     if (!singleInstanceOk) return;
 
+    // 系统从睡眠回来后网络常常刚恢复：与「窗口获得焦点」走同一条静默探活
+    powerMonitor.on('resume', () => fire(() => controller?.onForeground(), '系统唤醒探活失败'));
+
     await bootUi({ smoke: isSmoke });
   } catch (e) {
     fatal('启动阶段', e);
@@ -663,6 +837,7 @@ async function bootUi({ smoke = false } = {}) {
           clipboard.writeText(text);
           return true;
         },
+        readDoc: (kind) => readInfoDoc(kind),
         onMenu: (which) => showMenu(which),
       }),
     attachHandlers: () => attachShellHandlers({ smoke }),
@@ -1021,10 +1196,17 @@ function hasUpdate() {
 }
 
 /**
- * 顶栏文字菜单（连接 / 视图 / 帮助）。
+ * 顶栏文字菜单（文件 / 查看 / 工具 / 帮助）。
  *
  * 用原生 `Menu.popup`：壳只发一个 `openMenu(which)`，菜单项与动作都在主进程 —— 壳里没有菜单逻辑，
  * 也就没有「自绘下拉层被 WebContentsView 盖住」的问题。
+ *
+ * ⭐ 0.2.6 起按 **Windows 规范**分组：
+ * 文件(F) / 查看(V) / 工具(T) / 帮助(H)。原先照 Android 抽屉分的「连接 / 模式 / 账户」是把手机端的
+ * 抽屉硬塞进菜单栏 —— 手机抽屉里「模式」「账户」是页面级入口，桌面端的同义物就是「文件」菜单。
+ * ⚠️ 「模式（仅连接 NAS / 仅本机 / 混合）」不再出现在菜单里：那两项本来就是占位，
+ * 放一个永远灰着的单选项只会让人以为功能坏了（⛔ 不做假入口）。
+ * 连接身份（主机 · 链路）也不在菜单里了 —— 那是**窗口标题栏**的位置，见 `updateWindowTitle()`。
  */
 function showMenu(which) {
   const win = mainWindow;
@@ -1041,59 +1223,81 @@ function showMenu(which) {
     }
   };
 
+  const state = controller?.getState() || {};
+  const connected = state.screen === 'browsing' || state.screen === 'access';
+  const openInfo = (doc) => () => fire(() => openInfoWindow(doc), `打开${INFO_DOCS[doc]?.title || '信息'}失败`);
+  const openLogDir = () => shell.openPath(path.dirname(files.bootLog)).catch((e) => logger.error('打开日志目录失败', e));
+
+  /** 「切换账号」菜单项：直接打开弹窗（0.2.6 起不再是子菜单列表 —— 列表在弹窗里，且能在那里新增账号）。 */
+  const openAccounts = () => fire(() => controller?.openAccounts(), '打开切换账号失败');
+
+  const helpItems = [
+    {
+      // 菜单是点开时现构建的，所以未读条数能实时读到
+      label: noticeMenuLabel(),
+      click: () => fire(() => controller?.openNotice(), '打开公告失败'),
+    },
+    { type: 'separator' },
+    { label: '许可协议…', click: openInfo('eula') },
+    { label: '更新日志…', click: openInfo('releases') },
+    { label: '打赏与支持…', click: openInfo('donate') },
+    { type: 'separator' },
+    {
+      label: '复制诊断',
+      click: () => {
+        clipboard.writeText(controller?.diagnosticsText() || '');
+        logger.info('诊断信息已复制');
+      },
+    },
+    {
+      label: `关于 ZXDesk（${app.getVersion()}）`,
+      click: () =>
+        dialog.showMessageBox(win, {
+          type: 'info',
+          title: '关于 ZXDesk',
+          message: `ZXDesk 工作台 ${app.getVersion()}`,
+          detail: `Electron ${process.versions.electron}\nChromium ${process.versions.chrome}\nNode ${process.versions.node}\n\n数据目录：${dataPaths.dir}`,
+          buttons: ['好'],
+        }),
+    },
+  ];
+
   const templates = {
-    settings: () => settingsMenuTemplate(),
-    connect: [
-      { label: '连接信息…', click: act('panel.open') },
-      { label: '刷新页面', click: act('toolbar.reload') },
+    // ── 文件(F)：连接、账号、退出 ──
+    file: [
+      { label: '连接信息…', enabled: connected, click: act('panel.open') },
+      { label: '换个地址…', click: act('panel.changeAddress') },
       { type: 'separator' },
-      { label: '换个地址', click: act('panel.changeAddress') },
-      { label: '退出登录', click: act('panel.logout') },
+      { label: '切换账号…', click: openAccounts },
+      { type: 'separator' },
+      { label: '退出登录…', enabled: connected, click: act('panel.logout') },
+      { type: 'separator' },
+      { label: '退出', role: 'quit' },
     ],
+    // ── 查看(V)：导航与缩放（Windows 应用的「视图」菜单同款） ──
     view: [
+      { label: '刷新 (F5 / Ctrl+R)', enabled: connected, click: act('toolbar.reload') },
+      { type: 'separator' },
       { label: '后退 (Alt+←)', enabled: Boolean(remoteView?.canGoBack?.()), click: act('toolbar.back') },
       { label: '前进 (Alt+→)', enabled: Boolean(remoteView?.canGoForward?.()), click: act('toolbar.forward') },
-      { label: '刷新 (F5 / Ctrl+R)', click: act('toolbar.reload') },
       { type: 'separator' },
       { label: '放大', click: () => zoom(0.5) },
       { label: '缩小', click: () => zoom(-0.5) },
       { label: '重置缩放', click: () => zoom(0) },
     ],
-    help: [
-      {
-        // 菜单是点开时现构建的，所以未读条数能实时读到
-        label: noticeMenuLabel(),
-        // openNotice 是同步方法（只负责开窗），走 fire 兜住，别在这写 .catch
-        click: () => fire(() => controller?.openNotice(), '打开公告失败'),
-      },
+    // ── 工具(T)：设置、日志、更新 ──
+    tools: [
+      { label: '设置', submenu: settingsMenuTemplate() },
+      { type: 'separator' },
+      { label: '打开日志目录', click: openLogDir },
+      { type: 'separator' },
       {
         // DSH 同款：有新版本就在菜单项上标出来（浏览网页时没有提示条，这里是唯一信号）
         label: `检查更新${hasUpdate() ? '（有新版本）' : ''}…`,
         click: () => fire(() => controller?.openUpdate(), '检查更新失败'),
       },
-      {
-        label: `关于 ZXDesk（${app.getVersion()}）`,
-        click: () =>
-          dialog.showMessageBox(win, {
-            type: 'info',
-            title: '关于 ZXDesk',
-            message: `ZXDesk 工作台 ${app.getVersion()}`,
-            detail: `Electron ${process.versions.electron}\nChromium ${process.versions.chrome}\nNode ${process.versions.node}\n\n数据目录：${dataPaths.dir}`,
-            buttons: ['好'],
-          }),
-      },
-      {
-        label: '复制诊断',
-        click: () => {
-          clipboard.writeText(controller?.diagnosticsText() || '');
-          logger.info('诊断信息已复制');
-        },
-      },
-      {
-        label: '打开日志目录',
-        click: () => shell.openPath(path.dirname(files.bootLog)).catch((e) => logger.error('打开日志目录失败', e)),
-      },
     ],
+    help: helpItems,
   };
 
   const raw = templates[which];

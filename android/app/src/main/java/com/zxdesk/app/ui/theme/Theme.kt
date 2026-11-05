@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：Theme.kt
+ * 职责：壳的浅色主题与色板，与网页 tokens 同源，不跟随系统深色
+ */
+
 package com.zxdesk.app.ui.theme
 
 import androidx.compose.material3.MaterialTheme
@@ -11,11 +17,11 @@ import androidx.compose.ui.graphics.Color
  * 壳只做浅色。
  *
  * 为什么不跟系统深色：WebView 里的网页（`mobile/app.css`）**没有深色方案**，
- * 深色壳套浅色网页怎么调都是拼接感（0.2.10 的真机截图就是「深控件 + 浅底 + 黑标题」）。
+ * 深色壳套浅色网页怎么调都带拼接感：深控件 + 浅底 + 黑标题。
  * 系统深色时也强制浅色；系统栏图标按浅色声明。真要深色得先让网页支持，二期再议。
  *
  * 色板与网页 `tokens.css` 同源（primary #4F46E5 靛蓝），**全键显式给值**，
- * ⛔ 不留 M3 默认紫、⛔ 不用动态取色、⛔ 不靠透明度凑层级（0.2.9 的教训）。
+ * ⛔ 不留 M3 默认紫、⛔ 不用动态取色、⛔ 不靠透明度凑层级。
  */
 private val LightScheme = lightColorScheme(
     primary = Color(0xFF4F46E5),

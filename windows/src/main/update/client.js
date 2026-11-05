@@ -1,5 +1,7 @@
 /**
- * 版本接口客户端：拉取 `/api/version/windows` 并把响应校验成固定形状。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：client.js
+ * 职责：版本接口客户端：拉取 `/api/version/windows` 并把响应校验成固定形状
  *
  * 传输层由调用方注入（生产用 Electron 的 `net.fetch`，测试传假的）——
  * 本文件不 import electron，所以能在没有显示器的机器上用 `node --test` 直接验。

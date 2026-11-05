@@ -1,5 +1,7 @@
 /**
- * 选路（移植自 `Project/Android/core/connection/ConnectionPlanner.kt`）。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：planner.js
+ * 职责：选路（移植自 `Project/Android/core/connection/ConnectionPlanner.kt`）
  *
  * 三条硬规则：
  * 1. **8990 永远明文**：用户写 `https://ip:8990` 也按 http 走（它是局域网救援端口）；

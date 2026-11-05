@@ -1,5 +1,7 @@
 /**
- * 会话快照（`data/session.bin`，加密）。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：session.js
+ * 职责：会话快照（`data/session.bin`，加密）
  *
  * 内容算凭据（token / longToken / secret / 会话 Cookie），所以整段 JSON 交给 `SecureStore`；
  * ⛔ 密码永不进这里（那是 `credential.bin`）。
@@ -82,6 +84,37 @@ export class SavedSession {
     if (this.portalUrl) return this.portalUrl;
     return `${base}/`;
   }
+}
+
+/**
+ * 网关凭据快照的归一：只认「有名字 + 有值」的条目，坏数据一律丢掉。
+ *
+ * 上限与 `GATEWAY_COOKIE_LIMIT` 对齐（20 条）—— 快照要进 safeStorage，
+ * 没必要为了几条无关 Cookie 把整份 session.bin 撑大。
+ */
+export function normalizeGatewayCookies(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    if (typeof item.name !== 'string' || !item.name) continue;
+    if (typeof item.value !== 'string' || !item.value) continue;
+    const spec = {
+      name: item.name,
+      value: item.value,
+      domain: typeof item.domain === 'string' ? item.domain : '',
+      path: typeof item.path === 'string' && item.path ? item.path : '/',
+      secure: item.secure !== false,
+      httpOnly: item.httpOnly === true,
+      sameSite: typeof item.sameSite === 'string' ? item.sameSite : 'unspecified',
+    };
+    if (typeof item.expirationDate === 'number' && item.expirationDate > 0) {
+      spec.expirationDate = item.expirationDate;
+    }
+    out.push(spec);
+    if (out.length >= 20) break;
+  }
+  return out;
 }
 
 export class SessionStore {

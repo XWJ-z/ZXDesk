@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：FnLoginClient.kt
+ * 职责：飞牛（fnOS）WS 登录客户端，握手、加密、两步验证、会话收尾
+ */
+
 package com.zxdesk.core.connection
 
 import kotlinx.coroutines.CoroutineScope
@@ -42,6 +48,17 @@ class FnLoginException(
     cause: Throwable? = null,
 ) : Exception(message, cause)
 
+/**
+ * 网关在 **WS 握手**阶段就回了 401 / 403 —— 十有八九是这台 NAS 开了「访问码」。
+ *
+ * 访问码是飞牛网关自己的闸门：在浏览器里输过一次，网关才种下凭据；
+ * 原生 WS 请求不在那个浏览器里，带不上凭据就只能被挡在 101 之前。
+ *
+ * ⚠️ 它**不是**账号密码错，也**不是**网络问题 ⇒ 上层要把人送到第 ④ 步（访问码），
+ *    ⛔ 不许当成登录失败记进 `ConnectGuard` 的冷却里（那会让用户越试越久、最后彻底进不去）。
+ */
+class AccessCodeRequiredException(message: String) : Exception(message)
+
 /** 服务器要求两步验证时带回来的信息（`login` 只给 accessToken，不给 token）。 */
 data class FnTwoFactor(
     val accessToken: String,
@@ -58,7 +75,12 @@ sealed interface FnLoginOutcome {
     data class NeedTwoFactor(val info: FnTwoFactor) : FnLoginOutcome
 }
 
-/** WS 登录拿到的会话；[note] 放不影响主流程的告警（如 entry-token 没换到）。 */
+/**
+ * WS 登录拿到的会话；[note] 放不影响主流程的告警（如 entry-token 没换到）。
+ *
+ * ⚠️ [note] 是**排障文本**：里面有 `(result=fail, errno=65534, reqid=13)` 这类内部错误码，
+ *    ⛔ 不许直接当界面文案（Toast 也不行）—— 只进 logcat。用户看得懂的结论由调用方另写。
+ */
 data class FnSession(
     val token: String,
     val secret: String? = null,
@@ -71,8 +93,8 @@ data class FnSession(
 ) {
     /**
      * 写给 CookieManager 的完整 cookie 串（每次 `setCookie(url, 一条)`）。
-     * 名字照 fnOS 前端 bundle：会话 `fnos-token`（SameSite=Strict）、app 入口 `entry-token`（写到 `.<host>` 域）。
-     * ⛔ 不是 `Trim-MC-token`（那个名字 bundle 里根本没有）。
+     * cookie 名按网关约定：会话 `fnos-token`（SameSite=Strict）、app 入口 `entry-token`（写到 `.<host>` 域）。
+     * ⛔ 不用 `Trim-MC-token`，网关不认这个名字。
      */
     fun cookies(relayHost: String?): List<String> = buildList {
         // 先放自己拼的兜底项，再放服务端 Set-Cookie（同名时后者覆盖前者，见下）
@@ -80,7 +102,7 @@ data class FnSession(
         val names = fromServer.map { it.substringBefore('=') }.toSet()
         if ("fnos-token" !in names) add("fnos-token=$token; Path=/; Secure; SameSite=Strict")
         addAll(fromServer)
-        // 长期令牌 30 天（bundle：`Sj(RY,{sameSite:'strict',expires:30})`），会话 Cookie 不设过期
+        // 长期令牌 30 天（SameSite=Strict），会话 Cookie 不设过期
         if (!longToken.isNullOrBlank()) {
             add("fnos-long-token=$longToken; Path=/; Secure; SameSite=Strict; Max-Age=$LONG_TOKEN_MAX_AGE")
         }
@@ -109,12 +131,12 @@ const val LONG_TOKEN_MAX_AGE: Int = 30 * 24 * 60 * 60
 /**
  * 一次完整的登录流程（**同一个 WebSocket 跨步骤复用**）。
  *
- * 协议来源：fnOS 前端 bundle 反查 + 真机实测：
+ * 协议要点（按飞牛登录协议实现，设备上逐项验证）：
  * `getRSAPub` → 加密 `user.login` →（若开了两步验证）`sendEmailCode` / **加密** `user.2fa.loginVerify`
  * → `POST /app/ticket` 换会话 Cookie。开了 2FA 时 `user.login` **不返回 token，只给 accessToken**；
  * 勾了「信任此设备」时 `loginVerify` 额外返回 `longToken`（30 天免 2FA，走 `user.tokenLogin`）。
  *
- * ⚠️ **服务端会在空闲时关掉 WS**（真机表现：输验证码那几十秒后 `send()` 返回 false，
+ * ⚠️ **服务端会在空闲时关掉 WS**（设备上表现为：输验证码那几十秒后 `send()` 返回 false，
  * 报「WebSocket 发送失败」）。所以每条 2FA 请求都带恢复策略：
  * 断了 → 重连再发；报「凭证过期」(102570109) → 重新登录换 accessToken 再发。
  */
@@ -123,18 +145,34 @@ class FnLoginFlow(
     private val relay: Boolean,
     private val user: String,
     private val password: String,
-    /** 设备标识，形如 `lq3k9x-ab12cd34ef56g-hi78jk90lm12n`（照 bundle 的 `jX()` 生成，见 Prefs）。 */
+    /** 设备标识，形如 `lq3k9x-ab12cd34ef56g-hi78jk90lm12n`（生成规则见 Prefs）。 */
     private val deviceId: String,
     private val deviceName: String = "Android-ZXDesk",
     private val timeoutMs: Long = 20_000,
     /** 上次登录留下的 `secret` —— 只给「用 longToken 免密登录」用，那条请求要 HMAC 签名。 */
     savedSecret: String? = null,
+    /**
+     * 每次 WS 握手前**现取**一次网关 Cookie（返回 `name=value; name2=value2` 形式，没有就返回 null）。
+     *
+     * 为什么要有它：NAS 开了「访问码」后，网关在握手阶段就 401，除非请求带上过访问码时种下的 cookie。
+     * 原生 WS 不在 WebView 里，只能由调用方把 `CookieManager` 的 cookie 递进来。
+     * ⚠️ 必须是「现取」：用户可能先被挡回去过访问码、再重连，构造时取的那份会是旧的。
+     */
+    private val gatewayCookie: (() -> String?)? = null,
 ) {
     private val host = baseUrl.removePrefix("https://").removePrefix("http://").trimEnd('/')
-    private var rpc = WsRpc(wsUrl(), if (relay) "mode=relay" else null, timeoutMs)
+
+    /** 只取主机名（去掉 `:端口` 与 IPv6 方括号）：DNS 预检与失败文案都只认它。 */
+    private val hostName: String
+        get() = when {
+            host.startsWith("[") -> host.substringAfter('[').substringBefore(']')
+            else -> host.substringBefore(':')
+        }
+
+    private var rpc = WsRpc(wsUrl(), ::cookieHeader, timeoutMs)
     private var reqSeq = 0
     private var si: String? = null
-    /** `getRSAPub` 拿到的公钥 —— 2FA 的 loginVerify 也要用它加密（bundle 的 wHe 名单里有它）。 */
+    /** `getRSAPub` 拿到的公钥 —— 两步验证的 loginVerify 也用它加密。 */
     private var publicKeyPem: String? = null
     private var accessToken: String? = null
     private var maskedEmail: String? = null
@@ -147,6 +185,55 @@ class FnLoginFlow(
     private var recovered = false
 
     private fun wsUrl(): String = "wss://$host/websocket?type=main"
+
+    /**
+     * 建 WS 之前先把域名解析一次。
+     *
+     * 为什么不交给 OkHttp 自己报：它抛的是 `UnknownHostException`，原文是
+     * `Unable to resolve host "my-nas.fnos.net": No address associated with hostname` ——
+     * 用户既看不懂，也推不出下一步。中继域名（`<fnid>.fnos.net`）是**泛解析**：
+     * 手机上解析不了，多半是网络侧的 DNS 限制（运营商 / 路由器 / 私人 DNS / 代理），
+     * 不是 FNID 错了，更不是账号密码错了（0.2.17 真机报告 2026-11-02 20:48）。
+     *
+     * ⚠️ 只解析、不改写地址：失败就明确失败。⛔ 不要偷偷换成 IP —— 中继证书绑的是域名，
+     *    换 IP 之后 TLS 必然对不上，表现会从「解析失败」变成更难懂的「证书错误」。
+     */
+    private suspend fun preflightHost() {
+        val name = hostName
+        // IPv6 字面量（裸写、没有方括号时会有多个冒号）不是域名，⛔ 别拿去解析 ——
+        // `substringBefore(':')` 会把 `2001:db8::1` 切成 `2001`，然后把一次自找的失败
+        // 说成「解析不了域名 2001」，比原始错误更误导。
+        if (host.count { it == ':' } > 1) return
+        if (name.isBlank() || isIpLiteral(name)) return
+        try {
+            withContext(Dispatchers.IO) { java.net.InetAddress.getAllByName(name) }
+        } catch (e: java.net.UnknownHostException) {
+            // 解析失败先做一次 DoH 复核：把「本地 DNS 坏了」与「中继记录真没了」分开，
+            // 这两种情况的处置完全不同（一个换网就好，一个只能等）。
+            val doh = withContext(Dispatchers.IO) { DohProbe.lookup(name) }
+            throw FnLoginException(
+                FnLoginStep.WS_CONNECT,
+                dnsFailureMessage(name, doh),
+                "UnknownHostException: ${e.message}",
+                e,
+            )
+        }
+    }
+
+    private fun isIpLiteral(value: String): Boolean =
+        value.contains(':') || IPV4_RE.matches(value)
+
+    /**
+     * 握手要带的 Cookie：调用方递进来的网关 Cookie（过完访问码才有）＋ 中继的 `mode=relay`。
+     * 两边都没有就返回 null —— ⛔ 别发一个空的 `Cookie` 头。
+     */
+    private fun cookieHeader(): String? {
+        val fromGateway = runCatching { gatewayCookie?.invoke() }.getOrNull()?.trim().orEmpty()
+        return buildList {
+            if (fromGateway.isNotEmpty()) add(fromGateway)
+            if (relay) add("mode=relay")
+        }.joinToString("; ").ifBlank { null }
+    }
 
     suspend fun start(onStep: (FnLoginStep) -> Unit = {}): FnLoginOutcome = withContext(Dispatchers.IO) {
         authenticate(onStep)
@@ -167,6 +254,7 @@ class FnLoginFlow(
         onStep: (FnLoginStep) -> Unit = {},
     ): FnLoginOutcome = withContext(Dispatchers.IO) {
         onStep(FnLoginStep.WS_CONNECT)
+        preflightHost()
         rpc.ensureConnected()
 
         onStep(FnLoginStep.RSA_KEY)
@@ -280,6 +368,7 @@ class FnLoginFlow(
     /** 打开（或重连）WS + 取公钥 + 提交账号密码；把 si / accessToken / maskedEmail / lastLogin 刷一遍。 */
     private suspend fun authenticate(onStep: (FnLoginStep) -> Unit) {
         onStep(FnLoginStep.WS_CONNECT)
+        preflightHost()
         rpc.ensureConnected()
 
         onStep(FnLoginStep.RSA_KEY)
@@ -364,7 +453,7 @@ class FnLoginFlow(
                 build().let { (body, id) -> rpc.call(body, id) }
             } catch (e: WsClosedException) {
                 // 连接被服务端关掉：重连**并重新登录** —— 新 socket 没走过 user.login 时，
-                // 服务端对 2FA 请求是直接不理的（真机表现：20 秒超时）
+                // 服务端对 2FA 请求直接不理（表现为 20 秒超时）
                 if (reconnected) throw e
                 reconnected = true
                 recovered = true
@@ -548,12 +637,45 @@ class FnLoginFlow(
         const val CREDENTIAL_EXPIRED = 102_570_109L
         const val VERIFICATION_CODE_WRONG = 135_168L
         const val KEEPALIVE_MS = 20_000L
+
+        /** 只用于「这是不是 IP」的粗判 —— 不做范围校验，那种事归 [InputParser]。 */
+        val IPV4_RE = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
     }
 }
 
 /**
+ * 域名解析失败时给用户看的那句话。
+ *
+ * 三态由 [DohProbe] 判出来（见 [DohResult]），每一态的处置完全不同 —— 这是 0.2.18 真机
+ * （2026-11-03 09:05）踩出来的：`*.fnos.net` 解析不了、同一时刻 DDNS 域名好好的，
+ * 用户以为是「账号被风控」，实际只是本地 DNS 把一次 NODATA 负缓存了十几分钟。
+ *
+ * ⚠️ 这句话会进失败卡片，也会被「复制诊断」带走 —— ⛔ 不要塞内部异常类名与堆栈。
+ *    `detail` 那一路另有原始异常，排障时够用。
+ *
+ * @param doh 复核结果；`null` = 没做复核（例如 OkHttp 在握手回调里抛的，不能在那里阻塞）
+ */
+internal fun dnsFailureMessage(host: String, doh: DohResult? = null): String = when (doh) {
+    is DohResult.Found ->
+        "手机本地 DNS 解析不了 $host，但域名本身有记录（公共 DoH 查到 ${doh.ips.first()}）。" +
+            "这是本地 DNS 缓存或过滤的问题，不是 FNID 失效，也不是风控；" +
+            "开关一次飞行模式、或切换 WiFi / 移动数据即可恢复。如果你在家，直接填 NAS 的局域网 IP 更快。"
+    DohResult.NoRecord ->
+        "$host 现在没有解析记录（公共 DoH 复核也是空）。这是飞牛中继侧暂时没有这台设备，" +
+            "不是账号被风控；通常十几分钟会自愈。着急的话先用你的 DDNS 域名或局域网 IP 连接。"
+    DohResult.Unreachable ->
+        "手机现在连公共 DNS 都到不了，先检查网络（WiFi / 移动数据）是否真的通了。" +
+            "$host 解析不了是网络不通的连带结果。"
+    null ->
+        "手机网络解析不了域名 $host（不是 FNID 错了，也不是账号密码错）。" +
+            "请切换 WiFi / 移动数据后重试；开了「私人 DNS」的话先关掉——" +
+            "国外 DoT 对这类泛解析子域经常返回空结果；" +
+            "如果你在家，地址栏改填 NAS 的局域网 IP 更快，也不受这个影响。"
+}
+
+/**
  * 飞牛的 errno → 用户能看懂的话。
- * 实测：131072 = 账号密码错；8192 = 参数错。2FA 那几个来自 bundle 的 i18n 表。
+ * 实测：131072 = 账号密码错；8192 = 参数错。两步验证的几个按网关实际返回确认。
  */
 fun fnErrnoMessage(response: Map<*, *>): String {
     val errno = MiniJson.anyToLong(response["errno"])
@@ -623,7 +745,11 @@ internal class WsClosedException(message: String) : Exception(message)
 /** 极薄的 WS RPC：顺序发、按 reqid 收；连接可重开。 */
 internal class WsRpc(
     private val url: String,
-    private val cookie: String?,
+    /**
+     * 每次握手现取一次 Cookie 头；返回 null 就不带这一行。
+     * ⚠️ 是**取值的函数**而不是取值 —— 过访问码之后重连要拿到新 cookie（见 [AccessCodeRequiredException]）。
+     */
+    private val cookieProvider: () -> String?,
     private val timeoutMs: Long,
 ) {
     private var client = buildClient()
@@ -641,6 +767,10 @@ internal class WsRpc(
         //    空闲后连接被服务端关掉属于正常，靠 call2fa 的重连兜住。
         .retryOnConnectionFailure(true)
         .build()
+
+    /** 从 `wss://host/...` 里取出主机名，只给 DNS 失败文案用。 */
+    private fun hostOf(wsUrl: String): String =
+        wsUrl.removePrefix("wss://").removePrefix("ws://").substringBefore('/').substringBefore(':')
 
     /** 连接是否还活着（回到前台时据此决定要不要补一次 `user.login`）。 */
     fun isConnected(): Boolean = connected
@@ -666,7 +796,8 @@ internal class WsRpc(
         messages = channel
         suspendCancellableCoroutine<Unit> { cont ->
             val builder = Request.Builder().url(url)
-            if (cookie != null) builder.header("Cookie", cookie)
+            val cookie = runCatching { cookieProvider() }.getOrNull()
+            if (!cookie.isNullOrBlank()) builder.header("Cookie", cookie)
             socket = client.newWebSocket(
                 builder.build(),
                 object : WebSocketListener() {
@@ -681,8 +812,24 @@ internal class WsRpc(
 
                     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                         connected = false
-                        if (cont.isActive) cont.resumeWithException(t)
-                        channel.close(t)
+                        // ⭐ 0.2.18：握手被网关挡下（401 / 403）不是「账号密码错」，多半是 NAS 开了访问码。
+                        // 抛专门的异常让上层送去第 ④ 步；⛔ 别把 OkHttp 那句
+                        // 「Expected HTTP 101 response but was '401 Unauthorized'」当登录失败甩给用户。
+                        val code = response?.code
+                        val err: Throwable = when {
+                            // ⚠️ 带上 HTTP 码与响应短语：访问码过了却仍 401 时，日志里能一眼分出
+                            //    「网关还要码」与「码过了但凭据没带上（UA / Referer / 域不对）」
+                            code == 401 || code == 403 -> AccessCodeRequiredException(
+                                "网关要求先输入访问码（HTTP $code " + (response?.message ?: "") + "）",
+                            )
+                            // 预检之后到真正建连之间，域名仍可能解析不了（缓存过期 / 网络刚切）：
+                            // 这一层也必须翻成人话，否则用户看到的还是那句英文
+                            t is java.net.UnknownHostException ->
+                                FnLoginException(FnLoginStep.WS_CONNECT, dnsFailureMessage(hostOf(url)), t.toString(), t)
+                            else -> t
+                        }
+                        if (cont.isActive) cont.resumeWithException(err)
+                        channel.close(err)
                     }
 
                     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {

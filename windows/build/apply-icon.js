@@ -24,6 +24,27 @@ const icoPath = path.join(root, 'src', 'shell', 'assets', 'icon.ico');
 const RT_ICON = 3;
 const RT_GROUP_ICON = 14;
 
+/**
+ * exe 里要写的版本号，取自 `package.json`。
+ *
+ * ⚠️ 这里以前写死 `0, 1, 0, 0`（0.1.0 那次留下的常量），于是**每一个发出去的包**
+ * 在资源管理器「属性 → 详细信息」里都显示 `文件版本 0.1.0.0` —— 程序自己报的版本（`app.getVersion()`
+ * 读的是 asar 里的 package.json）却是新的，两边对不上。现在跟着 package.json 走，
+ * 并且在写完之后把它当**验收项**读回来比一次（不对就退出码 1）。
+ */
+function exeVersion(version) {
+  const parts = String(version || '')
+    .split('.')
+    .slice(0, 3)
+    .map((part) => Number.parseInt(part, 10) || 0);
+  while (parts.length < 3) parts.push(0);
+  // 第四段是构建号：这里不区分 CI 构建，固定 0
+  return [...parts, 0];
+}
+
+const pkgVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version;
+const wantedVersion = exeVersion(pkgVersion).join('.');
+
 const sha256 = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');
 
 function fail(message) {
@@ -31,18 +52,30 @@ function fail(message) {
   process.exit(1);
 }
 
-/** 读回产物，数一遍图标：组里几个尺寸、RT_ICON 几条。 */
+/** 读回产物，数一遍图标：组里几个尺寸、RT_ICON 几条；顺带把版本资源读出来。 */
 function inspect(ResEdit, buffer) {
   const exe = ResEdit.NtExecutable.from(buffer, { ignoreCert: true });
   const res = ResEdit.NtExecutableResource.from(exe);
   const groups = ResEdit.Resource.IconGroupEntry.fromEntries(res.entries);
   const group = groups.find((g) => Number(g.id) === 1) || groups[0] || null;
+  let version = '';
+  const infos = ResEdit.Resource.VersionInfo.fromEntries(res.entries);
+  if (infos.length) {
+    for (const lang of infos[0].getAllLanguagesForStringValues()) {
+      const values = infos[0].getStringValues(lang) || {};
+      if (values.FileVersion) {
+        version = String(values.FileVersion);
+        break;
+      }
+    }
+  }
   return {
     groups: groups.length,
     sizes: group ? group.icons.length : 0,
     rt: res.entries.filter((e) => e.type === RT_ICON).length,
     groupId: group ? group.id : null,
     groupLang: group ? group.lang : null,
+    version,
   };
 }
 
@@ -82,8 +115,9 @@ async function main() {
     const versionInfos = ResEdit.Resource.VersionInfo.fromEntries(res.entries);
     if (versionInfos.length) {
       const info = versionInfos[0];
-      info.setFileVersion(0, 1, 0, 0);
-      info.setProductVersion(0, 1, 0, 0);
+      // 版本号跟着 package.json（⛔ 别再写死常量，见 exeVersion 的注释）
+      info.setFileVersion(wantedVersion);
+      info.setProductVersion(wantedVersion);
       info.setStringValues(
         { lang: 1033, codepage: 1200 },
         {
@@ -91,6 +125,8 @@ async function main() {
           FileDescription: 'ZXDesk 工作台',
           CompanyName: 'ZXDesk',
           OriginalFilename: 'ZXDesk.exe',
+          ProductVersion: wantedVersion,
+          FileVersion: wantedVersion,
         },
       );
       info.outputToResourceEntries(res.entries);
@@ -107,21 +143,30 @@ async function main() {
       report.groups === 1 &&
       Number(report.groupLang) === 0 &&
       report.sizes === wanted &&
-      report.rt === wanted;
+      report.rt === wanted &&
+      report.version === wantedVersion;
     console.log(
       `[图标] 第 ${attempt} 次：字节${after === before ? '未变化' : `变了（${before.slice(0, 12)} → ${after.slice(0, 12)}）`}` +
         `，图标组 ${report.groups} 个（${report.groupId}/${report.groupLang}）里 ${report.sizes}/${wanted} 个尺寸，RT_ICON ${report.rt}/${wanted}` +
-        `${ok ? ' ✓' : ' ✗'}`,
+        `，版本资源 ${report.version || '（读不出）'}${ok ? ' ✓' : ' ✗'}`,
     );
 
     if (ok) {
       fs.writeFileSync(exePath, output);
       // 落盘后再读一次，防止「写盘失败/被别的东西覆盖」这类事（0.1.6 就是这么丢的）
       const onDisk = inspect(ResEdit, fs.readFileSync(exePath));
-      if (onDisk.groups !== 1 || Number(onDisk.groupLang) !== 0 || onDisk.sizes !== wanted || onDisk.rt !== wanted) {
-        fail(`写盘后复核不一致（组里 ${onDisk.sizes}/${wanted}，RT_ICON ${onDisk.rt}/${wanted}）`);
+      if (
+        onDisk.groups !== 1 ||
+        Number(onDisk.groupLang) !== 0 ||
+        onDisk.sizes !== wanted ||
+        onDisk.rt !== wanted ||
+        onDisk.version !== wantedVersion
+      ) {
+        fail(
+          `写盘后复核不一致（组里 ${onDisk.sizes}/${wanted}，RT_ICON ${onDisk.rt}/${wanted}，版本 ${onDisk.version || '读不出'}）`,
+        );
       }
-      console.log(`[图标] ✓ 已写入并复核通过：${path.relative(root, exePath)}`);
+      console.log(`[图标] ✓ 已写入并复核通过：${path.relative(root, exePath)}（版本 ${wantedVersion}）`);
       return;
     }
   }

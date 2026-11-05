@@ -42,12 +42,19 @@ test('壳只保留连接页提示条，⛔ 不再有菜单栏更新按钮', () =
   assert.match(app, /function renderUpdateBanner\(/);
 });
 
-test('⛔ 壳里没有自绘弹窗（更新走独立窗口）', () => {
-  assert.ok(!app.includes('modal-mask'), '壳不该有自绘遮罩');
-  assert.ok(!app.includes('modal-card'), '壳不该有自绘卡片');
+/**
+ * 更新与公告 ⛔ 走壳内自绘弹窗（各开一个独立的 BrowserWindow）。
+ *
+ * ⚠️ 0.2.6 起壳里**有**一个模态：切换账号（连接页按钮与菜单都开它）。
+ * 那条走的是 `.modal` + `data-accounts` 那一套，与更新 / 公告无关；
+ * 这里守的是「不许再长出第二套」——壳内模态只该有切换账号这一处。
+ */
+test('更新与公告不走壳内弹窗（各开独立窗口）；壳内模态只允许切换账号一处', () => {
+  assert.ok(!app.includes('modal-mask'), '壳不该有第二套遮罩');
   assert.ok(!/function viewUpdate\(/.test(app), '壳里不该有更新视图');
   assert.ok(!/function viewNotice\(/.test(app), '壳里不该有公告视图');
-  assert.ok(!css.includes('.modal-mask'), 'CSS 里不该残留弹层样式');
+  const modals = app.match(/class="modal-card"/g) || [];
+  assert.equal(modals.length, 1, '壳内模态只该有一处（切换账号）');
 });
 
 test('隐藏态由 CSS 兜住（⛔ display 会顶掉 HTML 的 hidden 属性）', () => {

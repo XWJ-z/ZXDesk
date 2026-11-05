@@ -1,5 +1,7 @@
 /**
- * WS 请求体构造（移植自 `FnLoginClient.kt` 的 `payload()` / `FnLoginVerify.inner()` / `tokenLoginExtra()`）。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：messages.js
+ * 职责：WS 请求体构造（移植自 `FnLoginClient.kt` 的 `payload()` / `FnLoginVerify.inner()` / `tokenLoginExtra()`）
  *
  * 两条不能错的规矩：
  * 1. **reqid 与 JSON 必须同源生成** —— 只取 JSON 另编一个 reqid 会永远等不到响应（只能等超时）；

@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：FnIdResolver.kt
+ * 职责：FNID 解析，查询中继主机与端口
+ */
+
 package com.zxdesk.core.connection
 
 import kotlinx.coroutines.Dispatchers
@@ -17,7 +23,7 @@ data class FnIdAddresses(
     val relayHost: String? get() = relay.firstOrNull()
 }
 
-/** 实测值：FNID 的 `port` 返回 64999/64888，社区文档里的 5666/5667 在本机不通。 */
+/** 实测值：FNID 的 `port` 返回 64999/64888；5666/5667 在本机不通。 */
 const val DEFAULT_HTTPS_PORT = 64999
 const val DEFAULT_HTTP_PORT = 64888
 

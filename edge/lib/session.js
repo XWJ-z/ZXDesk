@@ -1,14 +1,20 @@
 /**
- * 功能：会话侧（方案 §4.3）—— 中继域判定、`zxdesk_sid` 读取、中继 `mode=relay` Cookie 保活、用户名展示。
+ * session.js —— 会话侧（中继域判定 / 会话 Cookie / 中继保活 / 用户名展示）
  *
- * ⭐ M0 实测的两个口径：
- * - 会话注入走 `credentials:'include'`（浏览器自动带 Cookie），**不手工拼 Cookie 头**；
- * - `cookies.getAll({url})` 在真机上可能返回 0 条（异常），而 `cookies.get` 找得到 ⇒
- *   `sidInfo()` 用 `cookies.get` 做存在性判定（`cookie_missing` 的判据）。
+ * 功能：`RELAY_RE` 判飞牛中继域；`sidInfo` 读 `zxdesk_sid` 的属性（⛔ 不取值）；
+ *      `ensureRelayCookie` 在中继域补一个 `mode=relay`；`fetchUserName` 取展示名（不落盘）。
+ *
+ * ⚠️ 会话注入走 `credentials:'include'`（浏览器自动带 Cookie），⛔ 不手工拼 Cookie 头。
+ * ⚠️ `cookies.getAll({url})` 在 Edge 上可能返回 0 条，而 `cookies.get` 找得到 ⇒
+ *    存在性判定只用 `cookies.get`。
+ *
+ * @author zx
+ * @since 0.1.0
+ * 相关：Project/Edge/README.md
  */
 import { fetchJson } from './api.js';
 
-/** 飞牛中继域（与 Android 壳 RELAY_COOKIE 同口径，方案 §4.3） */
+/** 飞牛中继域（与 Android 壳同口径） */
 export const RELAY_RE = /\.(5ddd\.com|fnos\.net|fynas\.net)$/;
 export const SID_NAME = 'zxdesk_sid';
 
@@ -50,7 +56,7 @@ export async function ensureRelayCookie(base) {
 }
 
 /**
- * 功能：取当前账号名（**仅展示，不落盘**——方案 §4.2）。
+ * 功能：取当前账号名（**仅展示，不落盘**）。
  * 服务端口径：`GET /api/auth/me` 直接回 user 行，展示名是 `displayName`（兜底 `username`）。
  * @returns {Promise<?string>} 拿不到（接口变了/未登录）就返回 null，⛔ 不当错误
  */

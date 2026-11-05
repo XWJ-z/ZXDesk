@@ -67,7 +67,7 @@ html,
 body {
   height: 100%;
   /* ⭐⭐ 0.8.18 第三轮：外壳高度**钉在 `--app-vh`** 上（由 `mobile/app.js` 的 `pinShellHeight()` 写）。
-      为什么要钉住：真机实测（本版那段临时诊断截图回报）——
+      为什么要钉住：真机实测（用户截图回报）——
      「收藏夹 → 任务」那一下 `视觉视口 718x366 → 716x366`、`window.innerHeight 718 → 716`，
      视口**掉了 2px**，而锚在底部的**底栏跟着上移 2px**（顶栏 / 主体没动）：
       屏幕上就是三回报的「抖一下」。
@@ -468,6 +468,132 @@ svg {
   font-size: 12.5px;
   line-height: 1.6;
 }
+/* ⭐⭐ 0.9.7（老大 2026-11-04：「区分度不高，不好快速查找和定位」）——
+ * ---- 设置页：筛选框 / 分段标题 / 分块头的第二行 ----
+ *
+ * 现场：11 张卡长得一模一样（同一个字号、同一颗 7px 圆点、同一个箭头），收起之后
+ * 每张只剩一行名词 ⇒ 找东西只能逐张点开。这一轮**只用文字层级**解决（⛔ 不加图标：
+ * 2026-10-19 老大明确要求设置页除屏头齿轮外不留图标）。
+ * -------------------------------------------------------------------------*/
+
+/* 顶部筛选框：一进来就能敲字把不相干的卡滤掉 */
+.set-q {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  margin: 12px 2px 2px;
+  padding: 0 9px 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.set-q:focus-within {
+  border-color: var(--brand);
+}
+.set-q-ico {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: var(--ink-3);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.set-q:focus-within .set-q-ico {
+  stroke: var(--brand);
+}
+/* ⚠️ 字号 16px 是**故意的**：低于 16 时 iOS Safari 会在聚焦瞬间把整页放大一次
+   （放大之后设置页会横向错位，退出聚焦也不回来）。 */
+.set-q input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 16px;
+}
+.set-q input:focus {
+  outline: none;
+}
+.set-q input::placeholder {
+  color: var(--ink-3);
+}
+/* `type="search"` 自带的清除叉在各 WebView 里长得都不一样，统一用我们自己那颗 */
+.set-q input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+.set-q-x {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  font-size: 16px;
+  line-height: 1;
+}
+/* 没有可清的字时整颗不显示（`applySetFilter()` 只写文本，不摘节点） */
+.set-q-x:empty {
+  display: none;
+}
+
+/* 分段标题：给视线一个落点（应用与账号 / 功能模块） */
+.set-grp {
+  margin: 22px 2px 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.set-part:first-of-type .set-grp {
+  margin-top: 18px;
+}
+
+/* 分块头的第二行：一句话说清「这块里装的是什么」，**收起时也看得见** */
+.sec-tt {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.sec-cap {
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.45;
+}
+/* 两行时箭头与副标题对齐到**块的中线**（单行时仍与文字基线对齐，见 `.sec-head.fold`） */
+.sec-head.has-cap {
+  align-items: center;
+}
+
+/* 筛选用的 `hidden` 必须真的不显示 —— `.sec-card` 里没有任何 `display` 声明，
+   靠 UA 的 `[hidden]{display:none}` 也能生效，但那是个「改天有人加一行 display 就静默失效」的约定 */
+.sec-card[hidden],
+.set-part[hidden],
+.set-empty[hidden] {
+  display: none;
+}
+.set-empty {
+  margin: 30px 2px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  line-height: 1.7;
+  text-align: center;
+}
+
 .set-screen-foot {
   margin: 22px 2px 6px;
   text-align: center;
@@ -7468,8 +7594,31 @@ svg {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* ⭐⭐ 2026-11-05（老大截图：「开启新对话这个按键太不协调」）：
+   这一行是「一句 12.5px 的灰字 ＋ 一颗 44px 的白底品牌色描边胶囊」——
+   按钮把整条撑到 44px，左边那句进度被挤得只剩「本次带了…」，而且那颗胶囊
+   看起来像个**主操作**（与底部「发送」同级），实际它是**重置会话分段**，次要且低频。
+   ⇒ 在这一行里把它降成**文字按钮**：透明底、无边框、与左边同字号（12.5px）。
+   ⚠️ 热区仍然按 44px 给（上下各 12px 内边距 ＝ 44px），再用等量负 margin 抵消，
+      ⛔ 不许把热区压到 44 以下（触控目标那一条与 `.ai-composer .ai-btn` 同一条纪律）。
+   ⚠️ 只覆盖**几何与颜色**：`.ai-btn-line` 那档仍留着（⛔ 别删，桌面端与它逐字对齐）。 */
 .ai-thread-head .ai-btn {
   flex: none;
+  min-height: 0;
+  padding: 12px 0 12px 12px;
+  margin: -12px 0;
+  font-size: 12.5px;
+  line-height: 20px;
+  color: var(--brand);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+/* 手机端没有 hover，按下反馈走 `:active`（与本文件其它按钮同一套）。
+   ⚠️ ⛔ 别再画背景：文字按钮按下冒出一块方底比原来那颗胶囊更突兀。 */
+.ai-thread-head .ai-btn:active {
+  background: transparent;
+  opacity: 0.55;
 }
 .ai-thread-head + .ai-note {
   margin-top: 6px;

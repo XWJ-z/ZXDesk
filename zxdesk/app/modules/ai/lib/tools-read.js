@@ -23,7 +23,7 @@
  *
  * @author zx
  * @date   2026-09-18
- * @since 0.8.61
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/18-ai辅助任务.md、docs/公共/开发方案/16-AI辅助任务-3期-AI工具调用与授权.md
  */
 
@@ -89,7 +89,9 @@ const PANEL_READ = {
   // 「课表（读）」旁边的解释
   timetableRead: '打开后，你的课程名、教室、上课时间（用来判断哪些时段没空）会被发送给你配置的模型。',
   // 「记账（读）」旁边的解释（0.8.4）—— ⚠️ 逐个字段点明：金额／分类／账户名／余额
-  ledgerRead: '打开后，你的收支金额、分类名、账户名与账户余额会被发送给你配置的模型。',
+  // ⭐ 2026-11-05：备注进了出网面 ⇒ 这句**必须**跟着写（用户要能在开关旁边看见「我写的备注会发出去」）。
+  ledgerRead:
+    '打开后，你的收支金额、分类名、账户名、账户余额与账目备注会被发送给你配置的模型。',
   // ⭐ 0.8.5 那三块（收藏夹 / 随手记 / NAS硬件管理）—— ⚠️ 同样逐个字段点明，
   //    而且**明说哪些不发**：出网面这件事，「没发什么」与「发了什么」一样要写清楚。
   // 「网址收藏夹（读）」旁边的解释
@@ -190,7 +192,8 @@ const READ_TOOLS = [
   },
   // ---- 0.8.4：记账那三条（账单 / 预算 / 资产）----
   // ⚠️⭐ 金额字段的单位**一律是分**（项目全局口径；提示词里明说，见 `openai-client.js` 的 `toolsPrompt()`）。
-  //    ⛔ 不回备注正文（那是用户写的自由文本）、⛔ 不回任何 id（模型用不上，出了网只是白送内部编号）。
+  //    ⛔ 不回任何 id（模型用不上，出了网只是白送内部编号）；
+  //    ⭐ 2026-11-05 起**回备注**（只在 `ledger.bill` 的「最近几笔」里，见该条 `returns`）。
   {
     name: 'ledger.bill',
     module: 'ledger',
@@ -198,15 +201,21 @@ const READ_TOOLS = [
     title: '看你的收支账单',
     purpose: '回答「这段时间花了多少、钱花在哪儿了」—— 期间合计 ＋ 支出分类 ＋ 最近几笔。',
     share: PANEL_READ.ledgerRead,
-    args: ['范围：今天 / 本周 / 本月 / 本年', '⭐ 或自己给日期：from / to（YYYY-MM-DD，任意区间，最多 366 天）', '⭐ 可选分类：category（本机已有的分类名）'],
+    args: [
+      '范围：今天 / 本周 / 本月 / 本年',
+      '⭐ 或自己给日期：from / to（YYYY-MM-DD，任意区间，最多 366 天）',
+      '⭐ 或一次查好几段：months（["2026-01","2026-02"]）或 periods（[{"from","to"} | {"month":"2026-01"}]），最多 12 段',
+      '⭐ 可选分类：category（本机已有的分类名，二级用「一级-二级」全称）',
+    ],
     returns: [
       '区间起止',
       '收入合计（分）',
       '支出合计（分）',
       '结余（分）',
       '笔数',
-      '支出分类（名称 / 金额 / 占比）',
-      '最近几笔（时间 / 收支 / 金额 / 分类 / 账户名）',
+      '支出分类（全称 `一级-二级` / 二级名 / 一级名 / 金额 / 占比）',
+      '最近几笔（时间 / 收支 / 金额 / 分类全称 / 账户名 / 备注原文）',
+      '一次查多段时：`multi:true` ＋ `periods[]`（每段一份上面那些字段）',
     ],
   },
   {
@@ -221,7 +230,7 @@ const READ_TOOLS = [
     returns: [
       '区间起止',
       '总预算（额度 / 已用 / 剩余 / 是否超支 / 这一期设过没有）',
-      '各分类预算（分类名 / 额度 / 已用 / 剩余 / 是否超支）',
+      '各分类预算（全称 `一级-二级` / 二级名 / 一级名 / 额度 / 已用 / 剩余 / 是否超支）',
     ],
   },
   {
@@ -234,6 +243,24 @@ const READ_TOOLS = [
     args: ['无'],
     // ⚠️ 账户**按名字给**（⛔ 不回 `ledger_accounts.id`）；`side` 告诉我们这一行算资产还是负债
     returns: ['资产合计（分）', '负债合计（分）', '净值（分）', '各账户（名称 / 类型 / 资产或负债 / 余额）'],
+  },
+  // ---- ⭐⭐ 0.9.7：记账提议的**唯一取名口**（真实分类树 / 账户 / 默认账户）----
+  {
+    name: 'ledger.catalog',
+    module: 'ledger',
+    mode: 'read',
+    title: '看记账的分类与账户',
+    purpose:
+      '回答「这笔记到哪个分类 / 哪个账户」—— 返回本机**真实存在**的分类树与账户，' +
+      '`ledger.propose_entry` 里只能用这里出现过的名字（⛔ 编一个名字不算数）。',
+    share: PANEL_READ.ledgerRead,
+    args: ['无'],
+    returns: [
+      'reason（ok = 有分类 / empty = 还没建过分类）',
+      '分类树：一级（名称 / 收支）＋ 二级（名称 / 全称 `一级-二级`），已归档的不在里面',
+      '账户：名称（不含内置的空账户）',
+      '默认账户：支出的 / 收入的 / 每个分类各自设过的',
+    ],
   },
   // ---- ⭐ 0.8.5：收藏夹 / 随手记 / NAS硬件管理 三块 ----
   // ⚠️⭐ **返回面 = 出网面**（与上面同一条规矩）：这里每多回一个字段，`returns` 与
@@ -466,6 +493,67 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 /** 一次自定义区间最多多少天（防止模型一口气拉全库，也防止「去年」被理解成一整年）。 @type {number} */
 const MAX_RANGE_DAYS = 366;
 
+/** 一次最多查几段（`periods` / `months`）—— ⚠️ 与 `TOOL_ROUND_MAX` 配合：一次说清胜过来回四轮。 @type {number} */
+const MAX_PERIODS = 12;
+
+/** 功能：两位补零。 @param {(string|number)} v - 值 @returns {string} 两位串 */
+function p2(v) {
+  return String(v).padStart(2, '0');
+}
+
+/**
+ * 功能：把 `YYYY-MM` 折成**整月**的闭区间。
+ * @param {string} m - 月份串（`2026-01`）
+ * @returns {{label: string, from: string, to: string}} 月份 + 该月首末两天
+ * @throws {Error} 不是 `YYYY-MM` / 月份越界时抛 400
+ */
+function monthPeriod(m) {
+  const hit = /^(\d{4})-(\d{2})$/.exec(String(m == null ? '' : m).trim());
+  if (!hit) throw httpError(400, '月份要写成 YYYY-MM，例如 2026-01');
+  const y = Number(hit[1]);
+  const mo = Number(hit[2]);
+  if (mo < 1 || mo > 12) throw httpError(400, '月份要在 01~12 之间');
+  const last = new Date(y, mo, 0).getDate();
+  return { label: `${y}-${p2(mo)}`, from: `${y}-${p2(mo)}-01`, to: `${y}-${p2(mo)}-${p2(last)}` };
+}
+
+/**
+ * 功能：读「模型一次要查好几段」的入参 —— ⭐ 0.9.7（老大：「一次请求 1 月 2 月 6 月 9 月的记账信息」）。
+ *
+ * 说明：⭐⭐ 为什么必须有它：一轮对话最多 3 次工具调用（`routes.js` 的 `TOOL_ROUND_MAX`），
+ *      而用户常常一次问四个月 —— 逐月调一次根本查不完，模型只能答一半。
+ *      ⇒ 让**一次调用**带上多段，服务端逐段算完一起回。
+ *      ⚠️ 认两种写法（都收窄成 `{label, from, to}`）：
+ *      · `months: ["2026-01", "2026-02"]`（模型最好写这个 —— 它知道「1 月」是几月）；
+ *      · `periods: [{"from":"2026-01-01","to":"2026-01-31"}, {"month":"2026-02"}]`。
+ *      ⚠️ 单段不合法**整条 400**（⛔ 不跳过那一段 —— 跳过会让模型以为「那个月没花钱」）。
+ *      ⚠️ 一次最多 `MAX_PERIODS` 段（可见地拒绝）。
+ * @param {Object} args - 工具入参
+ * @returns {?Array.<{label: string, from: string, to: string}>} 多段区间；没给返回 null
+ * @throws {Error} 段数超限 / 某一段写不对时抛 400
+ */
+function readPeriods(args) {
+  const a = args && typeof args === 'object' ? args : {};
+  const raw = Array.isArray(a.periods) ? a.periods : Array.isArray(a.months) ? a.months : null;
+  if (!raw) return null;
+  if (!raw.length) throw httpError(400, 'periods / months 至少要写一段');
+  if (raw.length > MAX_PERIODS) throw httpError(400, `一次最多查 ${MAX_PERIODS} 段，请分批问`);
+  return raw.map((x) => {
+    if (typeof x === 'string') {
+      const s = x.trim();
+      if (/^\d{4}-\d{2}$/.test(s)) return monthPeriod(s);
+      if (DATE_RE.test(s)) return { label: s, from: s, to: s };
+      throw httpError(400, '每一段要么是 YYYY-MM 的月份，要么是 {"from","to"}');
+    }
+    if (x && typeof x === 'object' && !Array.isArray(x)) {
+      if (x.month != null && x.month !== '') return monthPeriod(String(x.month));
+      const r = readCustomRange(x);
+      if (r) return { label: `${r.from}~${r.to}`, from: r.from, to: r.to };
+    }
+    throw httpError(400, '每一段要么是 YYYY-MM 的月份，要么是 {"from","to"}');
+  });
+}
+
 /**
  * 功能：读「模型自己给的日期区间」`{from, to}` —— **没给返回 null，给了但不合法一律 400**。
  *
@@ -695,7 +783,11 @@ function timetableNext(ctx, today) {
  *      ⚠️⭐ 金额**一律保留「分」**（⛔ 不在这里除 100）—— 换算成元是**说给人听**的那一步，
  *      由模型在回答里做；工具层做换算就会让「元」这个单位在下游各处再被除一次。
  *      ⚠️ 只挑模型用得上的字段：分类只给「名称 / 金额 / 占比」（⛔ 不给 id）、
- *      最近几笔只给「时间 / 收支 / 金额 / 分类 / 账户名」（⛔ 不给备注正文 —— 那是用户写的自由文本）。
+ *      最近几笔给「时间 / 收支 / 金额 / 分类 / 账户名 / 备注」。
+ *      ⭐⭐ 2026-11-05（老大：「AI 获取不到记账的备注信息」）：`note` **进**返回面 ——
+ *      此前这里刻意不回（那是用户写的自由文本），代价是 AI 对「这笔写着什么」一律失明。
+ *      备注是**用户自己写给自己回看的**，不让它读等于账目缺一半上下文。
+ *      ⚠️ 这是**读面唯一新增的一格**：⛔ 没有按备注搜账的工具（老大：「不要过度授权」）。
  *
  * @param {{store: Object, uid: number, now: Date}} ctx - 执行上下文
  * @param {{range: string}} args - 归一后的入参
@@ -704,6 +796,18 @@ function timetableNext(ctx, today) {
  */
 function ledgerBill(ctx, args) {
   const a = args && typeof args === 'object' ? args : {};
+  // ⭐⭐ 0.9.7：**一次查多段**（`months` / `periods`）。给了它就忽略 `range` / `from` / `to` ——
+  //    混着用说不清「到底按哪个筛」（与下面「自定义区间优先于 range」同一条口径）。
+  const segments = readPeriods(a);
+  const category = String(a.category == null ? '' : a.category).trim();
+  if (segments) {
+    return {
+      multi: true,
+      count: segments.length,
+      // ⚠️ 逐段各自算（区间是左闭右开的内部口径，这里传闭区间那对日期）
+      periods: segments.map((p) => ({ label: p.label, ...billOf(ctx, 'custom', p.from, p.to, category) })),
+    };
+  }
   // ⭐⭐ 0.8.55：**模型可以自己给日期区间**（from/to），不必挤在四档枚举里。
   //    ⚠️ 自己给了区间就以区间为准，`range` 那格忽略（不混用 —— 混用会让「到底按哪个筛」说不清）。
   const custom = readCustomRange(a);
@@ -711,15 +815,30 @@ function ledgerBill(ctx, args) {
   if (!custom && !['today', 'week', 'month', 'year'].includes(range)) {
     throw httpError(400, '范围只能是 today / week / month / year 之一，或者自己给 from/to（YYYY-MM-DD）');
   }
-  // ⭐ 0.8.55：分类筛选（可选）—— 分类名由服务端在**本机**核对，查无此分类时不会假装「花了 0 元」
-  const category = String(a.category == null ? '' : a.category).trim();
-  const r =
-    ctx.store.ledgerAiStats(ctx.uid, custom ? 'custom' : range, ctx.now.getTime(), {
-      from: custom ? custom.from : '',
-      to: custom ? custom.to : '',
-      category,
-    }) || {};
+  return billOf(ctx, custom ? 'custom' : range, custom ? custom.from : '', custom ? custom.to : '', category);
+}
+
+/**
+ * 功能：`ledger.bill` 的**一段**取数（单段与多段共用这一份，⛔ 不写第二套映射）。
+ * @param {{store: Object, uid: number, now: Date}} ctx - 执行上下文
+ * @param {string} range - 档位（多段时是 `custom`）
+ * @param {string} from - 闭区间起点（空串 = 按档位算）
+ * @param {string} to - 闭区间终点（空串 = 按档位算）
+ * @param {string} category - 分类筛选（空串 = 不筛）
+ * @returns {Object} 区间账单（形状见 `ledgerAiStats`）
+ */
+function billOf(ctx, range, from, to, category) {
+  const r = ctx.store.ledgerAiStats(ctx.uid, range, ctx.now.getTime(), { from, to, category }) || {};
   const fen = (v) => Math.trunc(Number(v)) || 0;
+  const catRow = (c) => ({
+    // ⭐ 0.9.7：`name` 是全称（`一级-二级`），另带拆开的两段
+    name: String((c && c.name) == null ? '' : c.name),
+    leaf: String((c && c.leaf) == null ? '' : c.leaf),
+    parent: String((c && c.parent) == null ? '' : c.parent),
+    amount_fen: fen(c && c.amount_fen),
+    // ⚠️ 占比可能为 `null`（这一侧合计为 0 ⇒ 分母不存在）—— 原样带出，⛔ 不兜成 0
+    pct: c && c.pct != null ? Number(c.pct) : null,
+  });
   return {
     range: String(r.range || range),
     from: String(r.from || ''),
@@ -732,18 +851,17 @@ function ledgerBill(ctx, args) {
     expense_fen: fen(r.expense_fen),
     net_fen: fen(r.net_fen),
     count: Number(r.count) || 0,
-    categories: (Array.isArray(r.categories) ? r.categories : []).map((c) => ({
-      name: String((c && c.name) == null ? '' : c.name),
-      amount_fen: fen(c && c.amount_fen),
-      // ⚠️ 占比可能为 `null`（这一侧合计为 0 ⇒ 分母不存在）—— 原样带出，⛔ 不兜成 0
-      pct: c && c.pct != null ? Number(c.pct) : null,
-    })),
+    categories: (Array.isArray(r.categories) ? r.categories : []).map(catRow),
     recent: (Array.isArray(r.recent) ? r.recent : []).map((x) => ({
       at: String((x && x.at) == null ? '' : x.at),
       ie: String((x && x.ie) == null ? '' : x.ie),
       amount_fen: fen(x && x.amount_fen),
       category: String((x && x.category) == null ? '' : x.category),
       account: String((x && x.account) == null ? '' : x.account),
+      // ⭐ 2026-11-05：备注原样带出（`store.ledgerAiStats()` 已按 `NOTE_READ_MAX` 兜底截断）。
+      //    ⚠️ 空串 = 这一笔没写备注，⛔ 不要在这里写「无 / 未填写」——
+      //    模型会把一句人话当成用户真的写过这几个字。
+      note: String((x && x.note) == null ? '' : x.note),
     })),
   };
 }
@@ -775,6 +893,23 @@ function ledgerBudget(ctx, args, today) {
         ? `${String(today).slice(0, 7)}-01`
         : `${String(today).slice(0, 4)}-01-01`;
   const v = ctx.store.ledgerBudgetView(ctx.uid, range, key, ctx.now.getTime()) || {};
+  // ⭐ 0.9.7：分类预算也按**全称**给（与 `ledger.bill` 同一条口径 —— 二级分类允许重名）
+  const cats = new Map((ctx.store.ledgerCategories(ctx.uid) || []).map((c) => [Number(c.id), c]));
+  const shortName = (id) => {
+    const c = id == null ? null : cats.get(Number(id));
+    return c ? String(c.name || '') : '';
+  };
+  const fullName = (id) => {
+    const c = id == null ? null : cats.get(Number(id));
+    if (!c) return '';
+    const p = c.parent_id == null ? null : cats.get(Number(c.parent_id));
+    return p ? `${String(p.name || '')}-${String(c.name || '')}` : String(c.name || '');
+  };
+  const parentName = (id) => {
+    const c = id == null ? null : cats.get(Number(id));
+    const p = c && c.parent_id != null ? cats.get(Number(c.parent_id)) : null;
+    return p ? String(p.name || '') : '';
+  };
   const block = (b) => {
     const s = b && typeof b === 'object' ? b : {};
     const fen = (v2) => Math.trunc(Number(v2)) || 0;
@@ -792,10 +927,16 @@ function ledgerBudget(ctx, args, today) {
     from: String(v.from || ''),
     to: String(v.to || ''),
     total: block(v.total),
-    categories: (Array.isArray(v.categories) ? v.categories : []).slice(0, 20).map((c) => ({
-      name: String((c && c.name) == null ? '' : c.name),
-      ...block(c),
-    })),
+    categories: (Array.isArray(v.categories) ? v.categories : []).slice(0, 20).map((c) => {
+      const cid = c && c.category_id != null ? Number(c.category_id) : null;
+      return {
+        // `name` = 全称（与账单同一口径），`leaf` / `parent` 是拆开的两段
+        name: fullName(cid) || String((c && c.name) == null ? '' : c.name),
+        leaf: shortName(cid) || String((c && c.name) == null ? '' : c.name),
+        parent: parentName(cid),
+        ...block(c),
+      };
+    }),
   };
 }
 
@@ -824,6 +965,65 @@ function ledgerAssets(ctx) {
       side: String((x && x.side) == null ? '' : x.side),
       balance_fen: fen(x && x.balance_fen),
     })),
+  };
+}
+
+/**
+ * 功能：读工具 `ledger.catalog` —— 记账**真实存在的**分类树 / 账户 / 默认账户（0.9.7）。
+ *
+ * 说明：⭐⭐ 为什么要有它：`ledger.propose_entry` 的 `category` / `account` 一直靠「模型说个名字、
+ *      服务端在本机找」—— 模型不知道本机有哪些分类，只能照用户嘴里的词猜，于是经常提出
+ *      「餐饮-其他」这种听起来对、本机却没有的名字（卡上只能显示「未匹配」）。
+ *      ⇒ 把**取名口**开给它：这份清单里的名字才是真能用的。
+ *      ⚠️⭐ 只回**没归档**的分类（归档的「选不到」，与记账表单同一条口径）；
+ *      二级给 `full`（`一级-二级`）—— 二级**允许重名**，只有全称能唯一定位。
+ *      ⚠️ 只读路径：⛔ 不 seed、⛔ 不写库（空库就回 `reason:empty`）。
+ *      ⛔ 账户**不带余额**（那是 `ledger.assets` 的事）；这里只回答「有哪些账户可以选」。
+ *      ⛔ 默认账户只回**名字**（`store.ledgerDefaults()` 给的是 id，名字在本机翻好再出网）。
+ *
+ * @param {{store: Object, uid: number}} ctx - 执行上下文
+ * @returns {{reason: string, categories: Array.<Object>, accounts: Array.<string>,
+ *      defaults: Object}} 分类树 ＋ 账户 ＋ 默认账户
+ */
+function ledgerCatalog(ctx) {
+  const all = ctx.store.ledgerCategories(ctx.uid) || [];
+  const live = all.filter((c) => !(c && c.archived));
+  const byId = new Map(all.map((c) => [Number(c.id), c]));
+  const fullOf = (c) => {
+    if (!c) return '';
+    const p = c.parent_id == null ? null : byId.get(Number(c.parent_id));
+    return p ? `${String(p.name || '')}-${String(c.name || '')}` : String(c.name || '');
+  };
+  const parents = live.filter((c) => c && c.parent_id == null);
+  const categories = parents.map((p) => ({
+    name: String(p.name || ''),
+    ie: String(p.ie || ''),
+    subs: live
+      .filter((c) => c && c.parent_id != null && Number(c.parent_id) === Number(p.id))
+      .map((c) => ({ name: String(c.name || ''), full: fullOf(c) })),
+  }));
+  const accounts = (ctx.store.ledgerAccounts(ctx.uid) || []).map((a) => String((a && a.name) || '')).filter(Boolean);
+  const names = ctx.store.ledgerAccountNames(ctx.uid) || [];
+  const nameOf = new Map(
+    names.map((n) => [Number(n.id), Number(n.special) === 1 ? '空账户' : String(n.name || '')]),
+  );
+  const d = ctx.store.ledgerDefaults(ctx.uid) || {};
+  return {
+    reason: categories.length ? 'ok' : 'empty',
+    categories,
+    // ⚠️ 空账户（`special = 1`）不在 `ledgerAccounts()` 里 —— 它由「不填账户」时自动落，
+    //    这里不单独列，免得模型主动去选它。
+    accounts,
+    defaults: {
+      expense: nameOf.get(Number(d.expense)) || '',
+      income: nameOf.get(Number(d.income)) || '',
+      by_category: (Array.isArray(d.categories) ? d.categories : [])
+        .map((x) => ({
+          category: fullOf(byId.get(Number(x && x.category_id))),
+          account: nameOf.get(Number(x && x.account_id)) || '',
+        }))
+        .filter((x) => x.category && x.account),
+    },
   };
 }
 
@@ -1238,8 +1438,17 @@ const READ_EXEC = {
   // ⚠️ 记账那三条：`need` 写的是**记账模块自己的业务方法名** —— 记账被整目录删掉时
   //    原型上就没有它们，`runReadTool()` 的守卫据此回 503 降级（⛔ 不抛）。
   'ledger.bill': { need: ['ledgerAiStats'], run: (ctx, args) => ledgerBill(ctx, args) },
-  'ledger.budget': { need: ['ledgerBudgetView'], run: (ctx, args, today) => ledgerBudget(ctx, args, today) },
+  'ledger.budget': {
+    // ⭐ 0.9.7：多要一个 `ledgerCategories`（分类预算要给「一级-二级」全称）
+    need: ['ledgerBudgetView', 'ledgerCategories'],
+    run: (ctx, args, today) => ledgerBudget(ctx, args, today),
+  },
   'ledger.assets': { need: ['ledgerAiAssets'], run: (ctx) => ledgerAssets(ctx) },
+  // ⭐ 0.9.7：取名口 —— 全是**只读**方法（分类树 / 账户 / 默认账户），⛔ 一个写动作都没有
+  'ledger.catalog': {
+    need: ['ledgerCategories', 'ledgerAccounts', 'ledgerAccountNames', 'ledgerDefaults'],
+    run: (ctx) => ledgerCatalog(ctx),
+  },
   // ⚠️ 0.8.5 那三条：`need` 同样是**那个模块自己的业务方法名**（都是只读的列表方法）——
   //    模块被整目录删掉时守卫回 503 降级（⛔ 不抛）。
   'bookmarks.query': { need: ['listBookmarks'], run: (ctx, args) => bookmarksQuery(ctx, args) },

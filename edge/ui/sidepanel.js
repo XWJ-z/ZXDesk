@@ -1,5 +1,8 @@
 /**
- * 0.1.4 sidepanel 壳 —— 只做一件事：挂 app 视图（内容唯一出处 ui/app.js）。
+ * sidepanel.js —— 侧边栏壳（只设置宿主并挂载 app 视图，内容唯一出处是 `ui/app.js`）。
+ *
+ * @author zx
+ * @since 0.1.4
  */
 import { mountApp } from './app.js';
 

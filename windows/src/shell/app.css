@@ -380,6 +380,27 @@ input::placeholder {
   }
 }
 
+/* 启动屏（静默启动 / 自动登录）：只放动画 + 一句进度，⛔ 不先闪登录表单 */
+.starting {
+  text-align: center;
+}
+
+.spinner.big {
+  width: 28px;
+  height: 28px;
+  border-width: 3px;
+  display: inline-block;
+  margin-bottom: 18px;
+}
+
+.starting h1 {
+  font-size: 24px;
+}
+
+.starting .subtitle {
+  margin: 6px 0 0;
+}
+
 .notice {
   background: var(--primary-soft);
   color: var(--primary-soft-text);
@@ -674,4 +695,125 @@ body.has-update-banner .content {
 .menu-error .menu-btn {
   color: var(--error-text);
   font-weight: 600;
+}
+
+/* ---------------------------------------------------------------- 切换账号弹窗（0.2.6）
+ *
+ * 弹窗放在 body 层（`position: fixed`）：打开时主进程会把远程视图藏起来，
+ * 所以它不会被 `WebContentsView` 盖住。z-index 高过更新提示条（5）。
+ */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  /**
+   * ⚠️ 居中靠卡片自己的 `margin: auto`，⛔ 不用 `align-items: center`。
+   *
+   * 这是 flex 居中的老坑：`align-items: center` + `overflow-y: auto` 时，
+   * 内容一旦高过遮罩，**顶部会被裁掉且滚不上去**（滚动容器只认超出下沿的部分）。
+   * `margin: auto` 在放得下时四边均分（＝真正居中），放不下时自动塌成 0
+   * （卡片从 padding 顶部开始，整张都能滚到）—— 两种情形都正确。
+   */
+  padding: 24px;
+  background: rgba(31, 36, 48, 0.28);
+  overflow-y: auto;
+}
+
+.modal[hidden] {
+  display: none;
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 460px;
+  /* 四边 auto ⇒ 水平垂直同时居中；卡片高过遮罩时自动塌成 0，从顶部开始可滚（见 .modal 的注释） */
+  margin: auto;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 18px 48px rgba(31, 36, 48, 0.18);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-head h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.modal-card .subtitle {
+  margin: 6px 0 16px;
+  font-size: 13px;
+}
+
+.acc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.acc-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.acc-item:hover {
+  border-color: var(--primary);
+}
+
+.acc-item.current {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  cursor: default;
+}
+
+.acc-item-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.acc-user {
+  font-weight: 600;
+}
+
+.acc-addr {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acc-go {
+  flex: 0 0 auto;
+  color: var(--primary);
+  font-size: 13px;
+}
+
+.acc-form {
+  margin-top: 14px;
+}
+
+.acc-form .check {
+  margin-bottom: 12px;
 }

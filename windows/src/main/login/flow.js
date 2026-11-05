@@ -1,5 +1,7 @@
 /**
- * 一次完整的飞牛登录（移植自 `Project/Android/core/connection/FnLoginClient.kt` 的 `FnLoginFlow`）。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：flow.js
+ * 职责：一次完整的飞牛登录（移植自 `Project/Android/core/connection/FnLoginClient.kt` 的 `FnLoginFlow`）
  *
  * 同一条 WS 跨步骤复用：`getRSAPub` → 加密 `user.login` →（要 2FA 时）邮箱码 / **加密** `loginVerify`
  * → `POST /app/ticket` 换会话 Cookie。开了 2FA 时 `user.login` **不返回 token，只给 accessToken**。
@@ -10,6 +12,7 @@
  * 依赖全部注入（rpc 工厂、fetch、时钟）：这样本机（没有显示器 / 不能联网）也能用假 RPC 跑完整编排。
  */
 
+import { mergeCookieHeader } from '../browser/cookies.js';
 import { envelope, randomAesKey, randomIv, sign as hmacSign } from './crypto.js';
 import { ERRNO, LOGIN_STEP, LoginError, fnErrnoMessage, toLong } from './errno.js';
 import {
@@ -22,7 +25,7 @@ import {
   tokenLoginInner,
   verifyInner,
 } from './messages.js';
-import { WsClosedError } from './wsclient.js';
+import { WsClosedError, AccessCodeRequiredError } from './wsclient.js';
 
 export const HEARTBEAT_MS = 20000;
 export const LONG_TOKEN_MAX_AGE = 30 * 24 * 60 * 60;
@@ -104,6 +107,8 @@ export class FnLoginFlow {
    * @param {number} [options.timeoutMs]
    * @param {string|null} [options.savedSecret] - 上次的 secret，`tokenLogin` 签名要用
    * @param {Function} [options.rpcFactory] - `(url, cookie) => WsClient`；测试注入假实现
+   * @param {Function} [options.gatewayCookie] - 每次握手**现取**网关 Cookie（可异步）。
+   *   开了访问码的 NAS：握手必须带上过访问码时种下的凭据，否则永远 401（Android 同口径）。
    * @param {Function} [options.fetcher] - `fetch` 语义；`/app/ticket` 用
    * @param {Function} [options.onStep] - `(label) => void`
    * @param {Function} [options.setTimer] - 心跳定时器（测试可关掉）
@@ -117,6 +122,7 @@ export class FnLoginFlow {
     this.deviceName = options.deviceName || 'Windows-ZXDesk';
     this.timeoutMs = options.timeoutMs ?? 20000;
     this.rpcFactory = options.rpcFactory;
+    this.gatewayCookie = options.gatewayCookie || null;
     this.fetcher = options.fetcher || globalThis.fetch;
     this.onStep = options.onStep || (() => {});
     this.setTimer = options.setTimer || setInterval;
@@ -133,6 +139,8 @@ export class FnLoginFlow {
     this.keepaliveTimer = null;
     this.recovered = false;
     this.rpc = null;
+    /** 最近一次「现取」到的网关 Cookie（每个新连接前刷新，⛔ 不跨访问码复用）。 */
+    this.handshakeCookie = '';
     this.host = this.baseUrl.replace(/^https?:\/\//, '');
   }
 
@@ -140,10 +148,36 @@ export class FnLoginFlow {
     return `wss://${this.host}/websocket?type=main`;
   }
 
+  /**
+   * 刷新网关 Cookie。访问码是在远程视图里过的，凭据由网关种在 `persist:zxdesk` 分区；
+   * 原生 WS 不在那个浏览器里 —— 不显式取一次，开了访问码的 NAS 上永远 401。
+   * 必须是「每次握手前现取」：用户可能先被挡回去过访问码、再重连。
+   */
+  async refreshGatewayCookie() {
+    if (!this.gatewayCookie) {
+      this.handshakeCookie = '';
+      return '';
+    }
+    try {
+      this.handshakeCookie = String((await this.gatewayCookie()) || '').trim();
+    } catch {
+      this.handshakeCookie = '';
+    }
+    return this.handshakeCookie;
+  }
+
+  /** 握手 Cookie：网关那份 ＋ 中继的 `mode=relay`；都没有就 null（⛔ 不发空 Cookie 头）。 */
+  cookieHeaderValue() {
+    const parts = [];
+    if (this.handshakeCookie) parts.push(this.handshakeCookie);
+    if (this.relay) parts.push('mode=relay');
+    return parts.join('; ') || null;
+  }
+
   ensureRpc() {
     if (!this.rpc) {
       if (!this.rpcFactory) throw new LoginError(LOGIN_STEP.WS_CONNECT, '内部错误：没有 WS 客户端工厂');
-      this.rpc = this.rpcFactory(this.wsUrl(), this.relay ? 'mode=relay' : null);
+      this.rpc = this.rpcFactory(this.wsUrl(), this.cookieHeaderValue());
     }
     return this.rpc;
   }
@@ -166,8 +200,10 @@ export class FnLoginFlow {
    */
   async startWithLongToken(longToken) {
     this.step(LOGIN_STEP.WS_CONNECT);
+    await this.refreshGatewayCookie();
     const rpc = this.ensureRpc();
     await rpc.connect().catch((e) => {
+      if (e instanceof AccessCodeRequiredError) throw e;
       throw e instanceof LoginError ? e : new LoginError(LOGIN_STEP.WS_CONNECT, e.message || '连不上飞牛服务');
     });
     this.step(LOGIN_STEP.RSA_KEY);
@@ -254,10 +290,13 @@ export class FnLoginFlow {
 
   async authenticate() {
     this.step(LOGIN_STEP.WS_CONNECT);
+    await this.refreshGatewayCookie();
     const rpc = this.ensureRpc();
     try {
       await rpc.connect();
     } catch (e) {
+      // 访问码闸门要原样冒到 Controller（它负责送第 ④ 步），⛔ 不能裹成「连不上飞牛服务」
+      if (e instanceof AccessCodeRequiredError) throw e;
       throw e instanceof LoginError ? e : new LoginError(LOGIN_STEP.WS_CONNECT, e.message || '连不上飞牛服务');
     }
     this.step(LOGIN_STEP.RSA_KEY);
@@ -360,6 +399,8 @@ export class FnLoginFlow {
   async reconnect() {
     this.rpc?.close?.();
     this.rpc = null;
+    // 断线重连可能正好发生在「用户在视图里刚过完访问码」之后 ⇒ 重连前必须重取一次
+    await this.refreshGatewayCookie();
     await this.ensureRpc().connect();
   }
 
@@ -442,7 +483,13 @@ export class FnLoginFlow {
   /** `POST {base}/app/ticket`，把 `Set-Cookie` 原样收下（只取 `name=value`）。 */
   async claimTicket(ticket, token) {
     if (!this.fetcher) throw new Error('没有可用的网络实现');
-    const cookie = `fnos-token=${token}${this.relay ? '; mode=relay' : ''}`;
+    // 访问码的凭据也要带上：`/app/ticket` 同样走网关，开了访问码的 NAS 上
+    // 只发 `fnos-token` 可能被 401 挡掉 ⇒ 认领不到 Cookie ⇒ 页面 `invalid token`。
+    const cookie = mergeCookieHeader(
+      `fnos-token=${token}`,
+      this.handshakeCookie,
+      this.relay ? 'mode=relay' : '',
+    );
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
@@ -450,6 +497,9 @@ export class FnLoginFlow {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Cookie: cookie },
         body: JSON.stringify({ ticket }),
+        // 走分区 `session.fetch` 时：同源也显式要求带 Cookie / 收 Set-Cookie，
+        // 免得实现差异让「认领成功」只在手工解析那一份生效、分区里反而没种上。
+        credentials: 'include',
         signal: controller.signal,
       });
       if (!response.ok) throw new Error(`认领登录票据失败（HTTP ${response.status}）`);
@@ -479,7 +529,7 @@ export class FnLoginFlow {
       if (!rpc.isConnected) await rpc.connect();
       return await rpc.call(this.withSignature(body).json, body.reqid);
     } catch (e) {
-      if (e instanceof WsClosedError) throw e;
+      if (e instanceof WsClosedError || e instanceof AccessCodeRequiredError) throw e;
       throw new LoginError(step, e.message || '请求失败');
     }
   }

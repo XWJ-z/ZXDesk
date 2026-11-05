@@ -1,13 +1,20 @@
 /**
- * 功能：连接编排（一期方案 §四 + 二期方案 §三）—— host / FNID 两条路并存、互相不猜。
+ * connect.js —— 连接编排（host 与 FNID 两条路并存、互相不猜）
  *
- * 状态机：idle → resolving → connected / need_login / failed。
- * - host：UI 解析并授权 ⇒ 握手（网关前缀优先）⇒ health 判登录 ⇒ need_login 开 `{base}/login.html`；
+ * 功能：`connect` 按输入选路；`status` 每次真握手后报 connected / need_login / failed；
+ *      `disconnect` 清本地记录（⛔ 不碰浏览器 Cookie）。
+ *      状态机：idle → resolving → connected / need_login / failed。
+ * - host：UI 解析并授权 ⇒ 握手（网关前缀优先）⇒ health 判登录 ⇒ 未登录开 `{base}/login.html`；
  * - FNID：`resolveFnId` ⇒ `https://<relay>` ⇒ 同一套握手；443 失败 ⇒ 端口兜底 `:httpsPort`；
  *   未登录**开门户** `https://fnos.net/<fnid>/`（中继根是灰屏桌面壳，不是登录页）。
- * - D4：网关未登录回 `200 + text/plain "invalid token"`（一期误判成 not_zxdesk）⇒ 现在按
- *   `need_nas_login` / 门户处理；访问码 HTML ⇒ `access_code`。
- * - R4 红线：`conn:status` 每次真握手，重启后如实报 need_login，⛔ 不假装已连接。
+ * - 网关未登录会回 `200 + text/plain "invalid token"` ⇒ 按 `need_nas_login` / 门户处理；
+ *   访问码 HTML ⇒ `access_code`。
+ *
+ * ⚠️ `conn:status` 每次真握手，重启后如实报 need_login，⛔ 不拿 storage 里的旧状态假装已连接。
+ *
+ * @author zx
+ * @since 0.1.0
+ * 相关：Project/Edge/README.md
  */
 import { fetchHealth } from './api.js';
 import { parseInput, linkType } from './address.js';
@@ -24,9 +31,9 @@ let loginWait = null; // { base, tick, timer, deadline }
 // ---- 握手 ----
 
 /**
- * 功能：候选 base 依次握手（网关前缀优先，方案 §4.2）。
- * ⭐ 0.1.3 真机反馈「每次都要连接两次才能连上」：授权刚 resolve 时 SW 的 fetch 偶发
- *    权限未生效 ⇒ 首轮全败。**全盲失败（无 hit 且无网关信号）自动整轮重试一次**（隔 500ms）；
+ * 功能：候选 base 依次握手（网关前缀优先）。
+ * ⚠️ 授权刚 resolve 时 SW 的 fetch 偶发「权限尚未生效」⇒ 首轮全败，表现为「每次都要连两次」。
+ *    **全盲失败（无 hit 且无网关信号）整轮重试一次**（隔 500ms）；
  *    有明确信号（网关要登录 / 访问码）说明请求通了，不重试直接报。
  * @returns {Promise<{base:?string, mode?:'gateway'|'direct', needNasLogin:boolean, accessCode:boolean}>}
  */
@@ -133,7 +140,7 @@ async function connectHost(p) {
 /** FNID 路：解析 ⇒ `https://<relay>` ⇒ 握手（443 失败用 `:httpsPort` 兜底）⇒ 登录开门户。 */
 async function connectFnid(p) {
   const seed = { input: p.input, fnid: p.id, hostPermGranted: true, isValid: false };
-  // ⭐ 0.1.3：解析失败（权限传播延迟 / 瞬时网络）自动重试一次——fn_id_not_found 是明确答案，不重试
+  // ⚠️ 解析失败（权限传播延迟 / 瞬时网络）自动重试一次 —— fn_id_not_found 是明确答案，不重试
   let r;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -151,7 +158,7 @@ async function connectFnid(p) {
   seed.link = 'relay';
   let h = await handshake(seed.origin);
   if (!h.base && r.httpsPort) {
-    const alt = seed.origin + ':' + r.httpsPort; // 端口兜底（方案 §三）
+    const alt = seed.origin + ':' + r.httpsPort; // 端口兜底（443 不通时换配置里的端口）
     const h2 = await handshake(alt);
     if (h2.base) {
       seed.origin = alt;
@@ -183,7 +190,7 @@ export async function status() {
   return { state: 'failed', error: 'network', ...(await statusBase(conn)) };
 }
 
-// ---- 登录引导（一期 §4.4 / 二期 §三：入口按 kind 选门户或 login.html）----
+// ---- 登录引导（入口按 kind 选门户或 login.html）----
 
 /** 功能：打开登录页 / 门户标签。失败返回 false（`open_login_failed`）。 */
 async function openLoginPage(url) {

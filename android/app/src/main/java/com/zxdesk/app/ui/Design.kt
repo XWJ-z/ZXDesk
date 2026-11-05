@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：Design.kt
+ * 职责：统一设计语言，色板、字号与常用控件
+ */
+
 package com.zxdesk.app.ui
 
 import androidx.compose.foundation.BorderStroke
@@ -49,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -68,7 +75,7 @@ internal object Ui {
     /** 元素间距（8dp 网格的 2 格）。 */
     val Gap = 16.dp
 
-    /** 主按钮高度：手指按得准（AND-008 定为 52dp）。 */
+    /** 主按钮高度：手指按得准（52dp）。 */
     val ButtonHeight = 52.dp
 
     /** 主按钮圆角。 */
@@ -84,17 +91,33 @@ internal object Ui {
     val BodySize = 14.sp
     val InputSize = 16.sp
 
-    // ---- 组件级色常量（§4.2 表格里没进 colorScheme 的那几颗）----
+    // ---- 组件级色常量（没进 colorScheme 的那几颗）----
     val FieldUnfocused = Color(0xFFF1F4F9)      // 输入框未聚焦底
     val ButtonDisabledContainer = Color(0xFFE8EAF6)
     val ButtonDisabledContent = Color(0xFF7C86A8)
     val SwitchUnselectedTrack = Color(0xFFDDE3EC)
     val BadgeContainer = Color(0xFFEEF2FF)      // 胶囊徽标底（FNID/IP/域名、选中卡片）
     val BadgeContent = Color(0xFF4338CA)        // 胶囊徽标字
+
+    // ---- 抽屉（侧边栏）专用：见 R-212 ----
+    /** 普通项文字：比 onSurface 浅一档，对白底仍在 9:1 以上 —— 降了层级但依然清晰。 */
+    val DrawerItemText = Color(0xFF39414F)
+
+    /**
+     * 「上一版可用」的强调绿（帮助页那一行小字）。
+     *
+     * 2026-11-03 老大：「上一版的字体颜色改为绿色区分一下，现在的不明显」——
+     * 那行原本和说明文字同为灰，扫一眼分不出「这是另一个版本」。
+     * 只给**可用状态**用（已上线 / 可用 / 内测）；上一版若也在审核，仍走灰 ——
+     * 绿色在这里的含义就是「这个能装」，不能因为它写着「上一版」就一律绿。
+     *
+     * 对白底对比度约 5:1，11sp 小字仍清楚（WCAG AA 要求 4.5:1）。
+     */
+    val PreviousOnline = Color(0xFF15803D)
 }
 
 /**
- * 四步共用的页面容器（AND-010 §2.1/§2.2）：
+ * 四步共用的页面容器：
  * **固定顶栏 + 内容垂直居中**，内容比屏幕高时自动转为可滚动（不会被切）。
  *
  * - 品牌行：44dp 圆角图标与标题**同一排**（间距 12dp、垂直居中）；
@@ -139,7 +162,7 @@ internal fun StepPage(
                 verticalArrangement = Arrangement.spacedBy(Ui.Gap, Alignment.CenterVertically),
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // 品牌行：图标 ＋ 标题同一排（§2.1，所有走 StepPage 的屏统一）
+                    // 品牌行：图标 ＋ 标题同一排（所有走 StepPage 的屏统一）
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -214,7 +237,7 @@ internal fun PrimaryButton(
 }
 
 /**
- * 填充式输入框（§4.3）：标签 13sp/600 放框**上方**；未聚焦底 #F1F4F9、
+ * 填充式输入框：标签 13sp/600 放框**上方**；未聚焦底 #F1F4F9、
  * 聚焦白底 + 1.5dp primary 边、圆角 14dp；占位 16sp 同色 60%。
  * [supporting] 是输入框下方那行小字（错误也走这里）。
  */
@@ -243,7 +266,21 @@ internal fun Field(
             value = value,
             onValueChange = onValueChange,
             placeholder = placeholder?.let {
-                { Text(it, fontSize = Ui.InputSize, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)) }
+                {
+                    // 占位符是**示例**，不是内容：比输入文字（16sp）小两档，且强制单行。
+                    // 旧版按 16sp 铺开，地址框那条示例会折成两行
+                    // （真机 2026-11-03 14:35：「192.0.2.10 / nas.example.com /」+「my-nas」），
+                    // 输入框里出现两行示例很难看。宽度不够时尾部省略，⛔ 不换行。
+                    // 12sp 是按 320dp 窄屏算过的：34 个字符约 212dp，塞得进 256dp 的内容区。
+                    Text(
+                        it,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    )
+                }
             },
             singleLine = true,
             enabled = enabled,
@@ -278,9 +315,9 @@ internal fun Field(
 }
 
 /**
- * 一行小字 + 右侧开关：选中轨道 primary、未选 #DDE3EC、thumb 白（§4.3）。
+ * 一行小字 + 右侧开关：选中轨道 primary、未选 #DDE3EC、thumb 白。
  *
- * AND-010 §2.6：**整行可点**（不只是那 30dp 的开关本身），开关的 onCheckedChange 置空、
+ * **整行可点**（不只是那 30dp 的开关本身），开关的 onCheckedChange 置空、
  * 由整行 `toggleable` 统一收事件 —— 旧版只有轨道能点，视觉上像「点了没反应」。
  * [enabled] = false 时轨道/滑块都走灰态（该机型被强制 HTTPS 时必须「看着就是不能点」），
  * 并用 [supporting] 写清原因。
@@ -332,7 +369,7 @@ internal fun InlineSwitchRow(
 
 /**
  * 模式卡片（第 ① 步用）。
- * 选中 = `primary` 描边 1.5dp + #EEF2FF 底；未选 = 白底 + outlineVariant 描边 1dp（§4.3）。
+ * 选中 = `primary` 描边 1.5dp + #EEF2FF 底；未选 = 白底 + outlineVariant 描边 1dp。
  */
 @Composable
 internal fun ModeCard(

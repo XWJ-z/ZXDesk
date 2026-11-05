@@ -1,12 +1,19 @@
 /**
- * 功能：输入识别（二期方案 §三）—— FNID / 域名 / IP / 完整 URL，判定顺序照 Android `InputParser`，
- *      **顺序不可改**：完整 URL → `[v6]:port` → `host:port` → 裸 IPv6 → IPv4 → 含 `.` 的域名 → FNID → 认不出。
+ * address.js —— 用户输入识别（FNID / 域名 / IP / 完整 URL）
  *
- * ⚠️ 已知取舍（照抄 Android）：`localhost` / `nas` 这类不带点不带端口的名字会命中 FNID 形状 ⇒
- *    按 FNID 处理；文案里提示「局域网请填 IP 或带端口」。
+ * 功能：`parseInput` 把一行输入判成 host / fnid / invalid；`linkType` 推出链路徽标；
+ *      `originsFor` 把解析结果翻成需要申请的 host 权限。
+ *      **判定顺序不可改**：完整 URL → `[v6]:port` → `host:port` → 裸 IPv6 → IPv4 → 含 `.` 的域名 → FNID → 认不出。
+ *
+ * ⚠️ `localhost` / `nas` 这类不带点不带端口的名字会命中 FNID 形状 ⇒ 按 FNID 处理，
+ *    文案里提示「局域网请填 IP 或带端口」。与 Android 端同口径。
  * ⚠️ 「中继域名」≠ FNID：`my-nas.fnos.net` 走 host 直连路径，`my-nas` 走 fn/con 解析，两条路并存、互相不猜。
  *
  * ⛔ 纯函数、不碰 `chrome.*` —— UI 与 SW 共用这一份。
+ *
+ * @author zx
+ * @since 0.1.0
+ * 相关：Project/Edge/README.md
  */
 import { isFnId } from './fnid.js';
 
@@ -49,7 +56,9 @@ export function parseInput(raw) {
     const host = text.slice(0, idx);
     const port = text.slice(idx + 1);
     if (!host || !/^\d+$/.test(port)) return null; // 端口不是数字 ⇒ 认不出（Android 同口径）
-    const scheme = isIpv4(host) ? 'http' : 'https';
+    // IP 一律 http；域名默认 https，但 **:80 要按 http 走** ——
+    // 否则 `example.com:80` 会被拼成 `https://example.com:80`（端口与协议对不上，必然连不上）。
+    const scheme = isIpv4(host) || port === '80' ? 'http' : 'https';
     return { kind: 'host', origin: `${scheme}://${host}:${port}`, gatewayHint: false };
   }
   // 4. 裸 IPv6
@@ -117,7 +126,7 @@ export function linkType(origin) {
 export const LINK_LABEL = { relay: '飞牛中继', lan: '局域网', domain: '网关域名' };
 
 /**
- * 0.1.4：FNID 分支的固定权限（apex 与子域各一条；中继 `<id>.fnos.net` 被 `*.fnos.net` 覆盖）。
+ * FNID 分支的固定权限（apex 与子域各一条；中继 `<id>.fnos.net` 被 `*.fnos.net` 覆盖）。
  * 从 ui/conn-ui.js 搬来——设置页与两个壳都要按它判「已授权与否」，常量只此一份。
  */
 export const FNID_ORIGINS = [
@@ -129,9 +138,9 @@ export const FNID_ORIGINS = [
 
 /**
  * 功能：输入 → 授权用 origins（host 一条 / FNID 四条；解析不了返回 null，invalid 原样带回）。
- * ⭐ 0.1.4 真机修：**必须把解析结果 `p` 一起带回去** —— 0.1.4 首版漏了它，`o.p.kind` 在连接第一行
- *    就 TypeError（UI 停在「连接中…」永不返回，真机表现＝连不上 NAS）。此后 `p` 是调用方
- *    唯一该用的解析结果，⛔ 不要再各解析一遍。
+ * ⚠️ **必须把解析结果 `p` 一起带回去**：调用方要用 `p.kind` 决定走哪条连接路，
+ *    只回 `origins` 会让它在连接第一步就 TypeError（界面停在「连接中…」永不返回）。
+ *    `p` 是调用方唯一该用的解析结果，⛔ 不要再各解析一遍。
  * @returns {?{p:object, origins:string[]}|{invalid:string}}
  */
 export function originsFor(parsed) {

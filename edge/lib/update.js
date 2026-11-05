@@ -1,5 +1,8 @@
 /**
- * 功能：版本检测 —— 问一次更新服务器「浏览器扩展的最新版本是哪个」，比本机新就留给界面提示。
+ * update.js —— 版本检测（问一次更新服务器「最新版是哪个」）
+ *
+ * 功能：`checkForUpdate` 拉一次并落盘；`readUpdate` 给出「要不要提示」的结论；
+ *      `promptOf` / `dismissUpdate` 备界面用的载荷与「这一版不再提示」。
  *
  * ⚠️ 只在浏览器启动（`runtime.onStartup`）与安装/更新（`runtime.onInstalled`）各跑一次，
  *    ⛔ 不轮询、⛔ 不在 SW 每次唤醒时跑。
@@ -7,7 +10,11 @@
  * ⚠️ 全插件唯一的「非 NAS」联网点：只发平台名，⛔ 不带 Cookie（不传 `credentials`）、
  *    ⛔ 不带账号、收藏内容或任何设备标识。
  * ⚠️ 扩展没有该域名的 host 权限，跨域要靠服务端 `Access-Control-Allow-Origin: *` 放行；
- *    服务端一旦收窄成官网域名，这里的检测会静默失效（权限与口径见 README §五）。
+ *    服务端一旦收窄成官网域名，这里的检测会静默失效（权限与口径见 `Project/Edge/README.md`）。
+ *
+ * @author zx
+ * @since 0.1.6
+ * 相关：Project/Edge/README.md
  */
 import { getUpdate, setUpdate } from './store.js';
 

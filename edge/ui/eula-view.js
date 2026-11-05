@@ -1,11 +1,18 @@
 /**
- * 功能：许可协议面板的两种用法 —— 首次启动的**同意门槛**（不可关闭），与设置里的**重新阅读**（可关闭）。
+ * eula-view.js —— 许可协议面板（首次启动的同意门槛 / 设置里的重新阅读）
+ *
+ * 功能：`isEulaAccepted` 判「读过当前版本没有」；`createEulaPanel` 造面板，
+ *      `mode:'gate'` 是不可关闭的同意门槛，`mode:'read'` 可随时关闭。
  *
  * ⚠️ 门槛形态在同意之前不挂任何视图、不发任何请求（`ui/app.js` 里先判后挂）；
  *    拒绝的出口是「移除扩展」，所以面板上只有一个按钮。
  * ⚠️ 正文来自 `lib/eula.js`（与包根 `LICENSE` 逐字一致，有单测比对）——
  *    ⛔ 界面上另写摘要，摘要与正文不一致时用户看到的不作数。
  * ⚠️ 正文一律 `textContent` 写入，⛔ 不拼 HTML（协议里出现尖括号也不会被当成标签）。
+ *
+ * @author zx
+ * @since 0.1.6
+ * 相关：Project/Edge/README.md
  */
 import { EULA_TEXT, EULA_VERSION, hasAccepted } from '../lib/eula.js';
 import { getEula, setEula } from '../lib/store.js';

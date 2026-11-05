@@ -41,7 +41,7 @@ test('dist.js：五步顺序固定（自检 → 打包 → zip → sha → 复�
 
 test('dist.js：sha256 与 sha256sum 同格式（两个空格 + 文件名），且会核对包内版本与图标字节', () => {
   const s = read('build/dist.js');
-  assert.match(s, /writeFileSync\(shaFile, `\$\{hash\}  \$\{path\.basename\(outZip\)\}\\n`/, 'sha 文件格式：<hash>␠␠<文件名>');
+  assert.match(s, /writeFileSync\(shaFile, `\$\{hash\} {2}\$\{path\.basename\(outZip\)\}\\n`/, 'sha 文件格式：<hash>␠␠<文件名>');
   assert.match(s, /packedPkg\.version !== pkg\.version/, '要核对 asar 里的版本号');
   assert.match(s, /iconEntries\.length !== icoCount/, '要核对包内 exe 图标个数');
   assert.match(s, /icoHashes[\s\S]{0,200}exeHashes/, '要逐字节比对图标');

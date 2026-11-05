@@ -1,9 +1,9 @@
 /**
- * 0.1.4 app.css —— app.js 视图的布局（两形态共用；壳差异只由 popup.css / sidepanel.css 定尺寸）。
+ * app.css —— app.js 视图的布局（两形态共用；壳差异只由 popup.css / sidepanel.css 定尺寸）。
  * 组件样式见 base.css，颜色/字号见 tokens.css。
  */
 
-/* ---- 0.1.6：新版本气泡（视图最上方，压在连接条之上） ---- */
+/* ---- 新版本气泡（视图最上方，压在连接条之上） ---- */
 .update-bubble {
   flex: none;
   position: relative;
@@ -132,6 +132,84 @@ html[data-host='popup'] .update-bubble::before {
 .bm-form {
   margin-bottom: 8px;
 }
+
+/* ---- 侧边栏的「添加网址」放宽 ----
+   popup 是 360×600 的固定小窗，空间金贵，保持原来的紧凑；
+   侧边栏宽度不定（≥280），同一套尺寸在里面既挤、又和搜索框/按钮不成比例
+   （同屏控件高度原本 20/27/31/36px 混着）⇒ **只对侧边栏**放大一档并统一到 34px。 */
+html[data-host='sidepanel'] .bm-form {
+  margin-bottom: 12px;
+}
+html[data-host='sidepanel'] .add-toggle {
+  min-height: 38px;
+  padding: 8px 0;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+html[data-host='sidepanel'] .panel {
+  padding: 14px 14px 12px;
+}
+html[data-host='sidepanel'] .field {
+  gap: 10px;
+  margin-bottom: 10px;
+}
+html[data-host='sidepanel'] .flabel {
+  width: 36px;
+  font-size: 13px;
+}
+/* ⚠️ 字段高度 / 字号 / 内距**不在这里覆盖** —— 已由 base.css 统一到 36px；
+   各形态再各调一档，就又回到「标题和网址不是一套」的老问题。 */
+html[data-host='sidepanel'] .flabel-line {
+  margin: 12px 0 8px;
+  font-size: 13px;
+}
+/* 窄栏里 select(88) ＋ input ＋ 按钮硬挤一行 ⇒ 允许换行，各自有呼吸空间 */
+html[data-host='sidepanel'] .tag-add {
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+html[data-host='sidepanel'] .tag-add select,
+html[data-host='sidepanel'] .tag-add input {
+  flex: 1 1 118px;
+  width: auto;
+  min-width: 0;
+}
+html[data-host='sidepanel'] .tag-add .btn-subtle {
+  flex: 0 0 auto;
+  margin-left: auto; /* 换到第二行并靠右 —— 它是辅助动作，不抢 select/input 的宽度 */
+  padding-left: 14px;
+  padding-right: 14px;
+}
+html[data-host='sidepanel'] .bm-form .row {
+  margin-top: 12px;
+}
+
+/* ---- 建议标签：虚线＝「这个站点你用过」，点了才变成实线药丸 ---- */
+.suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.suggest:empty {
+  display: none;
+}
+.suggest-label {
+  flex: none;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.pick.sug {
+  border-style: dashed;
+  background: transparent;
+  color: var(--ink-2);
+}
+.pick.sug:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
 .view-all {
   width: 100%;
   text-align: center;
@@ -142,7 +220,7 @@ html[data-host='popup'] .update-bubble::before {
   min-height: 0;
 }
 
-/* ---- 设置视图头部（0.1.5 E1）⚠️ ⛔ 不用 .row：base.css 的 `.row button { flex:1 }` 会把
+/* ---- 设置视图头部 ⚠️ ⛔ 不用 .row：base.css 的 `.row button { flex:1 }` 会把
    返回箭头撑成整行长条（那根白条会把 h1 挤到框外）。
    改专用三列网格：左箭头 32 / 中间标题自适应 / 右侧对称留白。 ---- */
 .s-head {
@@ -396,7 +474,7 @@ html[data-host='popup'] .update-bubble::before {
   background: var(--brand);
 }
 
-/* ---- 0.1.5 E2：行内编辑（侧边栏窄，不弹全屏层） ---- */
+/* ---- 行内编辑（侧边栏窄，不弹全屏层） ---- */
 .li-edit {
   display: grid;
   gap: 6px;
@@ -415,7 +493,7 @@ html[data-host='popup'] .update-bubble::before {
   flex: 1;
 }
 
-/* ---- 0.1.5 E3：密码库只读 ---- */
+/* ---- 密码库只读 ---- */
 /* 掩码小按钮（12px、白底、描边、圆角 999、padding 2×8）—— 手机端 m-mini 同款 */
 .key-btn {
   flex: none;
@@ -514,7 +592,7 @@ html[data-host='popup'] .update-bubble::before {
   border-top: 1px solid var(--line);
 }
 
-/* ---- 0.1.6：许可协议面板（首次启动的同意门槛 / 设置里的重新阅读） ---- */
+/* ---- 许可协议面板（首次启动的同意门槛 / 设置里的重新阅读） ---- */
 /* 遮罩不吃半透明：正文要能看清，也避免「还能点到底下」的错觉 */
 .eula-mask {
   position: fixed;

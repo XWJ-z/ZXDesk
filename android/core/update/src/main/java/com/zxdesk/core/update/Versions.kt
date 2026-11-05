@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：Versions.kt
+ * 职责：版本号的解析与比较，纯函数，可单测
+ */
+
 package com.zxdesk.core.update
 
 /**

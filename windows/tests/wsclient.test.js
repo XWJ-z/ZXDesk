@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import { test } from 'node:test';
 
-import { OPCODE, WsClient, acceptKey, decodeFrame, encodeFrame } from '../src/main/login/wsclient.js';
+import { OPCODE, WsClient, acceptKey, decodeFrame } from '../src/main/login/wsclient.js';
 
 /** 起一个只认「握手 + 文本帧」的假飞牛 WS 服务端。 */
 function startServer() {
@@ -203,7 +203,7 @@ test('真实 socket：服务端发 ping，客户端回 pong 并继续工作', as
   }
 });
 
-test('握手被拒（非 101）⇒ 明确报错而不是挂着', async () => {
+test('握手被拒 401 / 403 ⇒ AccessCodeRequiredError（访问码闸门，不是账号错）', async () => {
   const server = net.createServer((socket) => {
     socket.once('data', () => {
       socket.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n');
@@ -213,9 +213,66 @@ test('握手被拒（非 101）⇒ 明确报错而不是挂着', async () => {
   const port = await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
   const client = new WsClient({ url: `ws://127.0.0.1:${port}/websocket`, timeoutMs: 2000 });
   try {
-    await assert.rejects(() => client.connect(), /握手被拒（HTTP 403）/);
+    await assert.rejects(
+      () => client.connect(),
+      (error) => {
+        assert.equal(error.name, 'AccessCodeRequiredError');
+        assert.equal(error.status, 403);
+        return true;
+      },
+    );
   } finally {
     client.close();
+    server.close();
+  }
+});
+
+test('握手被拒 500 ⇒ 仍是普通握手失败（⛔ 别把 5xx 也说成访问码）', async () => {
+  const server = net.createServer((socket) => {
+    socket.once('data', () => {
+      socket.end('HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n');
+    });
+    socket.on('error', () => {});
+  });
+  const port = await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
+  const client = new WsClient({ url: `ws://127.0.0.1:${port}/websocket`, timeoutMs: 2000 });
+  try {
+    await assert.rejects(() => client.connect(), /握手被拒（HTTP 500）/);
+  } finally {
+    client.close();
+    server.close();
+  }
+});
+
+test('Cookie 可以是取值函数：每次握手现取（过完访问码要拿到新凭据）', async () => {
+  const seen = [];
+  const server = net.createServer((socket) => {
+    let buffer = Buffer.alloc(0);
+    socket.on('data', (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      const end = buffer.indexOf('\r\n\r\n');
+      if (end < 0) return;
+      const lines = buffer.subarray(0, end).toString('latin1').split('\r\n');
+      const cookie = lines.find((l) => l.toLowerCase().startsWith('cookie:'));
+      seen.push(cookie ? cookie.slice(cookie.indexOf(':') + 1).trim() : null);
+      const key = lines.find((l) => l.toLowerCase().startsWith('sec-websocket-key:')).split(':')[1].trim();
+      socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${acceptKey(key)}\r\n\r\n`);
+      socket.removeAllListeners('data');
+    });
+    socket.on('error', () => {});
+  });
+  const port = await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
+  let current = 'access=old';
+  const client = new WsClient({ url: `ws://127.0.0.1:${port}/websocket`, cookie: () => current, timeoutMs: 2000 });
+  try {
+    await client.connect();
+    client.close();
+    current = 'access=new';
+    const again = new WsClient({ url: `ws://127.0.0.1:${port}/websocket`, cookie: () => current, timeoutMs: 2000 });
+    await again.connect();
+    again.close();
+    assert.deepEqual(seen, ['access=old', 'access=new']);
+  } finally {
     server.close();
   }
 });

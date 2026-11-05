@@ -1,5 +1,7 @@
 /**
- * 导航白名单。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：nav.js
+ * 职责：导航白名单
  *
  * 留在远程视图里的：当前 NAS 基址主机、中继主机、飞牛门户域（`fnos.net` / `5ddd.com` / `*.fnnas.com`）。
  * 其它一律交给系统浏览器（**只放行 http/https**，`file:` / `javascript:` 之类直接丢）。

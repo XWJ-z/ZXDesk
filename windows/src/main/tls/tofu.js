@@ -1,9 +1,11 @@
 /**
- * 自签证书 TOFU（移植自 `Project/Android/core/tls/TlsPolicy.kt`）。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：tofu.js
+ * 职责：自签证书 TOFU（移植自 `Project/Android/core/tls/TlsPolicy.kt`）
  *
  * 只认本设备证书（`O=fnOS` + `CN=fnOS`）；指纹一致放行；指纹变化按「轮换」重确认；subject 不符拒绝。
  *
- * ⚠️ 2026-10-23 实测（真机 10.1.2.3:64999）：subject 是 **`CN=fnOS,O=fnOS`** —— CN 在前、
+ * ⚠️ 实测（真机 10.1.2.3:64999）：subject 是 **`CN=fnOS,O=fnOS`** —— CN 在前、
  * 逗号后**没有空格**。原先按 `O=fnOS, CN=fnOS` 写死的正则两组都匹配不上，结果把自家设备全拒了。
  * ⇒ 一律**按属性解析**，不依赖顺序与空格。
  */

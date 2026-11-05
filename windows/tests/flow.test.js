@@ -56,6 +56,7 @@ function makeFlow(options = {}) {
     password: 'p@ss',
     deviceId: 'did-123',
     deviceName: 'Windows-ZXDesk',
+    gatewayCookie: options.gatewayCookie,
     rpcFactory: () => rpc,
     fetcher:
       options.fetcher ||
@@ -109,6 +110,17 @@ test('中继登录：认领票据时 Cookie 带 mode=relay', async () => {
   });
   await flow.start();
   assert.match(state.tickets[0].init.headers.Cookie, /; mode=relay$/);
+});
+
+test('认领票据时带上访问码的网关 Cookie（/app/ticket 同样走网关）', async () => {
+  const { flow, state } = makeFlow({
+    gatewayCookie: async () => 'nasac=ok',
+    handler: baseHandler({ result: 'succ', token: 'TOKEN', ticket: 'TCK' }),
+  });
+  await flow.start();
+  const cookie = state.tickets[0].init.headers.Cookie;
+  assert.match(cookie, /^fnos-token=TOKEN/, '会话 token 仍排在最前');
+  assert.match(cookie, /nasac=ok/, '访问码凭据要一起带（否则开了访问码的 NAS 认领不到 Cookie）');
 });
 
 test('user.login 必须走加密信封，且 si 无损（18 位）', async () => {

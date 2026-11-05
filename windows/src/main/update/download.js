@@ -1,5 +1,7 @@
 /**
- * 安装包下载（https、重定向、断点续传、进度、SHA256）。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：download.js
+ * 职责：安装包下载（https、重定向、断点续传、进度、SHA256）
  *
  * 传输层由调用方注入，形如：
  *   `transport(url, { headers, onResponse, onError }) => { abort?() }`

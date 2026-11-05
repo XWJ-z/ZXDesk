@@ -1,3 +1,9 @@
+/*
+ * ZXDesk工作台 Android 客户端
+ * 文件：DataSource.kt
+ * 职责：数据源接口与一期实现，仅连接 NAS
+ */
+
 package com.zxdesk.core.datasource
 
 import com.zxdesk.core.connection.ConnectionPlanner
@@ -46,6 +52,8 @@ class NasDataSource(
             relayHost = relay,
             // 先登飞牛门户，再由门户跳中继 —— 中继根不是登录页（0.2.0 的教训）
             portalUrl = FnPortal.urlFor(fnId),
+            // 中继域名解析不了时的排障出口（只显示、不自动切）
+            lanHint = addresses.lanIpv4.firstOrNull(),
         )
     }
 

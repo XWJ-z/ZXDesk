@@ -14,7 +14,7 @@
  *
  * @author zx
  * @date   2026-09-18
- * @since 0.8.61
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/18-ai辅助任务.md、docs/公共/开发方案/16-AI辅助任务-3期-AI工具调用与授权.md
  */
 
@@ -101,9 +101,10 @@ const WRITE_TOOLS = [
     share: PANEL_WRITE.ledgerWrite,
     args: [
       '账目列表：每条 amount（单位元，如 35.5）必填；可带 ie（支出 / 收入，默认支出）、' +
-        'at（YYYY-MM-DD）、category（分类名）、account（账户名）、note（备注）',
+        'at（YYYY-MM-DD）、category（一级分类名，或「一级-二级」全称）、' +
+        'subcategory（二级分类名）、account（账户名；不填就用用户设置的默认账户）、note（备注）',
     ],
-    returns: ['一条条待你确认的记账草稿'],
+    returns: ['一条条待你确认的记账草稿', '分类 / 账户在**本机**解析成 id；解析不到时把模型的原话带回来（卡上可见）'],
   },
   // ---- ⭐ 0.8.5：收藏夹 / 随手记 / NAS硬件管理 三块 ----
   // ⚠️ 三块与上面两条**完全同款**：只提议、⛔ 不落库、一律过用户那张确认卡。
@@ -490,27 +491,69 @@ function yuanToFen(v) {
 }
 
 /**
- * 功能：在**本机分类表**里按名字找一条 —— ① 全名（`一级-二级`）精确 → ② 末级名精确 → `null`。
+ * 功能：一个分类行属于**哪一侧**（`支出` / `收入`）—— 二级继承父。
  *
- * 说明：⚠️ 两级都不中 ⇒ 返回 `null`（＝未分类）：⛔ **绝不猜**（猜错的表现是钱记进了别的分类，
- *      而用户只看到「记好了」）。⚠️ 已归档的分类不参与匹配（它「选不到」—— 与记账表单同一条口径）。
- * @param {Array.<Object>} rows - `store.ledgerCategories()` 的产物
- * @param {*} want - 模型说的分类名（可能带层级、可能是空）
- * @returns {?Object} 命中的分类行；没命中为 null
+ * 说明：⚠️ 二级分类自己的 `ie` 是空（`null`，见 `ledger/schema.js`）⇒ 必须往上看父。
+ *      父取不到（数据脏 / 父已硬删）时回空串：调用方据此**不把它当作某一侧**（宁可匹配不上，
+ *      也不要把一笔支出记到收入分类里）。
+ * @param {Object} c - 分类行
+ * @param {Map.<number, Object>} byId - 分类 id → 行
+ * @returns {string} `'支出'` / `'收入'` / 空串
  */
-function findCategoryOf(rows, want) {
+function sideOf(c, byId) {
+  const own = String((c && c.ie) || '');
+  if (own) return own;
+  const p = c && c.parent_id != null ? byId.get(Number(c.parent_id)) : null;
+  return p ? String(p.ie || '') : '';
+}
+
+/** 功能：分类全称（一级 = 名字；二级 = `父名-名`）。 @param {Object} c - 分类行 @param {Map.<number, Object>} byId - 分类 id → 行 @returns {string} 全称 */
+function fullOf(c, byId) {
+  const p = c && c.parent_id != null ? byId.get(Number(c.parent_id)) : null;
+  return p ? `${String(p.name || '')}-${String((c && c.name) || '')}` : String((c && c.name) || '');
+}
+
+/**
+ * 功能：在**本机分类表**里按名字找一条 —— ① 全称（`一级-二级`）精确 → ② 叶子名唯一命中 → 否则不认。
+ *
+ * 说明：⭐⭐ 0.9.7（老大：「分类和二级分类都要选择真实存在的」）：
+ *      · **只看同一收支侧**（支出 / 收入）—— 「其它」两侧各有一条，不分侧就会把支出记到收入分类上；
+ *      · 叶子名**只在唯一命中时**才认：二级允许重名（「其他」在餐饮、交通下各有一条），
+ *        撞上多个时**不猜**，而是把候选全称带回去（`why`）让模型/用户自己挑；
+ *      · 已归档的分类不参与匹配（它「选不到」，与记账表单同一条口径）。
+ *      ⛔ 绝不「差不多个」：猜错的表现是钱记进了别的分类，而用户只看到「记好了」。
+ * @param {Array.<Object>} rows - `store.ledgerCategories()` 的产物
+ * @param {*} want - 模型说的分类名（全称或叶子名；可能是空）
+ * @param {string} ie - 这笔账的收支方向（`支出` / `收入`）
+ * @returns {{cat: ?Object, why: string}} 命中的分类行 ＋ 没命中时的人话原因
+ */
+function findCategoryOf(rows, want, ie) {
   const key = normName(want);
-  if (!key) return null;
+  if (!key) return { cat: null, why: '' };
   const list = Array.isArray(rows) ? rows : [];
   const byId = new Map(list.map((c) => [Number(c.id), c]));
-  const full = (c) => {
-    const p = c && c.parent_id != null ? byId.get(Number(c.parent_id)) : null;
-    return p ? `${String(p.name || '')}-${String(c.name || '')}` : String((c && c.name) || '');
-  };
-  const live = list.filter((c) => !(c && c.archived));
-  const hit = live.filter((c) => normName(full(c)) === key);
-  const both = hit.length ? hit : live.filter((c) => normName(c.name) === key);
-  return both[0] || null;
+  // 已归档的不参与；父已归档的二级也不参与（表单里它同样选不到）
+  const live = list.filter((c) => {
+    if (!c || c.archived) return false;
+    const p = c.parent_id != null ? byId.get(Number(c.parent_id)) : null;
+    return !(p && p.archived);
+  });
+  const side = String(ie || '');
+  const pool = side ? live.filter((c) => sideOf(c, byId) === side) : live;
+  const fullHit = pool.filter((c) => normName(fullOf(c, byId)) === key);
+  if (fullHit.length === 1) return { cat: fullHit[0], why: '' };
+  const leafHits = new Map(pool.filter((c) => normName(c.name) === key).map((c) => [Number(c.id), c]));
+  if (leafHits.size === 1) return { cat: [...leafHits.values()][0], why: '' };
+  if (leafHits.size > 1) {
+    const names = [...leafHits.values()].map((c) => `「${fullOf(c, byId)}」`).join('、');
+    return { cat: null, why: `「${want}」在本机有多个分类（${names}），请用「一级-二级」全称` };
+  }
+  // 名字在**另一侧**存在 ⇒ 说清是方向不对（比「没有这个分类」有用得多）
+  const other = live.find((c) => normName(fullOf(c, byId)) === key || normName(c.name) === key);
+  if (other) {
+    return { cat: null, why: `本机的「${want}」是${sideOf(other, byId) || '另一侧'}的分类，与这笔${ie}对不上` };
+  }
+  return { cat: null, why: '' };
 }
 
 /**
@@ -523,6 +566,38 @@ function findAccountOf(rows, want) {
   const key = normName(want);
   if (!key) return null;
   return (Array.isArray(rows) ? rows : []).find((a) => normName(a && a.name) === key) || null;
+}
+
+/**
+ * 功能：按记账表单的**同一条取值顺序**挑账户 —— 类别默认 → 该分类的父级默认 → 全局默认（按收支）→ 空账户。
+ *
+ * 说明：⭐⭐ 0.9.7（老大：「账户（设置的默认账号）要选真实存在的」）：模型没点名账户时，
+ *      这里给出的是**用户自己在记账设置里设的那个默认账户**（而不是「不关联」）。
+ *      ⚠️ 多认一层「父级默认」：AI 通常给到二级分类，而用户可能把默认账户设在**一级**上
+ *      （表单里选二级时不会回退，这里刻意回退一次 —— 两处口径的差异是有意的）：
+ *      「用默认账户」这件事，回退一步比落空更符合用户预期。
+ *      ⚠️ 只认**活着的**账户：`store.ledgerDefaults()` 已经把「默认账户被删掉」折成 `null`。
+ * @param {Object} p - `{accts, names, defaults, cat, ie}`
+ * @returns {{id: ?number, name: string, isDefault: boolean}} 账户（没默认且没有空账户时 `id: null`）
+ */
+function pickDefaultAccountOf(p) {
+  const o = p || {};
+  const rows = Array.isArray(o.defaults && o.defaults.categories) ? o.defaults.categories : [];
+  const cid = o.cat ? Number(o.cat.id) : 0;
+  const pid = o.cat && o.cat.parent_id != null ? Number(o.cat.parent_id) : 0;
+  const hit =
+    rows.find((x) => Number(x.category_id) === cid && x.account_id != null) ||
+    (pid ? rows.find((x) => Number(x.category_id) === pid && x.account_id != null) : null);
+  const gid = o.ie === '收入' ? o.defaults && o.defaults.income : o.defaults && o.defaults.expense;
+  const id = hit ? Number(hit.account_id) : gid != null ? Number(gid) : null;
+  if (id == null) return { id: null, name: '', isDefault: true };
+  const nameOf = new Map((Array.isArray(o.names) ? o.names : []).map((n) => [Number(n.id), n]));
+  const n = nameOf.get(id);
+  return {
+    id,
+    name: n ? (Number(n.special) === 1 ? '空账户' : String(n.name || '')) : '',
+    isDefault: true,
+  };
 }
 
 /**
@@ -542,7 +617,12 @@ function capNote(v) {
  *      而不是「他提议了一笔非法的」）。
  *      ⚠️ 日期：给了合法 `YYYY-MM-DD` 就用那一天的 **12:00:00**（记账的 `at` 带时刻，
  *      而模型只知道「哪一天」）；没给就用**服务端此刻**（`ctx.now`）—— 猜测一律以服务端时钟为准。
- *      ⚠️ 分类 / 账户解析不到 ⇒ 留空 ＋ 把原话带回卡上（见本段开头的说明）。
+ *      ⭐⭐ 0.9.7（老大：「卡片的分类和二级分类、账户都要选择真实存在的」）：
+ *      · 分类认 `category`（一级名或 `一级-二级` 全称）＋ `subcategory`（二级名）；
+ *        **只看同一收支侧**、全称精确或叶子名唯一命中；撞上多个同名二级 ⇒ 卡上写明候选全称；
+ *      · 账户：模型点了名就按名字找（找不到就把原话带回卡上）；**没点名 ⇒ 用它设置的默认账户**
+ *        （类别默认 → 父级默认 → 全局默认 → 空账户，见 `pickDefaultAccountOf()`）。
+ *        ⇒ 卡上的 `account_id` 因此**永远是真实存在的账户**（或空账户），⛔ 不会是一个没关联的洞。
  *
  * @param {{store: Object, uid: number, now: Date}} ctx - 执行上下文
  * @param {{entries: Array.<Object>}} args - 归一后的入参
@@ -563,31 +643,51 @@ function proposeEntry(ctx, args, today) {
   const now = ctx.now instanceof Date ? ctx.now : new Date();
   const p2 = (n) => String(n).padStart(2, '0');
   const nowTime = `${p2(now.getHours())}:${p2(now.getMinutes())}:${p2(now.getSeconds())}`;
-  const cats = ctx.store.ledgerCategories(ctx.uid);
-  const accts = ctx.store.ledgerAccounts(ctx.uid);
+  const cats = ctx.store.ledgerCategories(ctx.uid) || [];
+  const byId = new Map(cats.map((c) => [Number(c.id), c]));
+  const accts = ctx.store.ledgerAccounts(ctx.uid) || [];
+  const names = ctx.store.ledgerAccountNames(ctx.uid) || [];
+  const defaults = ctx.store.ledgerDefaults(ctx.uid) || {};
   const items = [];
   for (const raw of src.entries) {
     const it = raw && typeof raw === 'object' ? raw : {};
     const fen = yuanToFen(it.amount);
     if (fen == null) throw httpError(400, '每一笔账都要有金额（单位元，例如 35 或 35.5）');
     if (fen <= 0) throw httpError(400, '每一笔账的金额要大于 0');
+    const ie = String(it.ie == null ? '' : it.ie).trim() === '收入' ? '收入' : '支出';
     const date = String(it.at == null ? '' : it.at).trim();
     const at = /^\d{4}-\d{2}-\d{2}$/.test(date) ? `${date} 12:00:00` : `${String(today || '')} ${nowTime}`;
-    const c = findCategoryOf(cats, it.category);
-    const a = findAccountOf(accts, it.account);
+    // ⭐ 0.9.7：一级 + 二级分别收 —— 拼成全称再解析（二级**允许重名**，只有全称能唯一定位）
+    const parentWant = String(it.category == null ? '' : it.category).trim();
+    const subWant = String(it.subcategory == null ? '' : it.subcategory).trim();
+    const want = subWant ? `${parentWant}-${subWant}` : parentWant;
+    const accountWantRaw = String(it.account == null ? '' : it.account).trim();
+    const hitCat = findCategoryOf(cats, want, ie);
+    const c = hitCat.cat;
+    const a = findAccountOf(accts, accountWantRaw);
+    const acc = a
+      ? { id: Number(a.id), name: String(a.name || ''), isDefault: false }
+      : pickDefaultAccountOf({ names, defaults, cat: c, ie });
+    const why = hitCat.why;
     items.push({
       at,
-      ie: String(it.ie == null ? '' : it.ie).trim() === '收入' ? '收入' : '支出',
+      ie,
       amount_fen: fen,
       // ⚠️ 卡上直接显示的那一份（⛔ 不让前端自己除 100 —— 前端不算钱）
       amount: (fen / 100).toFixed(2),
       category_id: c ? Number(c.id) : null,
+      // 卡上要显示**真实存在的那一行**的名字：二级带上一级（`餐饮 / 其它`），一级就只显示自己
       category_name: c ? String(c.name || '') : '',
-      // 没解析到时把模型的原话带回去（卡上写「AI 说的『餐饮』本机没有」）—— 空串 = 解析到了 / 没说
-      category_want: c ? '' : String(it.category == null ? '' : it.category).trim().slice(0, 30),
-      account_id: a ? Number(a.id) : null,
-      account_name: a ? String(a.name || '') : '',
-      account_want: a ? '' : String(it.account == null ? '' : it.account).trim().slice(0, 30),
+      category_parent: c && c.parent_id != null ? String(((byId.get(Number(c.parent_id)) || {}).name) || '') : '',
+      category_full: c ? fullOf(c, byId) : '',
+      // 没解析到时把模型的原话带回去（卡上写「AI 说的『餐饮/其他』本机没有」）—— 空串 = 解析到了 / 没说
+      category_want: c ? '' : want.slice(0, 40),
+      category_why: c ? '' : why,
+      // ⚠️ 账户**永远是一个真账户**：没点名 ⇒ 默认账户；连默认都没有 ⇒ 空账户（`id` 为 null 时落库会兜到它）
+      account_id: acc.id,
+      account_name: acc.name,
+      account_default: !!acc.isDefault,
+      account_want: a || !accountWantRaw ? '' : accountWantRaw.slice(0, 30),
       note: capNote(it.note),
     });
   }
@@ -949,9 +1049,10 @@ function proposeEvents(ctx, args) {
 const PROPOSE_EXEC = {
   // 只需要「列项目」—— 用来核归属是不是自己的（不写任何表）
   'tasks.propose_create': { need: ['listProjects'], run: (ctx, args) => proposeCreate(ctx, args) },
-  // ⚠️ 记账要「列分类」与「列账户」两条 —— 都是**只读**，用来把名字解析成 id（⛔ 不写任何表）
+  // ⚠️ 记账要「列分类」「列账户」「默认账户」「账户名表」四条 —— 都是**只读**，
+  //    用来把名字解析成 id、并在模型没点名账户时给出用户设的默认账户（⛔ 不写任何表）
   'ledger.propose_entry': {
-    need: ['ledgerCategories', 'ledgerAccounts'],
+    need: ['ledgerCategories', 'ledgerAccounts', 'ledgerAccountNames', 'ledgerDefaults'],
     run: (ctx, args, today) => proposeEntry(ctx, args, today),
   },
   // ⚠️ 0.8.5 那三条：只有收藏**要读一次列表**（为了标出「已经收藏过了」）；随手记与硬件

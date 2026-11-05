@@ -1,5 +1,7 @@
 /**
- * 飞牛 WS 登录的密码学（移植自 `Project/Android/core/connection/FnCrypto.kt`）。
+ * ZXDesk工作台 Windows 客户端
+ * 文件：crypto.js
+ * 职责：飞牛 WS 登录的密码学（移植自 `Project/Android/core/connection/FnCrypto.kt`）
  *
  * ⚠️ 与网上社区文档不一致的两处（以实测为准，⛔ 别改回去）：
  * 1. **AES-256，不是 128** —— key 是 32 个 `[0-9a-zA-Z]` 字符，按 UTF-8 字节当 key；
@@ -13,8 +15,20 @@ const ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
 export const KEY_LENGTH = 32;
 export const IV_LENGTH = 16;
 
+/**
+ * 均匀取 `[0,1)` 的随机数（默认源）。
+ *
+ * ⚠️ 不用 `Math.random`：V8 的 Math.random 是 xorshift128+，状态可被反推 ——
+ * 而这里生成的是**一次登录的 AES 会话密钥**（它加密的是账号密码信封）。
+ * 虽然密钥还会用 RSA 包一层，但「密钥可预测」等于把机密性押在实现细节上；
+ * Android 侧用的是 SecureRandom，两端对齐。
+ */
+function secureRandom() {
+  return crypto.randomBytes(4).readUInt32BE(0) / 0x100000000;
+}
+
 /** 32 个字母数字（照 fnOS 前端 bundle：62 字符表随机取 32 位）。 */
-export function randomAesKey(random = Math.random) {
+export function randomAesKey(random = secureRandom) {
   let out = '';
   for (let i = 0; i < KEY_LENGTH; i += 1) out += ALPHABET[Math.floor(random() * ALPHABET.length)] ?? '0';
   return out;
