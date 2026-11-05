@@ -202,6 +202,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun state(): OnboardingState? = (_screen.value as? AppScreen.Flow)?.state
 
+    /**
+     * 取 CookieManager 里 [entry] 当前的 Cookie（`name=value; name2=value2`）。
+     *
+     * 给 WS 握手用：访问码那屏是 WebView 种下来的凭据，`core/connection` 是纯 JVM 模块拿不到
+     * `android.webkit.CookieManager`，只能在这里注入。
+     */
+    private fun cookiesFor(entry: Entry): String? = runCatching {
+        android.webkit.CookieManager.getInstance()
+            .getCookie(entry.baseUrl)
+            ?.takeIf { it.isNotBlank() }
+    }.getOrNull()
+
     private fun update(block: (OnboardingState) -> OnboardingState) {
         val current = _screen.value as? AppScreen.Flow ?: return
         _screen.value = AppScreen.Flow(block(current.state))
@@ -338,6 +350,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 user = s.user.trim(),
                 password = s.password,
                 deviceId = prefs.deviceId(),
+                // 访问码那步种进 CookieManager 的凭据要随 WS 握手一起带上，否则下次还是 401
+                cookieProvider = { cookiesFor(entry) },
             )
             flow?.close()
             flow = running
@@ -350,8 +364,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: FnLoginException) {
-                // 网关连不上（局域网 64999 多半是自签证书 ⇒ 握手就失败）：按口径回落 8990 直连
-                if (fallback != null && e.step == FnLoginStep.WS_CONNECT) {
+                // 网关开了「访问码」：WS 握手被 401 + x-trim-safe-code-challenge 拦下。
+                // ⛔ 别回落直连、也别当普通失败 —— 用户需要在第 ④ 步的 WebView 里输一次访问码，
+                // 让 CookieManager 拿到凭据；输完再回来，这条 WS 才连得上。
+                if (e.accessCodeRequired) {
+                    running.close()
+                    flow = null
+                    update {
+                        it.copy(
+                            busy = false,
+                            progress = null,
+                            error = null,
+                            notice = "NAS 开启了访问码，请先在下面的页面输入一次访问码",
+                            step = OnboardingStep.ACCESS_CODE,
+                            accessEntry = entry,
+                            twoFactorDone = true,
+                        )
+                    }
+                } else if (fallback != null && e.step == FnLoginStep.WS_CONNECT) {
                     running.close()
                     flow = null
                     pendingEntry = null
@@ -597,10 +627,31 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 第 ④ 步「已输入完成」/ 自动检测到进入应用。 */
+    /**
+     * 第 ④ 步「已输入完成」/ 自动检测到进入应用。
+     *
+     * 两种情况要分开：
+     * ① 已经有原生会话（[Entry.fnSession] 非空，走的是 2FA 之后的正常流程）⇒ 直接进应用；
+     * ② **没有会话**（这次是 WS 握手被访问码拦下才来的）⇒ 访问码已经存进 CookieManager 了，
+     *    必须**重跑一遍连接**把 `user.login` 补上，否则进 WebView 只会看到飞牛门户，ZXDesk 还是没登录。
+     */
     fun onAccessCodeDone() {
         val entry = state()?.accessEntry ?: return
-        enterApp(entry)
+        if (entry.fnSession != null) {
+            enterApp(entry)
+            return
+        }
+        // 无会话：把这一步拨回 CONNECT 再连一次（地址/账号/密码都还在 OnboardingState 里）
+        update {
+            it.copy(
+                step = OnboardingStep.CONNECT,
+                accessEntry = null,
+                notice = "访问码已提交，正在重新连接…",
+                error = null,
+                failure = null,
+            )
+        }
+        connect()
     }
 
     /** 第 ⑤ 步发现页面又是访问码页：退回第 ④ 步，别让用户在空白页里猜。 */

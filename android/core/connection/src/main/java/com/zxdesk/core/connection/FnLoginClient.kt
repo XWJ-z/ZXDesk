@@ -40,6 +40,11 @@ class FnLoginException(
     override val message: String,
     val detail: String? = null,
     cause: Throwable? = null,
+    /**
+     * 网关开了「访问码」，WS 握手被 401 + `x-trim-safe-code-challenge: 1` 拦下。
+     * 上层据此把用户送去 [FnLoginStep.WS_CONNECT] 之外的「输入访问码」那一屏，⛔ 别当成普通连接失败。
+     */
+    val accessCodeRequired: Boolean = false,
 ) : Exception(message, cause)
 
 /** 服务器要求两步验证时带回来的信息（`login` 只给 accessToken，不给 token）。 */
@@ -129,9 +134,17 @@ class FnLoginFlow(
     private val timeoutMs: Long = 20_000,
     /** 上次登录留下的 `secret` —— 只给「用 longToken 免密登录」用，那条请求要 HMAC 签名。 */
     savedSecret: String? = null,
+    /**
+     * 每次建 WS 之前取一次额外 Cookie（`name=value; name2=value2`）。
+     *
+     * 主要用途：网关开了「访问码」时，用户在第 ④ 步的 WebView 里输完码，凭据落在 CookieManager 里；
+     * 再次握手必须把它带上，否则还是 401。`core/connection` 是纯 JVM 模块，⛔ 不能直接引
+     * `android.webkit.CookieManager`，所以由上层（app）注入。
+     */
+    private val cookieProvider: (() -> String?)? = null,
 ) {
     private val host = baseUrl.removePrefix("https://").removePrefix("http://").trimEnd('/')
-    private var rpc = WsRpc(wsUrl(), if (relay) "mode=relay" else null, timeoutMs)
+    private var rpc = WsRpc(wsUrl(), if (relay) "mode=relay" else null, timeoutMs, cookieProvider)
     private var reqSeq = 0
     private var si: String? = null
     /** `getRSAPub` 拿到的公钥 —— 2FA 的 loginVerify 也要用它加密（bundle 的 wHe 名单里有它）。 */
@@ -623,8 +636,11 @@ internal class WsClosedException(message: String) : Exception(message)
 /** 极薄的 WS RPC：顺序发、按 reqid 收；连接可重开。 */
 internal class WsRpc(
     private val url: String,
+    /** 固定的 Cookie（中继模式的 `mode=relay`）；与 [cookieProvider] 的结果拼接后一起发。 */
     private val cookie: String?,
     private val timeoutMs: Long,
+    /** 每次建连接前现取一次 Cookie（见 [FnLoginFlow.cookieProvider]）；null 表示没有。 */
+    private val cookieProvider: (() -> String?)? = null,
 ) {
     private var client = buildClient()
     private var messages = Channel<String>(Channel.UNLIMITED)
@@ -666,7 +682,12 @@ internal class WsRpc(
         messages = channel
         suspendCancellableCoroutine<Unit> { cont ->
             val builder = Request.Builder().url(url)
-            if (cookie != null) builder.header("Cookie", cookie)
+            // ⚠️ 每次握手都要现取：用户可能刚在访问码那屏把凭据种进 CookieManager
+            val mergedCookie = listOfNotNull(cookie, cookieProvider?.invoke())
+                .map { it.trim().removeSuffix(";") }
+                .filter { it.isNotEmpty() }
+                .joinToString("; ")
+            if (mergedCookie.isNotEmpty()) builder.header("Cookie", mergedCookie)
             socket = client.newWebSocket(
                 builder.build(),
                 object : WebSocketListener() {
@@ -681,6 +702,19 @@ internal class WsRpc(
 
                     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                         connected = false
+                        // 网关开了「访问码」时，握手会被 nginx 直接 401 —— Upgrade 请求拿不到 HTML 挑战页，
+                        // 响应头 x-trim-safe-code-challenge: 1 是唯一可靠判据（正文为空，⛔ 别靠 message 猜）。
+                        if (response?.code == 401 && response.header(SAFE_CODE_HEADER) == "1") {
+                            val e = FnLoginException(
+                                step = FnLoginStep.WS_CONNECT,
+                                message = "NAS 开启了访问码，需要先输入一次访问码",
+                                detail = "HTTP 401，响应头 $SAFE_CODE_HEADER: 1\n$url",
+                                accessCodeRequired = true,
+                            )
+                            if (cont.isActive) cont.resumeWithException(e)
+                            channel.close(e)
+                            return
+                        }
                         if (cont.isActive) cont.resumeWithException(t)
                         channel.close(t)
                     }
@@ -730,5 +764,10 @@ internal class WsRpc(
     fun close() {
         runCatching { socket?.close(1000, null) }
         runCatching { client.dispatcher.executorService.shutdown() }
+    }
+
+    private companion object {
+        /** 飞牛 nginx 给「被访问码拦下」的响应统一加这个头（见 `/usr/trim/nginx/conf/conf.d/safe_code_access.conf`）。 */
+        const val SAFE_CODE_HEADER = "x-trim-safe-code-challenge"
     }
 }
