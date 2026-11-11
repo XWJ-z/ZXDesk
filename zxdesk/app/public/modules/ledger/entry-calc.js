@@ -2,7 +2,8 @@
  * modules/ledger/entry-calc.js —— 记账 2 期「流水」那一套**两端共用**的纯展示函数（0.8.1）
  *
  * 功能：· 取数：`ENTRY_PAGE_SIZE` / `CURSOR_SEP` / `buildCursor()` / `parseCursor()`（按月 ＋ **游标**，C-15 / C-16）；
- *      · 列表：`groupByDay()`（按天分组）、`monthOptions()`（月份下拉的选项）；
+ *      · 列表：`groupByDay()`（按天分组）、`monthOptions()` / `monthOptionsAll()`（月份下拉的选项）、
+ *        `MONTHS_ALL` / `pickerYears()`（「选择月份」那两列的候选：**月恒 12 项、年连续区间**）；
  *      · 文案：`CAT_UNCLASSIFIED` / `CAT_OTHER` / `catName()`（「未分类」与「其它」**必须分得开**，C-32）、
  *        `refundNoteOf()` / `isRefund()` / `entryTitle()`（原消费行上的「已退款」小字与行标题，C-24）；
  *      · 颜色：`changeTone()` / `TONE_VARS` / `TONE_COLORS` / `toneStyle()`（账户详情三类变动的**三档颜色**，C-21）；
@@ -28,7 +29,7 @@
  *
  * @author zx
  * @date   2026-09-22
- * @since 0.8.9
+ * @since 0.9.7
  * 相关：docs/公共/开发方案/21-记账2期-记账.md、docs/公共/架构文档/23-记账.md、./calc.js
  */
 
@@ -176,6 +177,83 @@ export function monthOptions(months, todayMonth) {
     if (key) rows.push({ date: `${key}-01` });
   }
   return monthOptionsOf(rows, todayMonth);
+}
+
+/**
+ * 月份选择器里**所有**的月（`1~12`）。
+ *
+ * 说明：⭐⭐ 「选择月份」这个动作的语义是**去哪个月看**，不是「去有数据的那个月看」——
+ *      只有有记录的月可选时，用户想翻到上个月（那个月没记账）就翻不到，而界面**不报错**，
+ *      看起来就是"选择器坏了"（2026-11-10 用户反馈「选择不了月份」）。
+ *      ⇒ 月份列**恒为 12 项**，与有没有数据无关；挑到空月看到的是明细屏那句「这个月一笔都没有」，
+ *      那是一句**如实的空态**，不是 bug。
+ *      ⚠️ 这条口径**推翻了**方案 §7.3.1 原话「⛔ 绝不凭空铺一整年空月份给用户挑」——
+ *      原话担心的是「挑到空白页他不知道那不是 bug」，结论被实际使用推翻（见回单 §二·补9）。
+ * @type {Array.<number>}
+ * @since 0.9.8
+ */
+export const MONTHS_ALL = Object.freeze(Array.from({ length: 12 }, (_v, i) => i + 1));
+
+/**
+ * 功能：月份选择器里「年」那一列 —— 已知的年 ∪ 今天那一年，再**向前后各补若干年**，取**连续区间**。
+ *
+ * 说明：⭐⭐ 为什么不是「只列有记录的年」：同一个道理（见 `MONTHS_ALL`）—— 只列有数据的那几年，
+ *      用户想翻到「去年这个时候」而去年一整年没记账，就翻不过去。
+ *      为什么不是「今年 ±N 年」一刀切：从三方导入进来的老账（2023 / 2024 年）会落在区间外，
+ *      那样"导入的数据反而选不到"。⇒ 取「已知年 ∪ 今年」的最小 / 最大值，再各向外补 `back` / `ahead` 年，
+ *      **中间不留缺口**（连续），这样既覆盖导入的老账，也覆盖"没记账的那几年"。
+ *      ⚠️ 总跨度封顶 `MAX_SPAN` 年：真出现一个 1998 年的脏数据，也不至于铺出四十年的下拉。
+ * @param {Array.<(number|string)>} knownYears - 已知的年（服务端期间清单 / 本次会话访问过）
+ * @param {string} todayMonth - 服务端今天（`'YYYY-MM-DD'` / `'YYYY-MM'`）
+ * @param {{back?: number, ahead?: number}} [opts] - 向前 / 向后各补几年（默认 5 / 1）
+ * @returns {Array.<number>} 年份（**升序**、连续）
+ * @since 0.9.8
+ */
+export function pickerYears(knownYears, todayMonth, opts) {
+  const o = opts || {};
+  const back = Number.isFinite(Number(o.back)) ? Math.max(0, Math.trunc(Number(o.back))) : 5;
+  const ahead = Number.isFinite(Number(o.ahead)) ? Math.max(0, Math.trunc(Number(o.ahead))) : 1;
+  const set = new Set();
+  for (const y of Array.isArray(knownYears) ? knownYears : []) {
+    const n = Number(String(y).slice(0, 4));
+    if (n >= 1900 && n <= 2999) set.add(n);
+  }
+  const t = Number(String(todayMonth || '').slice(0, 4));
+  if (t >= 1900 && t <= 2999) set.add(t);
+  if (!set.size) return [];
+  const lo = Math.min(...set) - back;
+  const hi = Math.max(...set) + ahead;
+  const MAX_SPAN = 30;
+  const from = hi - lo + 1 > MAX_SPAN ? hi - MAX_SPAN + 1 : lo;
+  const out = [];
+  for (let y = from; y <= hi; y += 1) out.push(y);
+  return out;
+}
+
+/**
+ * 功能：某个年份区间下的**全部月份键**（`YYYY-MM`，倒序）—— 账户详情的月份下拉用它。
+ *
+ * 说明：⭐ 与 `monthOptions()` 的区别只有一条：`monthOptions()` 只给**有记录**的月（＋今天那个月），
+ *      本函数把出现的每一年都**铺满 12 个月**（年份集合仍由调用方的数据决定，⛔ 不凭空扩年 ——
+ *      那里是一颗纯月份下拉，扩年就等于把「年」也塞进同一个控件里）。
+ *      ⚠️ 判据仍复用 `monthOptions()` 的归一与排序，⛔ 不另写一套解析。
+ * @param {Array.<(string|Object)>} months - 月份键 / 流水行（原样交给 `monthOptions()`）
+ * @param {string} todayMonth - 服务端今天
+ * @returns {Array.<string>} 月份键（`YYYY-MM`，**倒序**、每一年 12 项）
+ * @since 0.9.8
+ */
+export function monthOptionsAll(months, todayMonth) {
+  const keys = monthOptions(months, todayMonth);
+  const years = new Set();
+  for (const k of keys) {
+    const y = Number(String(k).slice(0, 4));
+    if (y >= 1900 && y <= 2999) years.add(y);
+  }
+  const out = [];
+  for (const y of [...years].sort((a, b) => b - a)) {
+    for (let m = 12; m >= 1; m -= 1) out.push(`${y}-${String(m).padStart(2, '0')}`);
+  }
+  return out;
 }
 
 /**

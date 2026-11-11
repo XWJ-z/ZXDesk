@@ -1,0 +1,14 @@
+{
+  "name": "lab",
+  "title": "zx实验室",
+  "icon": "🧪",
+  "order": 95,
+  "defaultEnabled": true,
+  "switchField": "hide_lab",
+  "apiPrefix": [],
+  "tables": [],
+  "depends": [],
+  "archDoc": "28-实验室.md",
+  "test": "lab.test.js",
+  "database": "lab"
+}

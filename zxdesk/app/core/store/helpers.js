@@ -18,7 +18,7 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.21
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md
  */
 
@@ -158,10 +158,19 @@ function sanitizeUser(u) {
     // ⭐ 行程的显示开关（0.8.6， 第 5 处）：同上，缺列按「显示入口」处理 ——
     //    它是设置页开关与侧边栏 / 更多页显隐的共同判据，缺列绝不能让功能凭空消失。
     hide_trip: u.hide_trip ? 1 : 0,
+    // ⭐ zx 实验室的显示开关：同上，缺列按「显示入口」处理 ——
+    //    它是设置页开关与侧栏 / 更多页显隐的共同判据，缺列绝不能让这一屏凭空消失。
+    //    ⚠️ 与其它 `hide_*` 的一处不同：它关掉的是**整个沙箱的入口**（里面的实验功能没有各自的开关）。
+    hide_lab: u.hide_lab ? 1 : 0,
     // ⭐ 0.8.21：记账里那颗眼睛的**初值**（1 = 进来就把金额糊成圆点）。
     //    ⚠️ 它不是「关掉某个功能」那十一个开关之一 —— 缺列按 0（不隐藏）处理，
     //    表现必须是「照常显示金额」，⛔ 绝不能是「金额全糊着、用户不知道为什么」。
     hide_ledger_amount: u.hide_ledger_amount ? 1 : 0,
+    // ⭐ 这个账号**是否已同意「zx 实验室使用须知」**（首次进入要弹知情协议、勾选过才能点同意）。
+    //    ⚠️ 与上面那批 `hide_*` 不同：那不是开关，而是「读过并同意了」这件事本身 ——
+    //    缺失 / 旧库补列一律按 **0（还没同意）** 处理：宁可多问一次，也不能默认替用户答应。
+    //    ⚠️ 它**不进**成员列表（`listUsers()` 有白名单，见 `methods/users.js`）。
+    lab_agreed: u.lab_agreed ? 1 : 0,
     // ⭐ 0.8.5 导航排序（0.8.5）：两列的**语义与「NULL 与空串必须能区分」那条口径**
     //    写在 `schema/core.js` 的建表语句里。⚠️ 这里**原样透出、一个字都不解析**：
     //    · `null` = 从没排过（老库补列 / 新账号） ⇒ 前端按清单 `order` 走默认；
@@ -271,6 +280,33 @@ function splitTerms(q) {
     .filter(Boolean);
 }
 
+/**
+ * 功能：判断一个值是不是**「去空白后为空」** —— 密码库 / 加密信息的「空判据」唯一实现。
+ *
+ * 说明：⭐⭐ 0.9.8 修的就是这条缝：三处判据从前写的都是 `!fields.password`，而 `' '` 是**真值**
+ *      ⇒ 「只敲一个空格」能一路存进密码库，列表里看着是一条正常记录、用的时候复制出一个空串
+ *      （实测：`{"password":" "}` → 201）。
+ *      ⚠️⭐ **命中范围刻意包含三种「看不见的字符」**：全角空格（`\u3000`，中文输入法最容易带进来）、
+ *      零宽空格（`\u200B`，从网页 / Word 复制过来常见）、BOM（`\uFEFF`）。
+ *      它们肉眼与空串没有区别，而 `String.trim()` 去不掉 `\u200B` / `\uFEFF`
+ *      ⇒ ⛔ 别用 `!v.trim()` 代替本函数。
+ *      ⚠️⚠️ **它只判「空不空」，不负责改写要落库的值**：`" a b "` 必须**原样**存下去 ——
+ *      密码里的前后空格可能就是账号的一部分，trim 掉会让人在别处登录不上（方案 §一·3）。
+ *
+ * ⭐ 为什么函数体住在这里而不是 `core/validate.js`（那里**转出**同一个函数）：
+ *    `modules/vault/store.js` 要用它（列表里算 `blank_password`），而那个文件在
+ *    `storage.js → store/index.js → modules/*` 的加载链上；`validate.js` 反过来 require
+ *    `core/context.js`（为了 `store`）⇒ 从模块里 require validate 会绕成环，
+ *    拿到的是一个还没赋值的空 `module.exports`（`isBlankPassword` 变成 undefined，
+ *    而且只在启动期炸一次，极难查）。本文件是**零 require 的叶子**，谁都能安全地取它。
+ *
+ * @param {*} v - 待判的值（null / undefined / 数字都安全）
+ * @returns {boolean} 去空白后为空则 true
+ */
+function isBlankPassword(v) {
+  return /^[\s\u200B\uFEFF]*$/.test(String(v == null ? '' : v));
+}
+
 module.exports = {
   today,
   nowStamp,
@@ -286,4 +322,6 @@ module.exports = {
   notFoundErr,
   badRequest,
   splitTerms,
+  // ⭐ 0.9.8：密码库 / 加密信息的「空判据」（`validate.js` 转出同一个函数）
+  isBlankPassword,
 };

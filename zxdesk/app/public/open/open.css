@@ -1,0 +1,324 @@
+/* open.css —— ZXDesk 加密文件阅读器（0.9.8 第 6 轮）
+ *
+ * 【这是什么】文件管理器里双击 `.zxdesk` 打开的那一页：确认文件 → 输主密码 → 预览 / 下载明文。
+ *
+ * 【两条设计口径】
+ *   ① **只吃既有令牌**：颜色全部来自 `core/tokens.css` 的 `--zx-*`，本文件**不自造调色板**
+ *      （铁律：前端不引外部 CDN / 不自造色板）。这里的 `--op-*` 只是版式尺寸，不是颜色。
+ *   ② **电脑 / 手机同一页**：靠 `min-width` 断点收窄内边距与字号，不做两套版式 ——
+ *      这一页只有一屏内容，为它维护两套布局不值。
+ */
+
+:root {
+  --op-radius: 14px;
+  --op-gap: 14px;
+  --op-pad: 20px;
+  --op-max: 760px;
+  --op-line: #e3e7ef;
+  --op-surface: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--zx-bg);
+  color: var(--zx-ink);
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    'PingFang SC',
+    'Hiragino Sans GB',
+    'Microsoft YaHei',
+    sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.op-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  max-width: var(--op-max);
+  margin: 0 auto;
+  padding: 0 var(--op-pad) 24px;
+}
+
+/* ---------- 顶栏 ---------- */
+.op-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 2px 12px;
+}
+
+.op-head {
+  min-width: 0;
+}
+
+.op-name {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.op-meta {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--zx-ink-2);
+}
+
+.op-state {
+  flex: none;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #eef1f7;
+  color: var(--zx-ink-2);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.op-state.ok {
+  background: #e8f8f1;
+  color: #0b7a55;
+}
+
+.op-state.bad {
+  background: var(--zx-danger-soft);
+  color: var(--zx-danger-ink);
+}
+
+/* ---------- 主区 ---------- */
+.op-main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--op-gap);
+}
+
+.op-card {
+  background: var(--op-surface);
+  border: 1px solid var(--op-line);
+  border-radius: var(--op-radius);
+  padding: 18px;
+}
+
+.op-text {
+  margin: 0 0 12px;
+  color: var(--zx-ink-2);
+  font-size: 13.5px;
+}
+
+.op-text b {
+  color: var(--zx-ink);
+}
+
+/* ⭐ 0.9.8 第 7 轮：「去工作台解锁」那一句是**补充说明**，比正文轻一档（⛔ 别抢主提示的视线） */
+.op-sub {
+  display: block;
+  margin-top: 8px;
+  color: var(--zx-ink-2);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+/* ⭐ 0.9.8 第 7 轮：钥匙识别结果（账号 / 编号 / 导出日期 ＋「本机已有」/「可能打不开」）。
+   浅绿底 ＝ 识别成功；`op-warnline` 那一行换成深黄字 —— 颜色只做提示，文字仍是第一识别。 */
+.op-keyinfo {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--zx-ok-soft);
+  color: var(--zx-ok-ink);
+  font-size: 12.5px;
+  line-height: 1.7;
+  word-break: break-all;
+}
+
+.op-warnline {
+  color: var(--zx-warn-ink);
+}
+
+.op-field {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.op-field > span {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  color: var(--zx-ink-2);
+}
+
+.op-field input,
+.op-field select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--op-line);
+  border-radius: 10px;
+  background: #fbfcfe;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+}
+
+.op-field input:focus,
+.op-field select:focus {
+  outline: 2px solid var(--zx-brand);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+.op-btn {
+  appearance: none;
+  border: 1px solid var(--op-line);
+  background: #fff;
+  color: var(--zx-ink);
+  padding: 9px 16px;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.op-btn:hover {
+  background: #f5f7fb;
+}
+
+.op-btn.primary {
+  background: var(--zx-brand);
+  border-color: var(--zx-brand);
+  color: #fff;
+}
+
+.op-btn.primary:hover {
+  background: var(--zx-brand-2);
+  border-color: var(--zx-brand-2);
+}
+
+.op-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.op-btn.danger {
+  color: var(--zx-danger-ink);
+  border-color: var(--zx-danger-line);
+  background: var(--zx-danger-soft);
+}
+
+.op-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.op-err {
+  margin: 10px 0 0;
+  color: var(--zx-danger-ink);
+  background: var(--zx-danger-soft);
+  border: 1px solid var(--zx-danger-line);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+/* ---------- 预览 ---------- */
+.op-view {
+  background: #0f1116;
+  border-radius: var(--op-radius);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  max-height: 72vh;
+}
+
+.op-view img,
+.op-view video {
+  display: block;
+  max-width: 100%;
+  max-height: 72vh;
+  object-fit: contain;
+}
+
+.op-view audio {
+  width: min(100%, 520px);
+  margin: 24px;
+}
+
+.op-view iframe {
+  width: 100%;
+  height: 72vh;
+  border: 0;
+  background: #fff;
+}
+
+.op-view .op-plain {
+  color: #c9d1e0;
+  font-size: 13.5px;
+  padding: 28px 20px;
+  text-align: center;
+}
+
+/* ---------- 底栏 / 提示 ---------- */
+.op-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 16px;
+}
+
+.op-tip {
+  margin: 14px 0 0;
+  font-size: 12.5px;
+  color: var(--zx-ink-2);
+  text-align: center;
+}
+
+/* ---------- 窄屏（手机） ---------- */
+@media (max-width: 560px) {
+  :root {
+    --op-pad: 14px;
+    --op-gap: 12px;
+  }
+
+  .op-bar {
+    padding: 14px 0 10px;
+  }
+
+  .op-name {
+    font-size: 16px;
+  }
+
+  .op-card {
+    padding: 14px;
+  }
+
+  .op-btn {
+    flex: 1 1 auto;
+    min-height: 42px;
+  }
+
+  .op-view {
+    min-height: 180px;
+  }
+}

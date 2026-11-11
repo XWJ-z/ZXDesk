@@ -23,7 +23,7 @@
  *
  * @author zx
  * @date   2026-09-13
- * @since 0.5.3
+ * @since 0.9.7
  * 相关：docs/公共/开发方案/07-统一网关入口.md、docs/公共/架构文档/12-部署与安全清单.md
  */
 'use strict';
@@ -95,10 +95,35 @@ function gatewaySlashRedirect(url) {
   return GATEWAY_PREFIX + '/' + (q < 0 ? '' : raw.slice(q));
 }
 
+/**
+ * 功能：从**网关注入的请求头**里读出当前飞牛用户（没走网关时返回 null）。
+ *
+ * 说明：⭐⭐ 官方红线：「不要信任客户端传入的用户 ID，请使用网关鉴权 Header」——
+ *      所以 uid 只认 `X-Trim-Userid`，⛔ 不接受查询串 / 请求体里的任何 uid。
+ *      ⚠️ 局域网直连、Windows / 安卓独立客户端都不经过网关 ⇒ 这里恒为 null。
+ *      那些场景**不报错**，只是「不能改授权」（授权状态已经落在库和服务端，附件照用）。
+ * @param {import('node:http').IncomingMessage} req - 请求
+ * @returns {?{uid: number, username: string, isAdmin: boolean}} 用户；没有网关身份时为 null
+ */
+function gatewayUser(req) {
+  const h = (req && req.headers) || {};
+  const raw = h['x-trim-userid'];
+  if (raw === undefined || raw === null || raw === '') return null;
+  const uid = Number(raw);
+  if (!Number.isInteger(uid) || uid < 0) return null;
+  const admin = String(h['x-trim-isadmin'] || '').toLowerCase();
+  return {
+    uid,
+    username: String(h['x-trim-username'] || ''),
+    isAdmin: admin === '1' || admin === 'true',
+  };
+}
+
 module.exports = {
   GATEWAY_PREFIX,
   normalizeGatewayPrefix,
   stripGatewayPrefix,
   localUrl,
   gatewaySlashRedirect,
+  gatewayUser,
 };

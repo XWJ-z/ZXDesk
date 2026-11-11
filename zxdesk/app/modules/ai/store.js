@@ -668,7 +668,8 @@ const MEMORY_COLS = { content: 'content', label: 'label' };
  *
  * 说明：⭐ 字段口径：
  *      · `keySet` = key 密文三列**齐全**（不是「能解开」—— 解开只发生在出网那一刻）；
- *      · `configured` = base_url + model + key 三者齐备（「可以发请求了」）；
+ *      · `keyOptional` = **这个地址可以不填密钥**（本机 / 私网 ⇒ 本地模型，见下方 ⭐ 0.9.8）；
+ *      · `configured` = base_url + model 齐备，且「有 key **或** 密钥本来就可不填」（「可以发请求了」）；
  *      · `enabled` 是用户自己的总开关，与 `configured` 互相独立：
  *        开了但没配好 → 出网路径会明确报「请先到『AI 辅助任务』配置」；配好了但关着 → 一样明确报「已关闭」。
  *      ⭐ 2 期追加三个「上下文 / 记忆」字段，**缺值回落代码里的默认值**（20 / 真 / 20）——
@@ -686,18 +687,29 @@ function viewOf(row) {
   const baseUrl = String(r.base_url || '');
   const model = String(r.model || '');
   const keySet = !!(r.key_iv && r.key_cipher && r.key_tag);
+  // ⭐ 0.9.8（缺陷索引第 33 条 ②）：**本地模型的密钥是可以不填的** ——
+  //    ollama / LM Studio / vLLM 本机部署时本来就没有密钥（ollama 的文档写的是
+  //    「required but ignored」：客户端要带，服务端不看）。原来这里把 key 当成硬性必填，
+  //    用户只能瞎填一个占位串，界面上还没有一个字说明 ⇒ 看起来就是「本地模型用不了」。
+  //    判据只住 `isPrivateBaseUrl()` 一处（与 https 自签放行、内网开关用的是同一份）。
+  const keyOptional = client.isPrivateBaseUrl(baseUrl);
+  const allowPrivate = boolOr(r.allow_private, false);
   return {
-    configured: !!(baseUrl && model && keySet),
+    // ⚠️ `keyOptional` 还要求「内网开关已开」才算配置好：开关关着时出网会被拦（`PRIVATE_HINT`），
+    //    那时候说「已配置」就是在骗人 —— 用户的下一步是去开开关，不是去填密钥。
+    configured: !!(baseUrl && model && (keySet || (keyOptional && allowPrivate))),
     enabled: !!(r && r.enabled),
     baseUrl,
     model,
     keySet,
+    // ⚠️ 它只由**地址**决定，与填没填过无关（填过照样能改 / 能清）
+    keyOptional,
     ctxMaxTurns: intOr(r.ctx_max_turns, CTX_TURNS_DEFAULT),
     memEnabled: boolOr(r.mem_enabled, MEM_ENABLED_DEFAULT),
     memMax: intOr(r.mem_max, MEM_MAX_DEFAULT),
     // ⭐ 0.7.0（009 报告 R1）：**默认 false = 拦内网地址**。界面上的「允许访问内网地址」开关读它；
     //    真正的拦截在 `aiSaveConfig`（保存时）与 `aiOutboundConfig`（出网前）两处各判一次
-    allowPrivate: boolOr(r.allow_private, false),
+    allowPrivate,
     // ⭐ 3 期：工具授权四项 —— ⚠️ 这里回的是**存下来的偏好**（界面上要能看见开关
     //    原来的位置），**不是**「现在真的能用哪些」；「真的能用哪些」一律由 `aiAuthorizedTools()`
     //    按总开关收敛后给出（两者刻意分开：总开关关着时下面三个开关的形态仍然看得见，但一个都不生效）。
@@ -1006,21 +1018,22 @@ module.exports = {
   /**
    * 功能：取该账号的**出网配置**（地址 + 模型 + 解开的 key 明文）—— 全部出网路径唯一的取数口。
    *
-   * 说明：⭐ 三个前置条件在这里一次判清，缺哪个都抛**用户能照着做**的 400：
-   *      · 没填地址 / 模型 → 「请先到『AI 辅助任务』填好接口地址与模型名」；
-   *      · 没填 key → 「请先到『AI 辅助任务』填写 API Key」；
-   *      · `opts.needEnabled`（chat / extract 要，测连通不要 —— 配好先测通再打开是正常顺序）
-   *        且总开关是关的 → 「AI 辅助任务当前是关闭状态…」。
-   *      ⚠️ **key 明文只在这里被解出来**（`seal.openKey`），返回值只给**同一个进程内**的
-   *      出网客户端用 —— 绝不进任何 HTTP 响应、日志或错误信息（「绝不回显」红线的另一半）。
-   *      ⚠️ 解 key 失败（换实例 / 密文被篡改）= 明确报「请重新填写」，绝不静默当没配。
-   *
-   * @param {number} uid - 用户 id
-   * @param {Buffer} kek - 32 字节 KEK
-   * @param {{needEnabled?: boolean}} [opts] - 是否要求总开关已打开
-   * @returns {{baseUrl: string, model: string, key: string}} 出网配置
-   * @throws {Error} 前置条件不满足时抛 400
-   */
+ * 说明：⭐ 三个前置条件在这里一次判清，缺哪个都抛**用户能照着做**的 400：
+ *      · 没填地址 / 模型 → 「请先到『AI 辅助任务』填好接口地址与模型名」；
+ *      · 没填 key → ⭐ 0.9.8 起**只对公网地址算错**：本机 / 私网地址（本地模型）允许留空，
+ *        留空时 `key` 回空串，`requestUpstream` 相应地**不发 `Authorization` 头**（见下条说明）；
+ *      · `opts.needEnabled`（chat / extract 要，测连通不要 —— 配好先测通再打开是正常顺序）
+ *        且总开关是关的 → 「AI 辅助任务当前是关闭状态…」。
+ *      ⚠️ **key 明文只在这里被解出来**（`seal.openKey`），返回值只给**同一个进程内**的
+ *      出网客户端用 —— 绝不进任何 HTTP 响应、日志或错误信息（「绝不回显」红线的另一半）。
+ *      ⚠️ 解 key 失败（换实例 / 密文被篡改）= 明确报「请重新填写」，绝不静默当没配。
+ *
+ * @param {number} uid - 用户 id
+ * @param {Buffer} kek - 32 字节 KEK
+ * @param {{needEnabled?: boolean}} [opts] - 是否要求总开关已打开
+ * @returns {{baseUrl: string, model: string, key: string}} 出网配置（`key` 可为空串）
+ * @throws {Error} 前置条件不满足时抛 400
+ */
   aiOutboundConfig(uid, kek, opts) {
     const row = this._bk.getAiConfig(uid);
     if (!row || !String(row.base_url || '').trim() || !String(row.model || '').trim()) {
@@ -1036,15 +1049,31 @@ module.exports = {
     if (opts && opts.needEnabled && !row.enabled) {
       throw badRequest(`AI 辅助任务当前是关闭状态，请先到${client.CFG_AT}打开`);
     }
+    const baseUrl = String(row.base_url).trim();
+    const model = String(row.model).trim();
     const keySet = !!(row.key_iv && row.key_cipher && row.key_tag);
-    if (!keySet) throw badRequest(`请先到${client.CFG_AT}填写 API Key`);
+    // ⭐ 0.9.8（缺陷索引第 33 条 ②）：「本地模型也得随便填个密钥」这个坑在这一行结清。
+    //    · 有 key ⇒ 照旧解开（下面 try 里）；
+    //    · 没 key 且地址是**本机 / 私网** ⇒ 合法，`key` 回空串 —— 出网时不带 Authorization 头。
+    //      ollama / LM Studio / vLLM 本机部署本来就不校验密钥；带一个空的 `Bearer ` 反而
+    //      会被某些反代判成「有凭证但不合法」而 401，所以宁可**不发这个头**（判据在 requestUpstream）。
+    //    · 没 key 且地址是**公网** ⇒ 仍然报错，但话术要顺手把「本地可留空」说出来，
+    //      否则同一句话会让人以为本地模型也不能用。
+    if (!keySet) {
+      if (!client.isPrivateBaseUrl(baseUrl)) {
+        throw badRequest(
+          `请先到${client.CFG_AT}填写 API Key（公网服务都要密钥；` + '如果是本机 / 内网里的本地模型，这一栏可以留空）',
+        );
+      }
+      return { baseUrl, model, key: '' };
+    }
     let key;
     try {
       key = seal.openKey(kek, { iv: row.key_iv, cipher: row.key_cipher, tag: row.key_tag });
     } catch (_e) {
       throw badRequest(`密钥材料已失效（可能更换过实例），请到${client.CFG_AT}重新填写 API Key`);
     }
-    return { baseUrl: String(row.base_url).trim(), model: String(row.model).trim(), key };
+    return { baseUrl, model, key };
   },
 
   /**
@@ -1052,11 +1081,14 @@ module.exports = {
    *
    * 说明：⚠️ **结果对象是 200 响应**：连通失败不是请求格式错，把原因放在 `reason` 里
    *      比抛 500 更诚实。`reason` 已是转译过的用户话术（client 的错误转译表）。
+   *      ⭐ 0.9.8：失败时多回两个键 —— `kind`（错误类别）与 `tls`（`'protocol'` / `'certificate'`）：
+   *      前端据此决定「要不要弹出那个 https 提示、弹窗上给不给『改成 http』那颗动作键」。
+   *      ⚠️ 用户话术一个字都不用改（`reason` 照旧），这两个键是**给界面判分支**用的。
    *
    * @param {number} uid - 用户 id
    * @param {Buffer} kek - 32 字节 KEK
    * @param {{connectMs?: number, totalMs?: number}} [copts] - 可选：测试用的小超时（默认值在 client）
-   * @returns {Promise.<{ok: boolean, ms?: number, reason?: string}>} 测试结果
+   * @returns {Promise.<{ok: boolean, ms?: number, reason?: string, kind?: string, tls?: string}>} 测试结果
    */
   async aiTestConnection(uid, kek, copts) {
     const t0 = Date.now();
@@ -1065,7 +1097,9 @@ module.exports = {
       await client.listModels({ baseUrl: out.baseUrl, apiKey: out.key }, copts);
       return { ok: true, ms: Date.now() - t0 };
     } catch (e) {
-      return { ok: false, reason: (e && e.message) || '测试失败' };
+      const r = { ok: false, reason: (e && e.message) || '测试失败', kind: (e && e.kind) || 'server' };
+      if (e && e.tls) r.tls = e.tls; // 只有 tls 这一类才带
+      return r;
     }
   },
 

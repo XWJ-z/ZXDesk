@@ -1,0 +1,168 @@
+#!/bin/bash
+# ZXDesk（zxdesk）数据位置索引的**逃生口** —— 索引坏了 / 恢复引导页进不去时用命令行收口
+#
+# 什么时候用它：
+#   · 数据位置的索引（data-location.json）被改坏 / 读不出来，应用每次启动都停在恢复引导页；
+#   · 只能局域网直连（拿不到飞牛网关身份），页面上那些按钮点了会被拒；
+#   · 想确认「应用现在到底从哪个目录开库」。
+#
+# 用法（SSH 到 NAS 上，以 root 或应用用户身份）：
+#   <安装目录>/cmd/data-location-reset             # 只打印现状；默认目录有主库才真的删索引
+#   <安装目录>/cmd/data-location-reset --force     # 默认目录没有主库也删索引（下次启动是**全新的空库**）
+#
+# 行为（三条，一条都不能省）：
+#   ① 先打印：当前位置、最近一次迁移、默认目录里的归档、默认目录有没有主库；
+#   ② 默认目录**有主库** ⇒ 删掉两处索引文件（默认目录 ＋ 应用私有目录），应用下次启动按默认目录；
+#   ③ 默认目录**没有主库** ⇒ **拒绝**；只有加 --force 才继续删，并明确警告「下次启动会是一个全新的空库」。
+#
+# ⛔ 本脚本**不碰任何数据文件、不删归档**：只删 data-location.json。删数据是卸载向导的事。
+#
+# 数据位置：安装时由 config/resource 的 data-share 决定（TRIM_DATA_SHARE_PATHS），
+# 也可以用 DATA_DIR 显式指定（搬过家时指到安装位置即可，本脚本读的正是那里的索引）。
+
+set -u
+
+FORCE=0
+case "${1:-}" in
+  --force | -f) FORCE=1 ;;
+  -h | --help)
+    sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  '') ;;
+  *)
+    echo "未知参数：$1（只支持 --force）"
+    exit 1
+    ;;
+esac
+
+CMD_DIR="$(cd "$(dirname "$0")" && pwd)"
+PKG_DIR="$(cd "$CMD_DIR/.." && pwd)"
+
+export PATH=/var/apps/nodejs_v24/target/bin:/usr/local/bin:/usr/bin:/bin:$PATH
+
+DEFAULT_DIR="${DATA_DIR:-${TRIM_DATA_SHARE_PATHS:-}}"
+DEFAULT_DIR="${DEFAULT_DIR%%:*}"
+DEFAULT_DIR="${DEFAULT_DIR%/}"
+
+PKGVAR_DIR="${TRIM_PKGVAR:-}"
+case "$PKGVAR_DIR" in
+  *zxdesk*) ;;
+  *) PKGVAR_DIR="" ;;
+esac
+
+if [ -z "$DEFAULT_DIR" ]; then
+  echo "错误：不知道该看哪个目录的索引。"
+  echo "     请显式指定安装位置（就是飞牛「应用中心 → ZXDesk → 应用设置」里那个数据目录）："
+  echo "       DATA_DIR=/你抄到的目录 $0"
+  exit 1
+fi
+
+MAIN_INDEX="$DEFAULT_DIR/data-location.json"
+COPY_INDEX=""
+[ -n "$PKGVAR_DIR" ] && [ "$PKGVAR_DIR" != "$DEFAULT_DIR" ] && COPY_INDEX="$PKGVAR_DIR/data-location.json"
+
+LOG_FILE=""
+if [ -n "$PKGVAR_DIR" ] && [ -w "$PKGVAR_DIR" ]; then LOG_FILE="$PKGVAR_DIR/app.log"; fi
+log_msg() {
+  [ -n "$LOG_FILE" ] && echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE" 2>/dev/null
+  return 0
+}
+
+echo "安装位置（索引与归档）：$DEFAULT_DIR"
+echo "应用私有目录：${PKGVAR_DIR:-（未知，跳过副本）}"
+echo ""
+
+if command -v node >/dev/null 2>&1; then
+  node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const dir = process.argv[1];
+    const read = (f) => {
+      try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch (e) { return null; }
+    };
+    const idx = read(path.join(dir, "data-location.json"));
+    if (!idx) {
+      console.log("索引：没有（或读不出来）");
+    } else {
+      console.log("索引：schema=" + idx.schema + " app=" + idx.app + " dataId=" + String(idx.dataId).slice(0, 8) + "…");
+      console.log("当前位置：" + idx.current);
+      const h = Array.isArray(idx.history) ? idx.history : [];
+      const last = h.length ? h[h.length - 1] : null;
+      if (last) console.log("最近一次迁移：" + last.at + "  从 " + last.from + " 到 " + last.to);
+      if (idx.cleanup && !idx.cleanup.done) {
+        console.log("待清理的旧位置：" + idx.cleanup.dir + "（" + (idx.cleanup.paths || []).length + " 项，下次启动会清）");
+      }
+    }
+    let zips = [];
+    try {
+      zips = fs.readdirSync(dir).filter((n) => /^zxdesk-data-\d{8}-\d{6}\.zip$/.test(n)).sort().reverse();
+    } catch (e) { zips = []; }
+    console.log("归档：" + (zips.length ? zips.join("、") : "没有"));
+    for (const z of zips) {
+      try { console.log("  " + z + "  " + fs.statSync(path.join(dir, z)).size + " 字节"); } catch (e) { /* 读不到大小 */ }
+    }
+    const hasDb = fs.existsSync(path.join(dir, "zxdesk.db")) || fs.existsSync(path.join(dir, "zxdesk.json"));
+    console.log("默认目录有主库：" + (hasDb ? "是" : "否"));
+  ' "$DEFAULT_DIR"
+else
+  echo "提示：找不到 node，只做最简判断（索引是否存在 / 默认目录有没有主库）。"
+  if [ -f "$MAIN_INDEX" ]; then
+    echo "索引：存在"
+    grep -o '"current"[[:space:]]*:[[:space:]]*"[^"]*"' "$MAIN_INDEX" 2>/dev/null | head -n 1
+  else
+    echo "索引：没有"
+  fi
+  if [ -f "$DEFAULT_DIR/zxdesk.db" ] || [ -f "$DEFAULT_DIR/zxdesk.json" ]; then
+    echo "默认目录有主库：是"
+  else
+    echo "默认目录有主库：否"
+  fi
+fi
+
+echo ""
+
+HAS_DB=0
+if [ -f "$DEFAULT_DIR/zxdesk.db" ] || [ -f "$DEFAULT_DIR/zxdesk.json" ]; then HAS_DB=1; fi
+
+if [ ! -f "$MAIN_INDEX" ] && { [ -z "$COPY_INDEX" ] || [ ! -f "$COPY_INDEX" ]; }; then
+  echo "没有索引文件 —— 应用下次启动会按安装位置正常开库，不需要做任何事。"
+  exit 0
+fi
+
+if [ "$HAS_DB" -ne 1 ] && [ "$FORCE" -ne 1 ]; then
+  echo "拒绝删除索引：安装位置里没有主库。"
+  echo "  现在删掉索引，应用下次启动会在安装位置建一个**全新的空库** —— 你原来那套数据不会被删，"
+  echo "  但应用再也找不到它（索引是唯一的线索）。"
+  echo ""
+  echo "请二选一："
+  echo "  ① 打开应用，在恢复引导页里「用备份 zip 恢复」，或「重新授权原位置」；"
+  echo "  ② 手工把归档解压到安装位置："
+  echo "     unzip -o $DEFAULT_DIR/zxdesk-data-*.zip -d $DEFAULT_DIR"
+  echo "  确实要放弃原数据、从空库开始，再加 --force 重跑本命令。"
+  log_msg "数据位置索引：默认目录没有主库，已拒绝删除索引（未加 --force）"
+  exit 1
+fi
+
+if [ "$HAS_DB" -ne 1 ] && [ "$FORCE" -eq 1 ]; then
+  echo "⚠️  --force：安装位置里没有主库，仍要删除索引。"
+  echo "    下次启动会是一个**全新的空库**；原来那套数据还在，只是应用不再指向它。"
+fi
+
+for f in "$MAIN_INDEX" "$COPY_INDEX"; do
+  [ -n "$f" ] || continue
+  [ -f "$f" ] || continue
+  if rm -f "$f"; then
+    echo "已删除索引：$f"
+    log_msg "数据位置索引：已删除 $f（force=$FORCE）"
+  else
+    echo "删除失败：$f（权限不足？）"
+    log_msg "数据位置索引：删除 $f 失败"
+    exit 1
+  fi
+done
+
+echo ""
+echo "完成。请到 飞牛「应用中心 → ZXDesk」停止再启动，应用会按安装位置开库。"
+echo "（本脚本没有动任何数据文件，也没有删归档。）"
+exit 0

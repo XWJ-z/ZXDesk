@@ -39,7 +39,7 @@
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.5.3
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/16-密码库.md、docs/公共/开发方案/05-密码库-1期.md、docs/公共/调研报告/04-密码库-加密存储.md
  */
 
@@ -368,6 +368,63 @@ function decryptJson(dek, parts) {
 }
 
 /**
+ * 功能：用 DEK 加密**一段字节**并带 AAD —— 附件分块加密的底层原语（0.9.8 / 方案 42 §2.7·2）。
+ *
+ * 说明：⭐⭐ 与 `seal()` 的差别有两处，都是为附件准备的：
+ *   ① **入参/出参都是 Buffer**（不是 base64 字符串）：1 MiB 一块，base64 会多 33% 拷贝与一次编解码，
+ *      而 AEAD 本来就是对字节做运算；
+ *   ② **必须给 AAD**：AAD 是「这块属于哪个文件、第几块、一共几块」的唯一绑定 ——
+ *      省掉它就退化成「任意两块可以互换」而**解密不会报错**（GCM 只保护给了 AAD 的那部分语义）。
+ *      ⚠️ 没有 AAD 也要显式传 `Buffer.alloc(0)`：⛔ 别把「没传」当成「空」，
+ *      那会让「调用方忘了传」与「确实不需要」长得一模一样。
+ *      ⚠️ `setAAD()` 必须在 `update()` **之前**调用，否则 Node 直接抛。
+ *
+ * @param {Buffer} dek - 32 字节数据密钥
+ * @param {Buffer} buf - 明文（调用方负责按块切好，本函数不切）
+ * @param {Buffer} aad - 附加认证数据
+ * @returns {{iv: Buffer, tag: Buffer, cipher: Buffer}} 三件，长度 12 / 16 / `buf.length`
+ * @throws {Error} 密钥或入参类型不对时抛出
+ */
+function encryptBytes(dek, buf, aad) {
+  if (!Buffer.isBuffer(dek) || dek.length !== KEY_BYTES) throw cryptoError('密钥长度必须是 32 字节');
+  if (!Buffer.isBuffer(buf)) throw cryptoError('待加密内容必须是 Buffer');
+  if (!Buffer.isBuffer(aad)) throw cryptoError('AAD 必须是 Buffer（没有就传 Buffer.alloc(0)）');
+  const iv = crypto.randomBytes(IV_BYTES);
+  const c = crypto.createCipheriv(CIPHER, dek, iv);
+  if (aad.length) c.setAAD(aad);
+  const cipher = Buffer.concat([c.update(buf), c.final()]);
+  return { iv, tag: c.getAuthTag(), cipher };
+}
+
+/**
+ * 功能：用 DEK 解密**一段字节**（AAD 与加密时逐字节相同）—— `encryptBytes()` 的逆运算。
+ *
+ * 说明：⚠️ **tag 校验失败一律抛错，绝不返回半份/空 Buffer**：附件是「读出来就要发给浏览器」的东西，
+ *  「解不开但返回空」会让用户下载到一个 0 字节的文件且以为成功了 —— 那比报错糟得多。
+ *      ⚠️ 入参三件必须是 Buffer 且长度合法（12 / 16 / 任意）：`Buffer.from(string)` 会把
+ *      一个拼错的字符串默默变成 0 长度，于是错误信息变成「密文格式不合法」，掩盖真正的原因。
+ *
+ * @param {Buffer} dek - 32 字节数据密钥
+ * @param {Buffer} iv - 12 字节
+ * @param {Buffer} tag - 16 字节
+ * @param {Buffer} cipher - 密文（长度 = 明文长度）
+ * @param {Buffer} aad - 与加密时**逐字节相同**的附加认证数据
+ * @returns {Buffer} 明文字节
+ * @throws {Error} 参数不合法、密钥不对、密文被篡改（含 AAD 不符）时抛出
+ */
+function decryptBytes(dek, iv, tag, cipher, aad) {
+  if (!Buffer.isBuffer(dek) || dek.length !== KEY_BYTES) throw cryptoError('密钥长度必须是 32 字节');
+  if (!Buffer.isBuffer(iv) || iv.length !== IV_BYTES) throw cryptoError('密文格式不合法（iv）');
+  if (!Buffer.isBuffer(tag) || tag.length !== TAG_BYTES) throw cryptoError('密文格式不合法（tag）');
+  if (!Buffer.isBuffer(cipher)) throw cryptoError('密文格式不合法（cipher）');
+  if (!Buffer.isBuffer(aad)) throw cryptoError('AAD 必须是 Buffer（没有就传 Buffer.alloc(0)）');
+  const d = crypto.createDecipheriv(CIPHER, dek, iv);
+  if (aad.length) d.setAAD(aad);
+  d.setAuthTag(tag);
+  return Buffer.concat([d.update(cipher), d.final()]);
+}
+
+/**
  * 功能：生成一个强随机密码 —— 长度与字符集可选（方案 §1.2 第 5 项）。
  *
  * 说明：⭐ 三条刻意的做法：
@@ -441,5 +498,8 @@ module.exports = {
   checkVerifier,
   encryptJson,
   decryptJson,
+  // ⭐ 0.9.8：附件分块加密用的**字节级**原语（与 JSON 那两个同源，只是不过 JSON）
+  encryptBytes,
+  decryptBytes,
   generatePassword,
 };

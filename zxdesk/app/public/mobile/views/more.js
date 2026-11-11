@@ -60,10 +60,17 @@ import { MAX_NAV_TABS, entryOn, moduleItems, navTabItems, navTabsWire } from '..
 //    内容由 `core/slots.js` 动态挂载；本文件不 import 任何具体模块的片段。
 //    ⚠️ 分块的标题与电脑版贡献分栏的 label 逐字一致。
 import { mountModuleSlot, slotPaneDefs } from '../../core/slots.js';
+// ⭐ 0.9.8 第 11 轮：个人授权目录（与电脑端**共用同一个渲染**，见 core/grants.js）
+// ⚠️ `gotoAuth()`：模块不能反向 import 外壳，两端的跳转都由外壳注册（见 `setGotoAuthHandler`）
+import { GRANT_TEXT, gotoAuth, mountGrants } from '../../core/grants.js';
+// ⭐ 数据位置那一块与电脑端**同源**（文案、三行库、红字都在那里），⛔ 别各写一份
+import { LOC_TEXT, archivesLineHtml, dbRowsHtml, mountBusy, redNoteHtml, tailOf, walNoteHtml } from '../../core/data-location.js';
+// ⭐ 已授权目录的**逐层浏览**（与电脑端、加密信息附件位置共用一处渲染与判据）
+import { mountDirTree } from '../../core/dir-tree.js';
 import { loadAdminData, refresh } from '../data.js';
 import { uiOf } from '../modules.js';
 import { state } from '../state.js';
-import { askConfirm, closeSheet, openSheet, secHeadFold, toast } from '../ui.js';
+import { askConfirm, closeSheet, openNoticeSheet, openSheet, secHeadFold, toast } from '../ui.js';
 
 // ---------- 折叠：设置页各块的展开 / 收起 ----------
 /**
@@ -126,6 +133,40 @@ export function toggleSec(id) {
   }
 }
 
+/**
+ * 功能：把「账号设置 → 个人授权目录」**露出来**（清掉筛选词、展开这一块），并返回要滚过去的节点。
+ *
+ * 说明：⭐⭐ 0.9.8 第 17 轮（老大：「加密信息 → 附件位置 →【点击跳转授权】，落到的是数据存放
+ *      那一块，不是授权位置」）。跳转只做「切屏 ＋ 滚」是不够的 —— 目标卡有两种「看不见」：
+ *      ① **默认收起**（`isFolded('acct')` 缺省收起）⇒ `.sec.folded > :not(.sec-head)` 是
+ *         `display:none`，卡里只有标题行有高度；
+ *      ② 顶部筛选框还留着上次的词（`state.setQuery`）⇒ `applySetFilter()` 给不命中的卡打
+ *         `hidden`，连标题行都没了。
+ *      两种都是**量到 0 高**，这时候滚过去只能停在它上面那个邻居（屏首正是「版本数据」里的
+ *      数据存放）—— 看起来就是「跳错地方」，而且一句错都不报。
+ *      ⇒ 所以「让它可滚」这件事必须**和刷新筛选、展开折叠同一支**：清词要连输入框一起清
+ *      （否则框里还挂着旧字、卡片却全出来了），展开要走 `toggleSec()`（与用户点标题行同一支，
+ *      ⛔ 别直接改 class：那样 `state.foldSecs` 不记，下次重画又收回去）。
+ *      ⚠️ 这里**只负责「露出来」**，滚不滚得动由调用方看 `scrollViewTo()` 的返回值重试 ——
+ *      这一屏刚切过来时布局可能还没算完，滚太早会写进 0。
+ *
+ * @returns {?HTMLElement} 「账号设置」那一块（页面上没有它时 null）
+ */
+export function revealGrantSection() {
+  const sec = document.getElementById('sec-acct');
+  if (!sec) return null;
+  if (state.setQuery) {
+    state.setQuery = '';
+    const box = $('#set-q');
+    if (box) box.value = '';
+    const clr = $('#set-q-clear');
+    if (clr) clr.textContent = '';
+    applySetFilter();
+  }
+  if (sec.classList.contains('folded')) toggleSec('acct');
+  return sec;
+}
+
 // ---------- 渲染：账号设置 / 成员管理（设置页里的两块） ----------
 /**
  * 功能：把用户对象翻译成中文角色名 —— 管理员或成员。
@@ -183,6 +224,7 @@ export function acctSectionHtml(me) {
       <button class="mrow" type="button" data-act="logout" style="width:100%;font:inherit;text-align:left">
         <span class="mtxt">退出登录<small>回到登录页，换别的账号</small></span>
       </button>
+      <div class="grant-box" id="grant-box-m"></div>
     </div>`;
 }
 
@@ -295,7 +337,7 @@ function versionBlockHtml() {
   let body;
   if (!v) {
     body = `<div class="ver-note">
-        还没检查过。点「检查更新」向更新服务器要一次各端最新版本 —— 只发本机的版本号与平台，不发任何账号与数据。
+        点「检查更新」会向更新服务器请求获取一次最新版本信息
       </div>`;
   } else if (!v.ok) {
     body = `<div class="ver-note ver-note-bad">暂时读不到：${esc(v.message || '连接失败')}。不影响使用，需要时再点一次。</div>`;
@@ -366,8 +408,7 @@ export function dataSectionHtml() {
           <dt>数据存放方式</dt><dd>${backend}</dd>
           ${
             s
-              ? `<dt>数据文件</dt><dd>${esc(s.dbName || '—')}${s.dbSize == null ? '' : ' · ' + formatBytes(s.dbSize)}</dd>
-                 <dt>读写方式</dt><dd>${esc(
+              ? `<dt>读写方式</dt><dd>${esc(
                    s.journalMode === 'wal'
                      ? '正常（读写并行，互不阻塞）'
                      : s.journalMode
@@ -389,11 +430,25 @@ export function dataSectionHtml() {
           //    里粘贴即可打开）+ 右侧一颗「复制」。现在压成**一行**：路径 + 一颗「复制路径」。
           //    ⚠️ 这不是新设计：**电脑端那一栏本来就是 `路径 + 「复制路径」按钮`**
           //    （`desktop/views/settings.js` 的 `.path-row`），手机端只是跟上。
+          //    ⭐ 2026-11-11（第 18 轮，老大真机截图）：手机端原来三样挤在一行 ——
+          //    路径被挤成一条窄缝、`/vol1/1000/测试/12` 竖着折了四行，两颗按钮还贴在它右边。
+          //    改成**上下两段**：路径独占一整行（长路径只在自己这块里折），
+          //    下面一行左边「自定义」标签、右边两颗按钮。⚠️ 只改手机端：电脑端那栏横向空间够，
+          //    480px 以下才出现这个问题（两端同改会把电脑端也拉成两段，没必要）。
           s
             ? `<div class="path-row">
                  <code class="path-box">${esc(s.dataDir || '—')}</code>
-                 <button class="btn sm" type="button" data-act="copy-path">复制路径</button>
-               </div>`
+                 <div class="path-acts">
+                   ${s.location && s.location.custom ? `<span class="loc-badge">${esc(LOC_TEXT.CUSTOM)}</span>` : ''}
+                   <button class="btn sm" type="button" data-act="copy-path">复制路径</button>
+                   <button class="btn sm" type="button" data-act="move-data">${esc(LOC_TEXT.MOVE)}</button>
+                 </div>
+               </div>
+               ${redNoteHtml(s.location && s.location.custom)}
+               ${archivesLineHtml(s.location)}
+               <div class="loc-lead">${esc(LOC_TEXT.LEAD)}</div>
+               ${dbRowsHtml(s.databases, { compact: true })}
+               ${walNoteHtml()}`
             : ''
         }
         ${warn.map((w) => `<div class="storage-warn">${w}</div>`).join('')}
@@ -404,7 +459,7 @@ export function dataSectionHtml() {
         <span class="mval">刷新</span>
       </button>
       <div class="sec-note" style="margin-top:10px;line-height:1.6">
-        数据都存在这台 NAS 上，每个账号各存各的。
+        数据库保存在NAS中，按账号存取数据
       </div>
     </div>`;
 }
@@ -1388,6 +1443,32 @@ export function renderSettings() {
   mountSlotSections();
   bindSetQuery();
   applySetFilter();
+  // ⭐⭐ 0.9.8 第 11 轮：账号设置卡里的「个人授权目录」—— 自己拉数据、自己重画。
+  //    ⚠️ 选择器走**动态 import**（`grantPicker()`）：`modules/secrets/` 可删，
+  //    静态 import 会让「删掉加密信息那个目录」连带手机端设置页白屏。
+  // ⭐ 失败用**弹窗**（与电脑端同一契约）：移除失败要指路，toast 一闪就没了
+  mountGrants($('#grant-box-m'), { pick: grantPicker, toast, notice: openNoticeSheet });
+}
+
+/**
+ * 功能：「个人授权目录」用的**选择器** —— 动态取加密信息模块里那一份实现（与电脑端同一套）。
+ *
+ * 说明：⚠️ 动态 import 的理由见调用处；模块不在 / 宿主没应答时如实返回失败，
+ *      ⛔ 不静默（静默会让用户以为「点了没反应」）。
+ * @param {Object} [opts] - 传给选择器的选项（`{title, onSlow}`）
+ * @returns {Promise.<{ok: boolean, path?: string, reason?: string, message?: string}>} 选择结果
+ */
+async function grantPicker(opts) {
+  let mod;
+  try {
+    mod = await import('../../modules/secrets/shared.js');
+  } catch (_e) {
+    mod = null;
+  }
+  if (!mod || typeof mod.pickAuthorizedDir !== 'function') {
+    return { ok: false, reason: 'no-sdk', message: GRANT_TEXT.NO_PICK };
+  }
+  return mod.pickAuthorizedDir(opts);
 }
 
 /**
@@ -1855,7 +1936,12 @@ export async function restoreCommit() {
     if (!res.ok) throw new Error((r && r.error) || `恢复失败（HTTP ${res.status}）`);
     pending = null;
     closeSheet();
-    toast(`恢复完成（${(r.counts && r.counts.users) || 0} 个账号），请重新登录`);
+    // ⭐ 0.9.8：备份里没有实验室那一份时，服务端刻意**不动**现有实验室数据（失败方向 = 少删）。
+    //    手机端这里只有一行 toast（随后就跳登录页）⇒ 把「没动过」压成半句跟着说，
+    //    ⛔ 别静默（用户会以为实验室也被恢复了）。
+    const skipped = (r && r.skippedDbs) || [];
+    const skipNote = skipped.includes('lab') ? '，实验室内容一条没动' : '';
+    toast(`恢复完成（${(r.counts && r.counts.users) || 0} 个账号）${skipNote}，请重新登录`);
     setTimeout(() => {
       location.href = BASE + '/login.html';
     }, 1800);
@@ -1958,4 +2044,115 @@ export async function migrateGo() {
   } catch (e) {
     toast(e.message, true);
   }
+}
+
+/**
+ * 功能：手机端「修改数据位置」—— 先列出**已授权目录**让用户挑，再预检 / 确认 / 搬迁。
+ *
+ * 说明：⚠️ 候选只能来自服务端（`GET /api/admin/data-location/dirs`，与预检同一来源）：
+ *      位置必须已经授权给本应用，否则应用账号连读都读不了。⛔ 不再弹飞牛选择器 ——
+ *      选择器是「新授权」的通道，这里要的是「在已授权的里面挑」。
+ *      ⚠️ 搬迁完成后必须到应用中心重启 —— 应用不会热切换数据库。
+ * @returns {Promise.<void>} 无返回值
+ */
+export async function moveDataFlow() {
+  // ⚠️ 骨架先摆好再挂树：`mountDirTree()` 会自己拉授权根并往这个容器里画，
+  //    而抽屉的 body 是 `openSheet()` 之后才存在的。
+  openSheet(
+    LOC_TEXT.DIALOG_TITLE,
+    '<div id="m-dir-tree" class="dt-host"></div>',
+    '<button class="btn" type="button" data-act="sheet-close">取消</button>' +
+      '<button class="btn primary" type="button" id="m-dir-use" data-act="move-data-pick" data-path="" disabled style="flex:1.4">用这个目录</button>',
+  );
+
+  const useBtn = document.getElementById('m-dir-use');
+  return mountDirTree(document.getElementById('m-dir-tree'), {
+    // 展开某一级时取它的子目录（`dir` 为空 ＝ 授权根那一层）
+    fetchDirs: (dir) => api('GET', `/api/admin/data-location/dirs?dir=${encodeURIComponent(dir || '')}`),
+    // ⭐ 直接在选中的文件夹里建一个空目录（数据位置要求空目录）
+    mkdir: (parent, name) => api('POST', '/api/admin/data-location/mkdir', { parent, name }),
+    onSelect: (p) => {
+      const v = String(p || '');
+      if (useBtn) {
+        useBtn.dataset.path = v;
+        useBtn.disabled = !v;
+      }
+    },
+    onGoto: () => {
+      closeSheet();
+      gotoAuth();
+    },
+  });
+}
+
+/**
+ * 功能：选定某个已授权目录之后的那一半流程 —— 预检 → 二次确认 → 搬迁 → 轮询结果。
+ * @param {string} path - 目录绝对路径
+ * @returns {Promise.<void>} 无返回值
+ */
+export async function moveDataPick(path) {
+  const target = String(path || '');
+  if (!target) return;
+  closeSheet();
+  let info;
+  try {
+    const c = await api('POST', '/api/admin/data-location/check', { path: target });
+    info = c && c.info;
+  } catch (e) {
+    toast(e.message || '预检没通过', true);
+    return;
+  }
+  const yes = await askConfirm({
+    title: '确认搬迁数据',
+    text:
+      `要搬 ${info ? info.files : '?'} 个文件，共 ${info ? formatBytes(info.bytes) : '—'}。\n` +
+      `${LOC_TEXT.LINE_READONLY}\n${LOC_TEXT.LINE_ARCHIVE}\n⚠️ ${LOC_TEXT.RED}`,
+    ok: '开始搬迁',
+    danger: true,
+  });
+  if (!yes) return;
+  // ⭐⭐ 与电脑端同一套「看得见的迁移」：全屏遮罩（相位 ＋ 进度）＋ 完成态停在遮罩上。
+  //    ⚠️ 以前这里只弹一句 toast，服务端几十毫秒就搬完了 ⇒ 用户只看到 toast 闪一下，
+  //    以为「没反应」，其实已经完成（2026-11-10 真机反馈）。
+  // ⚠️ 完成态**不可关闭**（重启前一直显示）：所以这里没有 `onClose` 了 ——
+  //    面板不刷新也没关系，用户必须去应用中心重启，重启后页面重载自然会拿到新位置。
+  const busy = mountBusy();
+  busy.update('preparing');
+  try {
+    await api('POST', '/api/admin/data-location/apply', { path: target });
+  } catch (e) {
+    busy.fail((e && e.message) || '原因未知');
+    return;
+  }
+  const ACTIVE = ['preparing', 'dumping', 'copying', 'verifying', 'deploying', 'packaging', 'index'];
+  let tries = 0;
+  const poll = async () => {
+    let st;
+    try {
+      st = await api('GET', '/api/admin/data-location/status');
+    } catch (_e) {
+      // 迁移中的请求偶尔会被冻结闸门挡回来（503）⇒ 继续问，别让遮罩卡死
+      if (tries < 600) {
+        tries += 1;
+        setTimeout(() => void poll(), 400);
+      } else {
+        busy.fail('等不到搬迁结果（状态接口一直失败），请退出后重进确认');
+      }
+      return;
+    }
+    const job = st && st.job;
+    if (job && ACTIVE.includes(String(job.phase))) {
+      busy.update(job.phase, job.bytesDone, job.bytesTotal);
+      tries += 1;
+      if (tries < 900) setTimeout(() => void poll(), 400);
+      else busy.fail('搬迁时间过长，请退出后重进确认');
+      return;
+    }
+    if (job && job.phase === 'pendingRestart') {
+      busy.done(tailOf(target));
+      return;
+    }
+    busy.fail((job && job.error) || '原因未知');
+  };
+  void poll();
 }

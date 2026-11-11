@@ -1578,11 +1578,24 @@ async function promoteTask(root, st, tidArg) {
  * @returns {Promise.<void>}
  */
 async function saveCard(root, st) {
-  if (st.busy) return;
+  // ⚠️⭐ 0.9.8 第 18 轮（手机端「点确定无反应」同源）：这三处原来是**纯静默 return**，
+  //    点了「保存」什么都不发生、也不报错。现在每一处都要说话。
+  if (st.busy) {
+    toast('正在保存，请稍候');
+    return;
+  }
   const t = findTask(st.board, st.cardFor);
-  if (!t) return;
+  if (!t) {
+    toast('这条任务已经不在看板里了，请关掉重开', true);
+    st.cardFor = 0;
+    paint(root, st);
+    return;
+  }
   const card = root.querySelector('.collab-modal-card');
-  if (!card) return;
+  if (!card) {
+    toast('弹层已经不在了，请重新点开这条任务', true);
+    return;
+  }
   /** 取弹层里某一格的值（取不到回空串） */
   const val = (role) => {
     const el = card.querySelector('[data-role="' + role + '"]');
@@ -1654,8 +1667,21 @@ async function saveCard(root, st) {
     body.status = String(sEl.value);
   }
   if (aEl && aEl.value !== (aEl.dataset.init || '') && aEl.value !== '') body.assignee_id = Number(aEl.value);
-  if (!Object.keys(body).length) return;
+  if (!Object.keys(body).length) {
+    // ⚠️⭐ 0.9.8 第 18 轮：**电脑端这里从前连弹层都不关** —— 打开一条任务、什么都不改点「保存」，
+    //    屏幕上一个像素都不动，用户只能反复点。现在关掉并说一句「没有改动」。
+    toast('没有改动');
+    st.cardFor = 0;
+    paint(root, st);
+    return;
+  }
   st.busy = true;
+  // ⭐ 0.9.8 第 18 轮：按下到返回之间要有可见状态（照手机端同一条）。
+  const saveBtn = root.querySelector('[data-act="collab-card-save"]');
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = '保存中…';
+  }
   try {
     await api('PUT', '/api/collab/projects/' + st.pid + '/tasks/' + Number(t.id), body);
     toast('已更新');
@@ -1666,6 +1692,10 @@ async function saveCard(root, st) {
     toast(msgOf(e), true);
   } finally {
     st.busy = false;
+    if (saveBtn && saveBtn.isConnected) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = '确定';
+    }
   }
 }
 

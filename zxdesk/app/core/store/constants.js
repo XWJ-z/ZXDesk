@@ -12,7 +12,7 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.13
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md
  */
 
@@ -31,6 +31,39 @@ const USER_SCOPED_TABLES = SCHEMA.userScopedTables();
 
 /** 自动备份保留份数（超出按时间从旧到新删） */
 const BACKUP_KEEP = 5;
+
+/**
+ * ⭐ 0.9.8：库名 → **给人看的中文标签**（`'记账库'` / `'实验室库'` / `'主库'`）。
+ *
+ * 说明：三库之后，「哪一段失败了」这类文案要在**两个后端**里各写好几处 —— 每处再写一遍
+ *      `dbName === 'ledger' ? '记账库' : dbName === 'lab' ? '实验室库' : '主库'` 那种三元，
+ *      就等于把「有几个库」这件事又抄了三份（加第四个库时必漏）。
+ *      ⇒ 收成这一个函数，⛔ 别在别处再拼。
+ *      ⚠️ 放这里（而不是 `helpers.js`）是因为它要读 `SCHEMA.LEDGER_DB` / `SCHEMA.LAB_DB`，
+ *      而 `helpers.js` 刻意不依赖 schema（它是与后端、与表结构都无关的纯函数）。
+ *
+ * @param {string} dbName - 库名，`'main'` / `'ledger'` / `'lab'`
+ * @returns {string} 中文标签
+ */
+function dbLabelOf(dbName) {
+  if (dbName === SCHEMA.LEDGER_DB) return '记账库';
+  if (dbName === SCHEMA.LAB_DB) return '实验室库';
+  return '主库';
+}
+
+/**
+ * 功能：库名 → **它装的是什么**（一句给人看的话，设置页「数据位置」逐行说明用）。
+ *
+ * 说明：⭐ 与 `dbLabelOf()` 同一处维护：加第四个库时只改这一个文件，
+ *      ⛔ 不要在前端或路由里再写一份「主库管账号、记账库管记账」的对照表（那种副本必然漂移）。
+ * @param {string} dbName - 库名，`'main'` / `'ledger'` / `'lab'`
+ * @returns {string} 用途说明
+ */
+function dbRoleOf(dbName) {
+  if (dbName === SCHEMA.LEDGER_DB) return '生活记账';
+  if (dbName === SCHEMA.LAB_DB) return 'zx 实验室（加密信息等）';
+  return '账号、任务、日程、协作、密码库、收藏夹等';
+}
 
 /**
  * ⭐ **「替换导入」刻意不清空**的那几张表（0.3.5 对话引入的唯一一处例外）。
@@ -62,4 +95,12 @@ const IMPORT_KEEP_TABLES = [
   'teamwork_cleared',
 ];
 
-module.exports = { SCHEMA, SCHEMA_VERSION, USER_SCOPED_TABLES, BACKUP_KEEP, IMPORT_KEEP_TABLES };
+module.exports = {
+  SCHEMA,
+  SCHEMA_VERSION,
+  USER_SCOPED_TABLES,
+  BACKUP_KEEP,
+  IMPORT_KEEP_TABLES,
+  dbLabelOf,
+  dbRoleOf,
+};

@@ -264,6 +264,30 @@
              `modules/idea/mobile-board-pane.js`，由 `mountModuleSlot()` 挂进 `#board-pane`。
              ⛔ 别把这一屏加回来：留一半在这里 = 同一批 id 在文档里出现两遍，
              `document.getElementById` 只命中前一个 ⇒ 片段里那块界面**静默空白**（且不报错）。 -->
+        <!-- ⭐⭐ 0.9.8 zx 实验室（方案 41 / 决策 143）：**纯屏宿主**，分两层 ——
+             ① 首页是**卡片**（一个实验一张卡，项与说明由 `slotDefs()` 从两端接线表算出来，⛔ 一个都不写死）；
+             ② 点卡片进去才是那个实验的界面，**动态挂**进 `#lab-body`。
+             ⚠️ 药丸（`#lab-tabs`）只在**实验视图**里出现、且 ≥2 个实验时才画：首页用卡片，不需要它。
+             它住第一行、在 `#lab-body` **外面**（手机端的标题在全局固定顶栏里，塞不进药丸）
+             —— ⛔ 不许放进 `#lab-body`：后者每挂一次就被整块清掉，药丸会跟着一起没。
+             ⚠️ 这一屏必须进 `mobile/app.js` 的 `switchTab()` 视图清单，否则切过去整块内容不动
+             （而它**不报错**）。
+             ⚠️ 0 个实验时 `#lab-body` 里由 JS 画一句空状态（「这里将来放实验功能」），⛔ 不许空白屏。 -->
+        <section class="view hidden" id="view-lab">
+          <!-- ⭐⭐ **实验内部那一条**：返回 ＋ 实验名 ＋ 设计说明。
+               ⚠️ 它和下面那行三入口**二选一**（进实验只留这一条、回卡片首页只留三入口）：
+               手机屏幕窄，四条控件挤两行会让返回键离拇指更远。切换在 `paint()` 里做（设 `hidden`），
+               ⛔ 不清 `#lab-tools` 的 `innerHTML` —— 那会连带丢掉挂在它上面的委托。
+               内容由 `modules/lab/mobile.js` 的 `paint()` 画（这一条**跟着当前实验变**，与三入口不同）。 -->
+          <div id="lab-bar"></div>
+          <!-- ⭐⭐ 0.9.8 第 3 轮：**顶部三入口** —— 知情协议 / 反馈调研 / 交流群。
+               ⚠️⚠️ 它必须住 `#lab-body` **外面**：后者每挂一次就被整块清掉，放里面会跟着没。
+               内容由 `modules/lab/mobile.js` 的 `openLab()` 画**一次**（⛔ 别放进 `paint()`）。 -->
+          <div class="lab-tools" id="lab-tools"></div>
+          <div id="lab-tabs"></div>
+          <div id="lab-body"></div>
+        </section>
+
         <!-- ⭐⭐ 0.8.10 批 3（方案 30）：**数码管理不再有自己的屏**（原来那个 <section id="view-digital"> 已整块删掉）——
              它的骨架（页头计数与「＋ 新增」、概览行、搜索框、分类与排序下拉、列表）连同屏内
              事件委托一起搬进了视图片段 `modules/digital/mobile-assets-pane.js`，
@@ -510,6 +534,15 @@
     <link rel="modulepreload" href="ui.js" />
     <link rel="modulepreload" href="views/more.js" />
     <link rel="modulepreload" href="views/today.js" />
+    <!-- ⭐ 0.9.8 第 11 轮：设置卡里「个人授权目录」用的公用件（与电脑端同一份文件）。
+         ⚠️ 被 `views/more.js` **静态** import ⇒ 必须在这里登记（双向等式那条门禁）。 -->
+    <link rel="modulepreload" href="../core/grants.js" />
+    <!-- ⭐ 数据位置：手机端设置卡与外壳横幅静态 import 它们（与电脑端同一份文件） -->
+    <link rel="modulepreload" href="../core/data-location.js" />
+    <!-- ⭐ 原生日期 / 时间控件的「点任意处都开选择器」（记账两端都静态 import 它） -->
+    <link rel="modulepreload" href="../core/native-picker.js" />
+    <!-- ⭐ 已授权目录的逐层浏览（设置页里「修改数据位置」静态 import 它） -->
+    <link rel="modulepreload" href="../core/dir-tree.js" />
     <!-- ⭐ 模块自己的前端（0.5.0 模块化重构）：一个模块一个目录，前后端模块名对齐 -->
     <!-- ⭐ 0.8.7（方案 27）：网址收藏夹与密码库**不再有自己的屏**（并进 `webpass` 那一屏，
          界面由视图片段动态挂载）⇒ 它们的静态 import 已从 `mobile/app.js` 摘掉 ⇒
@@ -573,6 +606,7 @@
     <link rel="modulepreload" href="../modules/time/timetable-mobile-edit.js" />
     <link rel="modulepreload" href="../core/about.js" />
     <link rel="modulepreload" href="../core/api.js" />
+    <link rel="modulepreload" href="../core/vault-watch.js" />
     <link rel="modulepreload" href="../core/backup.js" />
     <link rel="modulepreload" href="../core/cache.js" />
     <!-- ⭐ 0.5.2：「绑定网址」下拉的唯一实现（任务表单与对话弹窗共用） -->

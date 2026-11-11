@@ -15,7 +15,7 @@
  *
  * @author zx
  * @date   2026-09-14
- * @since 0.5.3
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md、docs/公共/开发方案/09-模块化重构.md
  */
 
@@ -179,6 +179,72 @@ const ops = {
       .prepare('SELECT * FROM vault_items WHERE user_id=? ORDER BY sort_order ASC, id ASC')
       .all(uid);
     return { vaultMeta, vaultItems };
+  },
+
+  // ---- 导入的钥匙文件（0.9.8 第 6 轮）----
+  /**
+   * 功能：写入一行「别人（或过去的自己）的钥匙」；返回带回填 `id` 的那一行。
+   *
+   * 说明：⚠️ 行里全是**被主密码封装过的材料**（`dek_cipher` / `verifier_*`）＋ 派生参数，
+   *      ⛔ 没有明文 DEK、没有主密码 —— 与 `vault_meta` 同一种东西（方案 §8.5）。
+   *      ⚠️ `(user_id, kid)` 上有唯一索引：重复导入会在这里抛约束错，
+   *      所以业务层必须**先查后写**（`getImportedKey()`），把「已经导入过了」做成幂等 200。
+   *
+   * @param {number} uid - 导入者账号 id（写进 `user_id` 列）
+   * @param {Object} row - 钥匙材料行（不含 `user_id`，由本函数补）
+   * @returns {Object} 写入的行（已带 `id`）
+   */
+  insertImportedKey(uid, row) {
+    const full = Object.assign({}, row, { user_id: Number(uid) });
+    const cols = Object.keys(full);
+    const sql = `INSERT INTO vault_imported_keys (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`;
+    const r = this.db.prepare(sql).run(...cols.map((c) => full[c]));
+    full.id = Number(r.lastInsertRowid);
+    return full;
+  },
+
+  /**
+   * 功能：列出某个账号导入过的全部钥匙（**只回行，不含任何可解密的东西**）。
+   * @param {number} uid - 导入者账号 id
+   * @returns {Array.<Object>} 行数组（新的在前）
+   */
+  listImportedKeys(uid) {
+    return this._listSql('SELECT * FROM vault_imported_keys WHERE user_id=? ORDER BY id DESC', [uid]);
+  },
+
+  /**
+   * 功能：按账号 ＋ 钥匙编号取一行导入记录；没有返回 null。
+   * @param {number} uid - 导入者账号 id
+   * @param {string} kid - 钥匙编号
+   * @returns {?Object} 行；未命中为 null
+   */
+  getImportedKey(uid, kid) {
+    return this.db.prepare('SELECT * FROM vault_imported_keys WHERE user_id=? AND kid=?').get(uid, String(kid)) || null;
+  },
+
+  /**
+   * 功能：删掉一条导入记录（**只删这一行**，不碰任何文件、也不影响别人导入的同一把钥匙）。
+   * @param {number} uid - 导入者账号 id
+   * @param {string} kid - 钥匙编号
+   * @returns {boolean} 删到行则为 true
+   */
+  deleteImportedKey(uid, kid) {
+    return this.db.prepare('DELETE FROM vault_imported_keys WHERE user_id=? AND kid=?').run(uid, String(kid)).changes > 0;
+  },
+
+  /**
+   * 功能：把「最近一次用它打开文件」的时间写到这一行上。
+   * @param {number} uid - 导入者账号 id
+   * @param {string} kid - 钥匙编号
+   * @param {string} stamp - 时间戳
+   * @returns {boolean} 更新到行则为 true
+   */
+  touchImportedKey(uid, kid, stamp) {
+    return (
+      this.db
+        .prepare('UPDATE vault_imported_keys SET last_used_at=? WHERE user_id=? AND kid=?')
+        .run(stamp, uid, String(kid)).changes > 0
+    );
   },
 };
 

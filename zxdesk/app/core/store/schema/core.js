@@ -157,6 +157,23 @@ module.exports = {
         --   localStorage 只活在这一台设备的一个浏览器里，换端 / 换浏览器就丢了。
         --   ⚠️ 它默认 0（不隐藏）：老库靠 ensureColumns 补列、重建搬数据时都自动取到「不隐藏」。
         hide_ledger_amount INTEGER NOT NULL DEFAULT 0 CHECK (hide_ledger_amount IN (0, 1)),
+        -- 个人偏好：不显示「zx 实验室」（0.9.8，方案 41 / 决策 143）。⭐ 与上面几项**同一条规矩、同一个理由**
+        --   （决策 50）：每账号各关各的、删账号随行消失、加列不动结构版本号。
+        --   ⚠️ 它是第十三个实例，不是新决策；**各改各的列**，关一个不许连累另一个。
+        --   ⚠️ 关掉的是**入口**：实验室库（zxdesk-lab.db）里的实验数据一行不动，重新打开立刻回来。
+        --   ⚠️⭐ 与其它 hide_* 的一处不同：它关掉的是**整个沙箱的入口** —— 里面的实验功能
+        --   **没有各自单独的开关**（决策 143 §④）：每颗单独开关都是 users 上的一列，转正后要退役，
+        --   而 V1 用「整块关实验室」换掉了这个成本。要关某个实验就整块关。
+        hide_lab INTEGER NOT NULL DEFAULT 0 CHECK (hide_lab IN (0, 1)),
+        -- 个人偏好：是否已同意「zx 实验室使用须知」（0.9.8 第 3 轮，老大 2026-11-08：
+        --   「首次进入实验室应该弹出知情协议……勾选过后才能点同意」）。
+        --   ⭐ 与上面那十二项**同一条规矩**（决策 50）：每账号各记各的、删账号随行消失、
+        --   加列不动结构版本号、**各改各的列**。
+        --   ⚠️ 语义与 hide_* 不同：那一批是「关掉某个功能」，它是「这个账号读过并同意了须知」——
+        --   1 = 以后进实验室不再弹那份协议；0 = 进实验室先弹、勾选才能点「同意」。
+        --   ⚠️⭐ 必须落库而不是 localStorage（老大 2026-11-08 拍板「按账号记在服务端」）：
+        --   换设备 / 换浏览器 / 重装都不该再问一遍。默认 0（老库补列即「还没同意」）。
+        lab_agreed INTEGER NOT NULL DEFAULT 0 CHECK (lab_agreed IN (0, 1)),
  -- ⭐ 0.8.5 导航排序（「电脑端可以拖动排序 / 手机端在更多中设置首页导航栏
         --   显示的东西和排序」）。⭐ 与上面那十个 hide_* **同为「每账号各管各的界面偏好」**
         --   （决策 50 同一条规矩）：每账号各排各的、删账号随行消失、加列不动结构版本号。
@@ -190,6 +207,44 @@ module.exports = {
       CREATE TABLE ${ine ? 'IF NOT EXISTS ' : ''}${n} (
         key TEXT PRIMARY KEY,
         value TEXT
+      );`,
+
+    /**
+     * 功能：生成 `user_dir_grants` 表的建表语句 —— **个人授权目录登记表**。
+     *
+     * 说明：⭐⭐ 这张表回答的**不是**「哪个目录能用」（那是飞牛宿主的授权列表说了算），
+     *      而是「**这个人曾经成功授权过哪个目录、它拿来干什么**」。两件事分开的理由：
+     *      · 宿主的授权列表**只在本机、只在当时可查**（卸载重装 / 系统重置后清空，且没有历史）；
+     *      · 用户需要一个**汇总**：`设置 → 账号设置 → 个人授权目录` 里那三行（路径 / 状态 / 用途）。
+     *      ⚠️⭐ `granted_at` **非空**是「成功授权过」的唯一凭据，也是「需重新授权」与「未授权」
+     *      这两种状态的分界线：前者＝这一格有值、但现在宿主列表里查不到；后者＝这一格一直是空。
+     *      ⛔ 别把它写成 `NOT NULL DEFAULT ''`：空串与 NULL 在本项目里必须只表示一种含义
+     *      （与 `users.password_hash` 那条事故同一个道理）。
+     *      ⚠️ `purpose`（用途备注）与 `source`（哪个模块申请的，空串＝用户自己加的）都是**给人看的**，
+     *      不参与任何权限判断 —— 判权永远只认 `path` + 宿主授权列表。
+     *      ⚠️ `UNIQUE(user_id, path)`：同一个目录同一个人只登记一行，重复授权＝原地更新。
+     *      不加外键（与 tasks / bookmarks 同一条规矩：`user_id` 是归属标签不是父节点）。
+     *      ⚠️ 这张表**进整体备份、不进个人备份**：
+     *      · 整体备份是「整机搬家」，`exportWhole()` 按表名清单遍历，本表自动在其中；
+     *      · 个人备份（`exportAll()` + 各模块片段）只带用户内容，本表属于**本机环境状态**
+     *        （与「附件不进备份」同一条理由），不带。
+     *
+     * @param {string} n - 表名（重建时是临时名）
+     * @param {boolean} ine - 是否在语句里加 `IF NOT EXISTS`
+     * @returns {string} 该表的 `CREATE TABLE` 语句
+     */
+    user_dir_grants: (n, ine) => `
+      CREATE TABLE ${ine ? 'IF NOT EXISTS ' : ''}${n} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        path TEXT NOT NULL,
+        purpose TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL DEFAULT '',
+        granted_at TEXT,
+        checked_at TEXT,
+        created_at TEXT,
+        updated_at TEXT,
+        UNIQUE (user_id, path)
       );`,
   },
 
@@ -287,6 +342,17 @@ module.exports = {
     //    `CREATE TABLE IF NOT EXISTS` 永远补不上这一列（同类事故见 11-踩坑与说明.md）。
     //    「拿不准就登记」：幂等补列零成本，漏了就是「真机上眼睛怎么点都记不住」。
     ['users', 'hide_ledger_amount', 'INTEGER NOT NULL DEFAULT 0'],
+    // ⭐ 0.9.8 zx 实验室（可关模块的第十三个实例）：⚠️ 与上面那条**同一条理由** ——
+    //    真机上装过 ≤0.9.7 的库里 `users` 早就存在，`CREATE TABLE IF NOT EXISTS` 永远补不上这一列
+    //    （漏了的表现是「设置页那颗开关怎么点都自动弹回来」，而**不报错**）。
+    //    「拿不准就登记」：幂等补列零成本。
+    ['users', 'hide_lab', 'INTEGER NOT NULL DEFAULT 0'],
+    // ⭐ 「zx 实验室使用须知已同意」：
+    //    ⚠️ 与上面几条**同一条理由** —— 真机上装过 ≤0.9.7 的库里 `users` 早就存在，
+    //    `CREATE TABLE IF NOT EXISTS` 永远补不上这一列（漏了的表现是「以后每次进实验室都再问一遍」，
+    //    而且**不报错**）。「拿不准就登记」：幂等补列零成本。
+    //    ⚠️ 默认 0 = 「还没同意」：老账号升上来第一件事就是读一遍须知 —— 这是安全的方向。
+    ['users', 'lab_agreed', 'INTEGER NOT NULL DEFAULT 0'],
     // ⭐ 0.8.5 导航排序（`nav_order` / `nav_tabs` 两列，语义见建表语句里那一段）：
     //    ⚠️ 与上面几条**同一条理由** —— 真机上装过 ≤0.8.4 的库里 `users` 早就存在，
     //    `CREATE TABLE IF NOT EXISTS` 永远补不上这两列
@@ -318,11 +384,16 @@ module.exports = {
   /**
    * 功能：带 `user_id` 的表 —— 「删账号要清空哪些表」的**唯一出处**。
    *
-   * 说明：核心模块自己不带（账号行的归属就是它自己的 `id`）。
+   * 说明：⚠️ 核心模块**只带一张**（`user_dir_grants`）：它是跨模块的基础设施
+   *      （加密信息现在用它，将来别的模块申请目录也用它），不属于任何一个业务模块，
+   *      所以不能挂在某个 `modules/<name>/schema.js` 下面。
+   *      ⚠️ 登记在这里的意思只有一件：**删账号时它要被清掉**。漏登记的表现是
+   *      「账号删了、授权目录还留着」（数据残留，且界面上再也看不到它）。
+   *      `users` 行不在此列 —— 它自己就是账号。
    *
    * @type {Array.<string>}
    */
-  userScoped: [],
+  userScoped: ['user_dir_grants'],
 
   /**
    * 功能：改过名的老索引名，启动时幂等 `DROP`（表被重建时本来也会跟着删，这里只是保险）。
@@ -335,8 +406,10 @@ module.exports = {
    *
    * 说明：⚠️ `idx_users_username` 是**唯一索引**，有独立的 try/catch 降级逻辑（见 storage.js 的 `_createIndexes`），
    *      所以不在这里声明 —— 声明了反而会绕过那层保护。
+   *      唯一例外是那张 `user_dir_grants`：它是普通索引（按账号取整份清单），
+   *      走同一条 `CREATE INDEX IF NOT EXISTS`，没有降级诉求。
    *
    * @type {Array.<string>}
    */
-  indexes: [],
+  indexes: ['CREATE INDEX IF NOT EXISTS idx_user_dir_grants_user ON user_dir_grants(user_id)'],
 };

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>ZXDesk 加密文件</title>
+    <!-- ⚠️ 资源一律**相对路径**：飞牛统一网关下应用挂在 `/app/zxdesk`，绝对路径会打到系统根目录。
+         本页与 open.css / open.js 同目录，`../core/` 也是相对 —— 两个挂载点下都成立。
+         ⛔ 本页**不写内联脚本**：CSP 的 `script-src` 只放行 `'self'` 与两段既有入口脚本的哈希，
+         新页面一律外链（否则表现是「页面渲染了、脚本没跑」，2026-11-03 平板白屏踩过一次）。 -->
+    <link rel="stylesheet" href="../core/tokens.css" />
+    <link rel="stylesheet" href="open.css" />
+  </head>
+  <body>
+    <div class="op-shell">
+      <header class="op-bar">
+        <div class="op-head">
+          <h1 class="op-name" id="fname">正在打开…</h1>
+          <p class="op-meta" id="fmeta"></p>
+        </div>
+        <span class="op-state" id="state">正在读取</span>
+      </header>
+
+      <main class="op-main">
+        <!-- ① 说明 / 报错（两种情况共用一块，避免页面在「空状态」和「错误」之间跳来跳去） -->
+        <section class="op-card" id="note" hidden>
+          <!-- ⚠️ 用 div 不用 p：2026-11-09 起这块要装「粘贴路径」的输入框，
+               块级元素塞进 <p> 会被浏览器截断（后面那截被挪到 p 外面） -->
+          <div class="op-text" id="noteText"></div>
+          <div class="op-acts" id="noteActs"></div>
+        </section>
+
+        <!-- ② 解锁卡：输主密码（可能还要先选钥匙） -->
+        <section class="op-card" id="lock" hidden>
+          <p class="op-text" id="lockHint">这个文件需要主密码才能解密。</p>
+          <!-- ⭐ 0.9.8 第 7 轮：钥匙识别结果（「已识别：来自账号… · 编号… · 日期…」）＋ 提醒 -->
+          <p class="op-keyinfo" id="keyInfo" hidden></p>
+          <label class="op-field" id="keyRow" hidden>
+            <span>用哪把钥匙</span>
+            <select id="keypick"></select>
+          </label>
+          <label class="op-field">
+            <span>主密码</span>
+            <input id="pw" type="password" autocomplete="current-password" placeholder="输入主密码" />
+          </label>
+          <button class="op-btn primary" id="unlock" type="button">打开</button>
+          <p class="op-err" id="err" hidden></p>
+        </section>
+
+        <!-- ③ 预览 -->
+        <section class="op-view" id="view" hidden></section>
+      </main>
+
+      <footer class="op-foot" id="foot" hidden>
+        <button class="op-btn" id="dl" type="button" hidden>下载明文</button>
+        <!-- ⭐ 0.9.8 第 7 轮（方案 §14.6.1.4）：文案从「换一把钥匙」改成「使用密钥解锁」。
+             原来那一版点下去只是把解锁卡重画一遍，并没有解决「本机没有钥匙」这件事。 -->
+        <button class="op-btn" id="rekey" type="button">使用密钥解锁</button>
+        <button class="op-btn" id="close" type="button">关闭</button>
+      </footer>
+
+      <p class="op-tip" id="tip" hidden>
+        想双击直接打开？在 文件管理 里右键这个文件 → 打开方式 → 管理默认打开方式，把「ZXDesk 加密文件」设为默认。
+      </p>
+    </div>
+    <!-- ⭐ 0.9.8 第 7 轮：`.zxkey` 的选择框常驻（隐藏）—— 「使用密钥解锁」与 `.zxkey` 导入共用它，
+         ⛔ 不再每次动态插一个（那样两个入口会各插一个、id 撞车）。 -->
+    <input id="keyfile-pick" type="file" accept=".zxkey,application/json" hidden />
+    <script type="module" src="open.js"></script>
+  </body>
+</html>

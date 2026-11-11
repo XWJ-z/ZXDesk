@@ -69,7 +69,11 @@ function readBody(req, res, cb) {
       }
     }
     try {
-      cb(parsed);
+      const r = cb(parsed);
+      // ⚠️⭐ 回调可能是 `async (b) => …`：async 函数体里抛的错**不会**被上面的同步 try/catch 接住 ——
+      //    它变成一句没人等的 rejected promise，请求就永远悬着（客户端只看到「转 30 秒然后超时」）。
+      //    `fail()` 自己判了 `headersSent`，响应已经写过时不会二次写。
+      if (r && typeof r.then === 'function') r.catch((e) => fail(res, e));
     } catch (e) {
       fail(res, e);
     }

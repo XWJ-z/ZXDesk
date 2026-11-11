@@ -7,15 +7,16 @@
  *      列白名单 `_allowedCols()`，最后把两个后端与六个业务模块的方法挂到原型上。
  *      `makeFacade()` 生成 `_bk` 门面，按**调用时刻**的 `store.backend` 转发到对应后端原语。
  *
- * ⭐ **0.8.1（记账 2 期）：core 同时开两个库**——
- *    主库 `zxdesk.db`（`zxdesk.json`）＋ 记账库 `zxdesk-ledger.db`（`zxdesk-ledger.json`）。
- *    两个库**各自**开库 / WAL 探测 / 只读降级 / 结构体检 / 迁移前备份（见 `_init` 与 `_initLedgerDb`）。
+ * ⭐ **0.8.1（记账 2 期）＋ 0.9.8（zx 实验室）：core 同时开三个库**——
+ *    主库 `zxdesk.db`（`zxdesk.json`）＋ 记账库 `zxdesk-ledger.db` ＋ 实验室库 `zxdesk-lab.db`。
+ *    三个库**各自**开库 / WAL 探测 / 只读降级 / 结构体检 / 迁移前备份
+ *    （见 `_init` 与 `_initSideDb()`；记账 / 实验室共用同一份实现）。
  *    「表 → 库」的映射**只有一个出处**（`store/schema/index.js` 的 `dbOf()`，来源是各模块
  *    `module.json` 的 `database` 字段）；路由点是 `makeFacade()` 生成的 `_bk` 门面
- *    —— 属于记账模块的原语在 `_runOnLedger()` 里把 `this.db` / `this.data` 切到记账库那一侧，
+ *    —— 属于分库模块的原语在 `_runOnDb()` 里把 `this.db` / `this.data` 切到那个库那一侧，
  *    于是**模块自己的原语一个字都不用改**。
  *    ⚠️ 跨库的那几件事（删账号 / 整体备份 / 整体恢复 / 个人导入）**没有单一事务兜底**了：
- *    它们改成两段执行 ＋ 如实报告，理由与失败方向写在两个后端各自的 `deleteUser()` /
+ *    它们改成**三段执行** ＋ 如实报告，理由与失败方向写在两个后端各自的 `deleteUser()` /
  *    `exportWhole()` / `replaceWhole()` / `insertMany()` 上。
  *
  * 改造前是 2376 行的单类 `db.js`。现在：
@@ -38,7 +39,7 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.15
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md
  */
 
@@ -60,6 +61,16 @@ const path = require('node:path');
  */
 const LEDGER_DB_FILE = 'zxdesk-ledger.db';
 const LEDGER_JSON_FILE = 'zxdesk-ledger.json';
+
+/**
+ * ⭐ 0.9.8（zx 实验室）：**第三个库**的文件名 —— `database: "lab"` 的模块的全部表住它。
+ *
+ * 说明：与上面那两个常量同构、同一条纪律（⛔ 不许改名，改了就是「实验室数据忽然全没了」）。
+ *      ⚠️ `0.9.8` 里它会出现但**一张业务表都没有**（实验室模块零表）—— 这是**接通地基**的形态，
+ *      不是「还没建好」。第一个实验功能落地时，库、连接、体检、备份、恢复、删账号六处都已经在这儿了。
+ */
+const LAB_DB_FILE = 'zxdesk-lab.db';
+const LAB_JSON_FILE = 'zxdesk-lab.json';
 
 /**
  * 功能：装配期护栏 —— 各来源的业务方法名必须两两不重名，重名**当场抛错**并点名是哪两个来源。
@@ -96,26 +107,29 @@ function assertNoMethodClash(sources) {
 /**
  * 功能：算出「后端原语 → 它属于哪个库」——**按声明这条原语的那个模块**判（`module.json.database`）。
  *
- * 说明：⭐⭐ 0.8.1 的多库分派就落在这里。为什么按**模块**而不是按「原语第几个参数是表名」判：
+ * 说明：⭐⭐ 多库分派就落在这里。为什么按**模块**而不是按「原语第几个参数是表名」判：
  *      模块原语的参数是业务形状（`listLedgerAccounts(uid)`、`insertLedgerAccount(uid, values, stamp)`），
  *      **看不出表名**；而「哪个模块的 op 读写哪个库」是模块自己已经在 `module.json` 里声明过的事实
- *      （`database: 'ledger'`），拿它来分派**不需要模块改一个字**（方案 §5.1 第 3 行的口径）。
- *      ⚠️ 只收**声明了进记账库**的模块；主库是缺省（`SCHEMA.dbOf()` 的失败方向也是主库），
- *      所以这里是一个「记账库 op 的名单」，不是全量映射。
+ *      （`database: 'ledger'` / `'lab'`），拿它来分派**不需要模块改一个字**。
+ *      ⚠️ 只收**声明了进分库**的模块；主库是缺省（`SCHEMA.dbOf()` 的失败方向也是主库），
+ *      所以这里是一个「非主库 op 的名单」，不是全量映射。
  *      ⚠️ 从两个后端各取一次键（它们必须同名同参，由 `assertOpsContract()` 在加载时钉住），
  *      所以这里取哪一份结果都一样 —— 取两份只是顺手，万一将来出现「只在一边挂着的 op」，
  *      它也会被点名进名单，而不是静默走主库。
+ *      ⭐ 0.9.8：从「只看记账库」泛化成**看任意非主库** —— `Map<op 名, 库名>` 的值可能是
+ *      `'ledger'` 或 `'lab'`，门面据此选连接。
  *
- * @returns {Map.<string, string>} op 名 → `'ledger'`
+ * @returns {Map.<string, string>} op 名 → `'ledger'` / `'lab'`
  */
-function ledgerOpsOf() {
+function moduleOpsDb() {
   const map = new Map();
   for (const meta of registry.list) {
-    if (meta.database !== SCHEMA.LEDGER_DB) continue;
+    const db = meta.database;
+    if (!db || db === SCHEMA.MAIN_DB) continue;
     const pair = registry.backendFor(meta.name);
     if (!pair) continue;
     for (const mod of [pair.sqlite, pair.json]) {
-      for (const k of Object.keys((mod && mod.ops) || {})) map.set(k, SCHEMA.LEDGER_DB);
+      for (const k of Object.keys((mod && mod.ops) || {})) map.set(k, db);
     }
   }
   return map;
@@ -132,8 +146,8 @@ function ledgerOpsOf() {
  *
  * ⭐ 0.8.1 的多库分派：**门面是唯一的切换点** ——
  *    业务层（`modules/<模块>/store.js`）与模块自己的原语**一个字都不用改**：模块原语里照旧写
- *    `this.db` / `this.data` / `this._listSql()`，只是在「记账模块的 op 正在跑」这段时间里，
- *    `this.db` / `this.data` 已经指向记账库那一侧（由 `Store._runOnLedger()` 切换并在 finally 里还原）。
+ *    `this.db` / `this.data` / `this._listSql()`，只是在「分库模块的 op 正在跑」这段时间里，
+ *    `this.db` / `this.data` 已经指向那个库那一侧（由 `Store._runOnDb()` 切换并在 finally 里还原）。
  *    ⚠️ 为什么不是「让每个 op 自己挑连接」：模块原语有几十处 `this.db`，改它们等于把
  *    「记账 2 期」的变成一次跨 10 个模块的大改；而**分派点只有这一个**，
  *    改错的爆炸半径也集中在一处（这正是方案 §5.1 第 3 行要的形态）。
@@ -142,14 +156,14 @@ function ledgerOpsOf() {
  * @returns {Object} 属性名与后端原语 op 一一对应的门面对象
  */
 function makeFacade(store) {
-  const ledgerOps = ledgerOpsOf();
+  const opsDb = moduleOpsDb();
   const facade = {};
   for (const k of OPS) {
-    const onLedger = ledgerOps.get(k) === SCHEMA.LEDGER_DB;
+    const db = opsDb.get(k) || null;
     facade[k] = (...args) => {
       const fn = (store.backend === 'sqlite' ? MERGED_OPS.sqlite : MERGED_OPS.json)[k];
-      if (!onLedger) return fn.apply(store, args);
-      return store._runOnLedger(() => fn.apply(store, args));
+      if (!db || db === SCHEMA.MAIN_DB) return fn.apply(store, args);
+      return store._runOnDb(db, () => fn.apply(store, args));
     };
   }
   return facade;
@@ -183,27 +197,42 @@ function makeStore(APP_VERSION) {
       // ⭐ 0.8.1：第二个库（记账模块的全部表）—— 四个格子里「文件路径」的两个
       this.ledgerDbFile = path.join(dataDir, LEDGER_DB_FILE);
       this.ledgerJsonFile = path.join(dataDir, LEDGER_JSON_FILE);
+      // ⭐ 0.9.8：第三个库（`database: "lab"` 的模块的全部表）—— 与上面一格逐项对应
+      this.labDbFile = path.join(dataDir, LAB_DB_FILE);
+      this.labJsonFile = path.join(dataDir, LAB_JSON_FILE);
       this.backend = 'json';
       this.db = null;
       this.data = null;
       // ⭐ 0.8.1：记账库那一侧的两个句柄（SQLite 第二个连接 / JSON 第二个数据对象）
       this.ledgerDb = null;
       this.ledgerData = null;
+      // ⭐ 0.9.8：实验室库那一侧的两个句柄（第三个连接 / 第三份数据对象）
+      this.labDb = null;
+      this.labData = null;
       this.journalMode = null;
       // ⭐ 0.8.1：记账库自己的 WAL 探测结果 / 结构版本 / 建索引失败原因（与主库那三个同款、各数各的）
       this.ledgerJournalMode = null;
       this.ledgerSchemaVersion = 0;
       this.ledgerIndexErrors = [];
-      // ⭐ 0.8.1：当前正在服务哪个库（`'main'` / `'ledger'`）—— 只有门面切换时才会变成 ledger，
+      // ⭐ 0.9.8：实验室库的同款三件（三库各数各的，⛔ 不许混成一个号）
+      this.labJournalMode = null;
+      this.labSchemaVersion = 0;
+      this.labIndexErrors = [];
+      // ⭐ 0.8.1：当前正在服务哪个库（`'main'` / `'ledger'` / `'lab'`）—— 只有门面切换时才会变，
       //    它决定 `_saveJson()` 不带参数时该落哪个文件（见 json.js 的 `_saveJson`）
       this.activeDb = SCHEMA.MAIN_DB;
       // ⭐ 0.8.1：记账库打不开的原因 / 只读降级（语义与主库那两个逐条对应）
       this.ledgerInitError = null;
       this.ledgerReadOnly = false;
+      // ⭐ 0.9.8：实验室库的同款两个（第三个独立的「库打不开」失败点）
+      this.labInitError = null;
+      this.labReadOnly = false;
       // 记账库文件在本次启动**之前**是否已存在：决定「打不开时是否降级只读」与「迁移前是否备份」
       this.ledgerExistedBefore = fs.existsSync(this.ledgerDbFile);
-      // ⭐ 0.8.1：两个库的**只读状态快照**（启动日志与排查用，字段见 `_refreshDbStatus()`）
-      this.dbStatus = { main: null, ledger: null };
+      // ⭐ 0.9.8：实验室库同款
+      this.labExistedBefore = fs.existsSync(this.labDbFile);
+      // ⭐ 0.8.1：各库的**只读状态快照**（启动日志与排查用，字段见 `_refreshDbStatus()`）
+      this.dbStatus = { main: null, ledger: null, lab: null };
       // v5：外键是否真的打开了（SQLite 默认关闭，必须每个连接显式开）
       this.foreignKeys = false;
       // 本次启动是否需要结构迁移（由 _backupBeforeMigrate 依 user_version 判定）
@@ -298,6 +327,8 @@ function makeStore(APP_VERSION) {
           this._backfillModuleData();
           // ⭐ 0.8.1：主库活了才开记账库（它的失败**不会**把主库一起拖下水，见方法内注释）
           this._initLedgerDb(SQLite);
+          // ⭐ 0.9.8：第三个库（实验室）同款 —— 它坏也只影响它自己
+          this._initLabDb(SQLite);
           this._refreshDbStatus();
           return;
         } catch (e) {
@@ -327,6 +358,8 @@ function makeStore(APP_VERSION) {
       this._loadJson(SCHEMA.MAIN_DB);
       // ⭐ 0.8.1：记账库那一份（文件不在就只是内存里的空壳，**不落盘**，见 json.js 的 `_loadJson`）
       this._loadJson(SCHEMA.LEDGER_DB);
+      // ⭐ 0.9.8：实验室库那一份（同上：文件不在时只是空壳，不落盘）
+      this._loadJson(SCHEMA.LAB_DB);
       // ⭐ 内置高校模板：JSON 回退路径同样要播种（两端行为一致，否则「装的是哪个后端、模板就不一样」）
       this._seedModuleData();
       this._backfillModuleData();
@@ -334,68 +367,115 @@ function makeStore(APP_VERSION) {
     }
 
     /**
-     * 功能：开**第二个库**（记账库）并在它上面把结构补齐 —— 建表 ＋ 补列 ＋ 建索引 ＋ 写它自己的
-     *      `user_version = LEDGER_SCHEMA_VERSION`；迁移前先自动备份一份。
+     * 功能：开**第二个库**（记账库）—— 转发到 `_initSideDb()`（流程与实验室库共用一份实现）。
      *
-     * 说明：⭐ 与主库**各自**做一遍：两个库各判自己的版本、各留自己的退路。
-     *      ⚠️⭐ 记账库**刻意没有 v5 那一整套整库重建迁移**（`_upgradeStructureToV5` / `_v5Precheck` /
-     *      `_applyTableAliases` 一个都不调用）：它是全新的库，没有历史结构要补、没有表要改名 ——
-     *      照搬主库那套只会引入一次毫无意义的 DROP + RENAME（而它的收益是零）。
-     *      将来记账库真要改结构，走的是「加表 / 加列 / 加索引」这三条幂等路径。
-     *      ⚠️ 建索引**逐条 try/catch**（与主库 `_createIndexes()` 同一口径）：索引只是加速手段，
-     *      建不上绝不能让整个记账库被判成「打不开」—— 那会把记账功能整个停掉，代价远大于少一个索引。
-     *      ⚠️ **失败不抛**：本方法自己把原因记进 `ledgerInitError` 并把记账库标成不可用
-     *      （`ledgerDb = null` ＋ 文件存在时 `ledgerReadOnly = true`），主库照常可用。
-     *      这与「主库打不开就整体降级」刻意不同：两个库的可用性互不牵连，但**都要被说出来**
-     *      （启动日志与 `dbStatus`，见 `_refreshDbStatus()`）。
+     * 说明：⭐ 保留这个薄方法名是因为**外面按名字找它**（架构分册、决策记录、坑记录里都写着
+     *      `_initLedgerDb`）—— 改名会让那些指路牌全部指空，而收益是零。
+     *      「开库 / 探测 / 只读降级 / 迁移前备份 / 失败不抛」的细则见 `_initSideDb()`。
      *
      * @param {Object} SQLite - `node:sqlite` 模块（提供 `DatabaseSync`）
      * @returns {void}
      */
     _initLedgerDb(SQLite) {
+      this._initSideDb(SQLite, SCHEMA.LEDGER_DB);
+    }
+
+    /**
+     * 功能：开**第三个库**（实验室库）—— ⭐ 0.9.8 新增，与记账库逐条同构。
+     *
+     * 说明：⭐⭐ 三个库各是一个**独立的失败点**：它打不开时**只影响它自己**（实验功能 503），
+     *      主库与记账库照常。这就是「实验室可失败」这条硬指标的实现位置。
+     *      ⚠️ 与记账库同一条判据：文件**本来就在**却打不开 ⇒ 只读降级（⛔ 不许改写成 `.json`
+     *      继续跑，那会让用户看到另一批数据、修好后「数据又变回去」）。
+     *
+     * @param {Object} SQLite - `node:sqlite` 模块（提供 `DatabaseSync`）
+     * @returns {void}
+     */
+    _initLabDb(SQLite) {
+      this._initSideDb(SQLite, SCHEMA.LAB_DB);
+    }
+
+    /**
+     * 功能：开一个**非主库**（记账 / 实验室）并在它上面把结构补齐 —— 建表 ＋ 补列 ＋ 建索引 ＋
+     *      写它自己的 `user_version`；迁移前先自动备份一份。
+     *
+     * 说明：⭐ 两个分库的流程**逐字同构**，所以只写一份、用 `dbName` 分派字段
+     *      （⛔ 别复制成两份：那种副本的失效方式是「改了一个忘了另一个」，而症状是**静默的**）。
+     *      与主库各自做一遍：各判自己的版本、各留自己的退路。
+     *      ⚠️⭐ 分库**刻意没有 v5 那一整套整库重建迁移**（`_upgradeStructureToV5` / `_v5Precheck` /
+     *      `_applyTableAliases` 一个都不调用）：它们是全新的库，没有历史结构要补、没有表要改名 ——
+     *      照搬主库那套只会引入一次毫无意义的 DROP + RENAME（而收益是零）。
+     *      将来它们真要改结构，走的是「加表 / 加列 / 加索引」这三条幂等路径。
+     *      ⚠️ 建索引**逐条 try/catch**（与主库 `_createIndexes()` 同一口径）：索引只是加速手段，
+     *      建不上绝不能让整个库被判成「打不开」—— 那会把整块功能停掉，代价远大于少一个索引。
+     *      ⚠️ **失败不抛**：本方法自己把原因记进 `<库>InitError` 并把该库标成不可用
+     *      （句柄置 null ＋ 文件存在时只读），主库照常可用。这与「主库打不开就整体降级」刻意不同：
+     *      三个库的可用性互不牵连，但**都要被说出来**（启动日志与 `dbStatus`，见 `_refreshDbStatus()`）。
+     *
+     * @param {Object} SQLite - `node:sqlite` 模块（提供 `DatabaseSync`）
+     * @param {string} dbName - 库名，`'ledger'` / `'lab'`
+     * @returns {void}
+     */
+    _initSideDb(SQLite, dbName) {
+      const onLedger = dbName === SCHEMA.LEDGER_DB;
+      const file = onLedger ? this.ledgerDbFile : this.labDbFile;
+      const existedBefore = onLedger ? this.ledgerExistedBefore : this.labExistedBefore;
+      const connKey = onLedger ? 'ledgerDb' : 'labDb';
       try {
-        this.ledgerDb = new SQLite.DatabaseSync(this.ledgerDbFile);
-        this._tunePragmas(this.ledgerDb, SCHEMA.LEDGER_DB);
-        this._backupBeforeMigrate(this.ledgerDb, SCHEMA.LEDGER_DB);
-        this._migrateLedgerSqlite();
+        this[connKey] = new SQLite.DatabaseSync(file);
+        this._tunePragmas(this[connKey], dbName);
+        this._backupBeforeMigrate(this[connKey], dbName);
+        this._migrateSideSqlite(dbName);
       } catch (e) {
-        this.ledgerInitError = (e && e.message) || String(e);
+        const why = (e && e.message) || String(e);
         try {
-          if (this.ledgerDb) this.ledgerDb.close();
+          if (this[connKey]) this[connKey].close();
         } catch {
           /* 关闭异常忽略 */
         }
-        this.ledgerDb = null;
-        // ⚠️ 与主库同一条判据：文件**本来就在**却打不开 ⇒ 只读（⛔ 不许改写成 zxdesk-ledger.json，
-        //    否则等记账库修好后「数据又变回去」—— 那正是两套数据分裂的经典形态）。
-        //    文件本来就不存在（全新安装、建不出来的极端情况）⇒ 没有可保护的内容，不算只读，
-        //    但 `ledgerDb` 为 null 已经足够让 `_assertLedgerWritable()` 拒绝一切记账写读。
-        this.ledgerReadOnly = this.ledgerExistedBefore;
+        this[connKey] = null;
+        if (onLedger) {
+          this.ledgerInitError = why;
+          this.ledgerReadOnly = existedBefore;
+        } else {
+          this.labInitError = why;
+          this.labReadOnly = existedBefore;
+        }
       }
     }
 
     /**
-     * 功能：在**记账库连接**上补结构：建表 → 补列 → 建索引 → 推进它自己的 `user_version`。
+     * 功能：在**某个分库连接**上补结构：建表 → 补列 → 建索引 → 推进它自己的 `user_version`。
+     * @param {string} dbName - 库名，`'ledger'` / `'lab'`
      * @returns {void}
-     * @throws {Error} 建表或补列失败时抛出（由 `_initLedgerDb` 收口成「记账库不可用」）
+     * @throws {Error} 建表或补列失败时抛出（由 `_initSideDb` 收口成「那个库不可用」）
      */
-    _migrateLedgerSqlite() {
-      SCHEMA.createAllIn(this.ledgerDb, SCHEMA.LEDGER_DB);
-      SCHEMA.ensureColumnsIn(SCHEMA.LEDGER_DB).forEach(([table, column, type]) =>
-        this._ensureColumn(table, column, type, this.ledgerDb),
+    _migrateSideSqlite(dbName) {
+      const onLedger = dbName === SCHEMA.LEDGER_DB;
+      const conn = onLedger ? this.ledgerDb : this.labDb;
+      const want = onLedger ? SCHEMA.LEDGER_SCHEMA_VERSION : SCHEMA.LAB_SCHEMA_VERSION;
+      SCHEMA.createAllIn(conn, dbName);
+      SCHEMA.ensureColumnsIn(dbName).forEach(([table, column, type]) =>
+        this._ensureColumn(table, column, type, conn),
       );
-      this.ledgerIndexErrors = [];
-      SCHEMA.indexStatementsIn(SCHEMA.LEDGER_DB).forEach((sql) => {
+      const indexErrors = [];
+      SCHEMA.indexStatementsIn(dbName).forEach((sql) => {
         try {
-          this.ledgerDb.exec(sql);
+          conn.exec(sql);
         } catch (e) {
-          this.ledgerIndexErrors.push((e && e.message) || String(e));
+          indexErrors.push((e && e.message) || String(e));
         }
       });
       // ⚠️ 只有上面全部跑完才写版本号（与主库「真正跑完才推进」同一条纪律）：
       //    提前写会得到一个「自认为最新、其实结构不全」的库，而下次启动不再重试。
-      this.ledgerDb.exec(`PRAGMA user_version=${SCHEMA.LEDGER_SCHEMA_VERSION}`);
-      this.ledgerSchemaVersion = SCHEMA.LEDGER_SCHEMA_VERSION;
+      conn.exec(`PRAGMA user_version=${want}`);
+      if (onLedger) {
+        this.ledgerIndexErrors = indexErrors;
+        this.ledgerSchemaVersion = want;
+      } else {
+        this.labIndexErrors = indexErrors;
+        this.labSchemaVersion = want;
+      }
     }
 
     /**
@@ -412,31 +492,42 @@ function makeStore(APP_VERSION) {
       const sid = this.backend === 'sqlite';
       /** 功能：拼一个库的状态项。 */
       const item = (dbName) => {
-        const ledger = dbName === SCHEMA.LEDGER_DB;
-        const conn = ledger ? this.ledgerDb : this.db;
+        const onLedger = dbName === SCHEMA.LEDGER_DB;
+        const onLab = dbName === SCHEMA.LAB_DB;
+        const conn = onLedger ? this.ledgerDb : onLab ? this.labDb : this.db;
         // JSON 后端那一侧没有「连接」，判据换成「内存里有没有那份数据对象」——
-        // ⚠️ 只看 `readOnly` 是不够的：`ledgerData` 为 null 时读会撞一句内部错，
+        // ⚠️ 只看 `readOnly` 是不够的：数据对象为 null 时读会撞一句内部错，
         // 而状态里却写着 ok，日志与排查会一起被带偏（「日志说没事、功能一直 503」）。
-        const data = ledger ? this.ledgerData : this.data;
-        const readOnly = ledger ? this.ledgerReadOnly : this.readOnly;
-        const reason = ledger ? this.ledgerInitError : this.initError;
-        const file = sid ? (ledger ? this.ledgerDbFile : this.dbFile) : ledger ? this.ledgerJsonFile : this.jsonFile;
+        const data = onLedger ? this.ledgerData : onLab ? this.labData : this.data;
+        const readOnly = onLedger ? this.ledgerReadOnly : onLab ? this.labReadOnly : this.readOnly;
+        const reason = onLedger ? this.ledgerInitError : onLab ? this.labInitError : this.initError;
+        const file = sid
+          ? onLedger
+            ? this.ledgerDbFile
+            : onLab
+              ? this.labDbFile
+              : this.dbFile
+          : onLedger
+            ? this.ledgerJsonFile
+            : onLab
+              ? this.labJsonFile
+              : this.jsonFile;
         return {
-          label: ledger ? '记账数据库' : '主数据库',
+          label: onLedger ? '记账数据库' : onLab ? '实验室数据库' : '主数据库',
           file,
           backend: this.backend,
           // ⛔ 不要在这里**读**数据（不查表、不数条数）：它可能在启动早期被调用（那时还没装载完）
           ok: sid ? !!conn && !readOnly : !!data && !readOnly,
           readOnly,
-          journalMode: sid ? (ledger ? this.ledgerJournalMode : this.journalMode) : null,
+          journalMode: sid ? (onLedger ? this.ledgerJournalMode : onLab ? this.labJournalMode : this.journalMode) : null,
           reason: reason || null,
         };
       };
-      this.dbStatus = { main: item(SCHEMA.MAIN_DB), ledger: item(SCHEMA.LEDGER_DB) };
+      this.dbStatus = { main: item(SCHEMA.MAIN_DB), ledger: item(SCHEMA.LEDGER_DB), lab: item(SCHEMA.LAB_DB) };
     }
 
     /**
-     * 功能：只读地取两个库的状态快照（`{ main, ledger }`）—— 供启动日志与排查用。
+     * 功能：只读地取三个库的状态快照（`{ main, ledger, lab }`）—— 供启动日志与排查用。
      * @returns {Object} 见 `_refreshDbStatus()`
      */
     _backendStatus() {
@@ -446,7 +537,7 @@ function makeStore(APP_VERSION) {
     /**
      * 功能：查一张表住在哪个库 —— 转给 schema 门面（**映射的唯一出处在那里**）。
      * @param {string} table - 表名
-     * @returns {string} `'main'` / `'ledger'`
+     * @returns {string} `'main'` / `'ledger'` / `'lab'`
      */
     _dbFor(table) {
       return SCHEMA.dbOf(table);
@@ -455,36 +546,43 @@ function makeStore(APP_VERSION) {
     /**
      * 功能：取某张表所在的**那份数据对象**（JSON 后端的路由口）。
      * @param {string} table - 表名
-     * @returns {?Object} 主库那份 `this.data`，或记账库那份 `this.ledgerData`
+     * @returns {?Object} 主库那份 `this.data`、记账库那份 `this.ledgerData`、实验室库那份 `this.labData`
      */
     _dataFor(table) {
-      return this._dbFor(table) === SCHEMA.LEDGER_DB ? this.ledgerData : this.data;
+      const db = this._dbFor(table);
+      if (db === SCHEMA.LEDGER_DB) return this.ledgerData;
+      if (db === SCHEMA.LAB_DB) return this.labData;
+      return this.data;
     }
 
     /**
-     * 功能：把一段动作**放到来记账库那一侧执行** —— 期间 `this.db` / `this.data` / `this.activeDb`
-     *      都指向记账库，结束后一律还原（含抛错）。
+     * 功能：把一段动作**放到某个分库那一侧执行** —— 期间 `this.db` / `this.data` / `this.activeDb`
+     *      都指向那个库，结束后一律还原（含抛错）。
      *
      * 说明：⭐⭐ 这是模块原语「一个字不用改」的全部秘密（见 `makeFacade` 的说明）：
-     *      模块原语里那几十处 `this.db` / `this.data` / `this._listSql()` 因此自动落到记账库上。
-     *      ⚠️ 进门前必须先过 `_assertLedgerWritable()`：记账库不可用时**读也不许装作能读**
-     *      （读会撞 null 句柄、JSON 那边会读到一个空壳 ⇒ 界面显示「记账数据全没了」，
+     *      模块原语里那几十处 `this.db` / `this.data` / `this._listSql()` 因此自动落到正确的库上。
+     *      ⚠️ 进门前必须先过**那个库的**写闸门：库不可用时**读也不许装作能读**
+     *      （读会撞 null 句柄、JSON 那边会读到一个空壳 ⇒ 界面显示「数据全没了」，
      *      而真相是「这个库打不开」—— 必须让 503 把它说出来）。
      *      ⚠️ 用 try/finally 还原，**不是**「成功了还原、失败了不管」：一旦失败后没还原，
-     *      后面所有主库操作都会打到记账库上（那种串库是最难查的一类事故）。
+     *      后面所有主库操作都会打到那个分库上（那种串库是最难查的一类事故）。
+     *      ⚠️⭐ 0.9.8：从「只会切记账库」泛化成**按库名切**（`'ledger'` / `'lab'`）——
+     *      第三个库落地时不需要再写第二份切换逻辑。
      *
-     * @param {Function} fn - 要在记账库那一侧执行的动作
+     * @param {string} dbName - 库名，`'ledger'` / `'lab'`
+     * @param {Function} fn - 要在那个库上执行的动作
      * @returns {*} `fn` 的返回值
-     * @throws {Error} 记账库不可用时抛 503（由 HTTP 层收口）
+     * @throws {Error} 那个库不可用时抛 503（由 HTTP 层收口）
      */
-    _runOnLedger(fn) {
-      this._assertLedgerWritable();
+    _runOnDb(dbName, fn) {
+      if (dbName === SCHEMA.LAB_DB) this._assertLabWritable();
+      else this._assertLedgerWritable();
       const prevDb = this.db;
       const prevData = this.data;
       const prevActive = this.activeDb;
-      this.db = this.ledgerDb;
-      this.data = this.ledgerData;
-      this.activeDb = SCHEMA.LEDGER_DB;
+      this.db = dbName === SCHEMA.LAB_DB ? this.labDb : this.ledgerDb;
+      this.data = dbName === SCHEMA.LAB_DB ? this.labData : this.ledgerData;
+      this.activeDb = dbName;
       try {
         return fn();
       } finally {
@@ -553,25 +651,59 @@ function makeStore(APP_VERSION) {
      * 功能：**记账库**的写闸门 —— 第二个库不可用（打不开 / 已降级只读）时抛出带 `status = 503`
      *      的错误，错误信息里点名**是哪个库、什么原因**；否则直接返回。
      *
-     * 说明：⭐⭐ 为什么必须是**独立的一道闸门**：两个库有两个失败点，
-     *      「主库可写」**完全不代表**「记账库可写」—— 主库健康、记账库文件损坏时，
-     *      如果只检查主库，记账的每一次写入都会撞一个 null 句柄（`Cannot read properties of null`），
-     *      用户看到的是 500 与「内部错误」，而真正的原因（这个文件打不开）一个字都没说。
-     *      ⇒ 记账这一侧的每个原语（门面在 `_runOnLedger()` 里先过它）都要能被它拦下。
-     *      ⚠️ **读也走它**：库打不开时「读」不是「读到空」而是「根本读不了」——
-     *      返回空列表会让界面显示「记账数据全没了」，那比一句 503 糟得多。
-     *      ⚠️ 文案与 `_assertWritable()` 同一条口径：说清「哪个库、为什么、怎么办」，不抛内部英文。
+     * 说明：⭐ 保留这个薄方法名是因为**外面按名字找它**（两个后端、架构分册都写着
+     *      `_assertLedgerWritable`）；实现与实验室库共用 `_assertSideWritable()`。
      *
      * @returns {void}
      * @throws {Error} 记账库不可用时抛出，`err.status` 为 503
      */
     _assertLedgerWritable() {
+      this._assertSideWritable(SCHEMA.LEDGER_DB);
+    }
+
+    /**
+     * 功能：⭐ 0.9.8：**实验室库**的写闸门 —— 第三个库不可用（打不开 / 已降级只读）时抛出带
+     *      `status = 503` 的错误，错误信息里点名**是哪个库、什么原因**；否则直接返回。
+     *
+     * 说明：⭐⭐ 这是「实验室可失败」这条硬指标的**执行点**：它坏的时候只有实验功能停摆，
+     *      主库与记账库照常（`_runOnDb()` 进门第一句就是它）。
+     *      ⚠️ **读也走它**：库打不开时「读」不是「读到空」而是「根本读不了」——
+     *      返回空列表会让界面显示「实验室数据全没了」，那比一句 503 糟得多。
+     *      ⚠️ 文案与 `_assertWritable()` 同一条口径：说清「哪个库、为什么、怎么办」，不抛内部英文。
+     * @returns {void}
+     * @throws {Error} 实验室库不可用时抛出，`err.status` 为 503
+     */
+    _assertLabWritable() {
+      this._assertSideWritable(SCHEMA.LAB_DB);
+    }
+
+    /**
+     * 功能：**某个分库**的写闸门（记账 / 实验室共用一份实现）。
+     *
+     * 说明：⭐⭐ 为什么必须是**独立的一道闸门**（不是复用 `_assertWritable()`）：三个库有三个失败点，
+     *      「主库可写」**完全不代表**分库可写 —— 主库健康、某个分库文件损坏时，
+     *      如果只检查主库，那一路的每一次写入都会撞一个 null 句柄
+     *      （`Cannot read properties of null`），用户看到的是 500 与「内部错误」，
+     *      而真正的原因（这个文件打不开）一个字都没说。
+     *      ⚠️ 库名与原因必须**逐字说出来**：用户要据此判断「是个别功能坏了，还是整机数据出问题」。
+     *
+     * @param {string} dbName - 库名，`'ledger'` / `'lab'`
+     * @returns {void}
+     * @throws {Error} 该库不可用时抛出，`err.status` 为 503
+     */
+    _assertSideWritable(dbName) {
+      const onLedger = dbName === SCHEMA.LEDGER_DB;
+      const label = onLedger ? '记账数据库' : '实验室数据库';
+      const handle = onLedger ? this.ledgerDb : this.labDb;
+      const data = onLedger ? this.ledgerData : this.labData;
+      const readOnly = onLedger ? this.ledgerReadOnly : this.labReadOnly;
+      const initError = onLedger ? this.ledgerInitError : this.labInitError;
       // SQLite：句柄都没拿到（打不开 / 主库失败时没去开）⇒ 不可用
-      const missing = this.backend === 'sqlite' ? !this.ledgerDb : !this.ledgerData;
-      if (missing || this.ledgerReadOnly) {
-        const why = this.ledgerInitError || (this.ledgerReadOnly ? '数据库文件存在却打不开' : '第二个库没有打开');
+      const missing = this.backend === 'sqlite' ? !handle : !data;
+      if (missing || readOnly) {
+        const why = initError || (readOnly ? '数据库文件存在却打不开' : '第三个库没有打开');
         const err = new Error(
-          `记账数据库当前不可用（${why}）—— 为避免出现两套数据，记账相关的读写都已停止。` +
+          `${label}当前不可用（${why}）—— 为避免出现两套数据，${onLedger ? '记账' : '实验室'}相关的读写都已停止。` +
             '其余功能不受影响；请检查数据目录权限/归属（zxdesk:zxdesk）与磁盘空间，修好后重启应用即可恢复。',
         );
         err.status = 503;
@@ -607,6 +739,8 @@ function makeStore(APP_VERSION) {
     ['./methods/admin.js', require('./methods/admin.js')],
     ['./methods/backup.js', require('./methods/backup.js')],
     ['./methods/migrate.js', require('./methods/migrate.js')],
+    // ⭐ 个人授权目录（跨模块：设置页汇总 ＋ 加密信息选目录）
+    ['./methods/grants.js', require('./methods/grants.js')],
     // ⭐ 0.3.5 对话（好友 / 会话 / 消息）的业务方法：**已随 0.5.0搬进
     //    `modules/teamwork/store.js`** —— 由上面的注册表聚合，这里那一行已删。
     // ⭐ 0.2.0 课表的业务方法：**已随 0.5.0搬进 `modules/timetable/store.js`** ——

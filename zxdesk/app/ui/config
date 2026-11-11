@@ -10,6 +10,18 @@
       "url": "/app/zxdesk/",
       "allUsers": true
     },
+    "zxdesk.open": {
+      "title": "ZXDesk 加密文件",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "",
+      "gatewayPrefix": "/app/zxdesk",
+      "gatewaySocket": "app.sock",
+      "url": "/app/zxdesk/open/",
+      "fileTypes": ["zxdesk", "zxkey"],
+      "noDisplay": true,
+      "allUsers": true
+    },
     "zxdesk.lan": {
       "title": "ZXDesk工作台（局域网直连）",
       "icon": "images/icon_{0}.png",

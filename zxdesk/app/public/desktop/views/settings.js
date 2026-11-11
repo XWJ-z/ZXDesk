@@ -93,9 +93,15 @@
 import { api, BASE } from '../../core/api.js';
 import { isBackupZip, orgCounts, readZipManifest } from '../../core/backup.js';
 import { $, copyText, esc, formatBytes } from '../../core/dom.js';
+// ⭐ 数据位置那一块：文案与排版与手机端**同源**（`core/data-location.js`），⛔ 别各写一份
+import { LOC_TEXT, archivesLineHtml, dbRowsHtml, mountBusy, redNoteHtml, walNoteHtml } from '../../core/data-location.js';
+// ⭐ 已授权目录的**逐层浏览**（数据位置与加密信息附件位置共用一处渲染与判据）
+import { DIR_TEXT, mountDirTree } from '../../core/dir-tree.js';
 import { moduleItems } from '../../core/modules.js';
 // ⭐ 0.8.51：切栏（三级）那一枚淡入 —— 判据只住 `core/transition.js`。
 import { swapIn } from '../../core/transition.js';
+// ⭐ 0.9.8 第 11 轮：个人授权目录（这一块与手机端**共用同一个渲染**，见 core/grants.js）
+import { GRANT_TEXT, mountGrants, setGotoAuthHandler } from '../../core/grants.js';
 // ⭐ 0.6.0：设置页是「模块贡献分栏」的宿主—— 模块想在这里要一栏配置页，
 //    在本端接线表条目上声明 `settingsPane`（纯数据）+ `slots: ['settings-pane']`，
 //    内容由 `core/slots.js` 动态挂载；本文件不 import 任何具体模块的片段。
@@ -103,7 +109,7 @@ import { mountModuleSlot, openModuleSettings, slotPaneDefs } from '../../core/sl
 import { uiOf } from '../modules.js';
 import { applyPrefsVisibility, renderSidebar, showView } from '../shell.js';
 import { state } from '../state.js';
-import { closeModal, openModal, setModalSave, toast } from '../ui.js';
+import { closeModal, openModal, openNoticeModal, setModalSave, toast } from '../ui.js';
 import { accountPaneHtml, doLogout, openPasswordModal, openUsernameModal } from './account.js';
 import { loadAdmin, renderAdmin } from './admin.js';
 
@@ -842,7 +848,7 @@ function dataPaneHtml(isAdmin) {
       </dl>`;
   const note = `
       <div class="sec-note" style="margin-top: 12px; line-height: 1.7; font-size: 12px; color: var(--text-2)">
-        数据都存在这台 NAS 上，每个账号各存各的。
+        数据库保存在NAS中，按账号存取数据
       </div>`;
   if (!isAdmin) {
     return `
@@ -879,12 +885,18 @@ function dataPaneHtml(isAdmin) {
     <div class="set-sec">
       <div class="panel-card">
         <div class="path-row">
-          <code id="storage-path" class="path-text" title="数据目录（NAS 上的文件夹）">${esc(s.dataDir || '—')}</code>
+          <code id="storage-path" class="path-text" title="数据位置（NAS 上的文件夹）">${esc(s.dataDir || '—')}</code>
+          ${s.location && s.location.custom ? `<span class="loc-badge">${esc(LOC_TEXT.CUSTOM)}</span>` : ''}
           <button id="btn-copy-path" class="btn btn-subtle btn-sm" type="button">复制路径</button>
+          <button id="btn-move-data" class="btn btn-subtle btn-sm" type="button">${esc(LOC_TEXT.MOVE)}</button>
         </div>
+        ${redNoteHtml(s.location && s.location.custom)}
+        ${archivesLineHtml(s.location)}
+        <div class="loc-lead">${esc(LOC_TEXT.LEAD)}</div>
+        ${dbRowsHtml(s.databases)}
+        ${walNoteHtml()}
         <dl class="kv-grid">
           <dt>应用版本</dt><dd>v${esc(h.version || '—')}</dd>
-          <dt>数据文件</dt><dd>${esc(s.dbName || '—')}${s.dbSize == null ? '' : ` · ${formatBytes(s.dbSize)}`}</dd>
           <dt>数据存放方式</dt><dd>${backend}</dd>
           <dt>读写方式</dt><dd>${esc(
             s.journalMode === 'wal' ? '正常（读写并行，互不阻塞）' : s.journalMode ? '未开启（常见于网络共享盘）' : '—',
@@ -949,7 +961,7 @@ function versionsCardHtml() {
   let body;
   if (!v) {
     body = `<div class="ver-note">
-        还没检查过。点「检查更新」向更新服务器要一次各端最新版本 —— 只发本机的版本号与平台，不发任何账号与数据。
+        点「检查更新」会向更新服务器请求获取一次最新版本信息
       </div>`;
   } else if (!v.ok) {
     body = `<div class="ver-note ver-note-bad">暂时读不到：${esc(v.message || '连接失败')}。不影响使用，需要时再点一次。</div>`;
@@ -1021,7 +1033,8 @@ function accountPaneHtmlWrap() {
   return `
     <div class="set-sec">
       ${accountPaneHtml()}
-    </div>`;
+    </div>
+    <div class="set-sec grant-box" id="grant-box"></div>`;
 }
 
 /**
@@ -1199,6 +1212,8 @@ function bindPane(id) {
   }
   if (id === 'version') {
     on('btn-copy-path', copyDataPath);
+    // ⭐ 数据位置：低频、高风险的动作，入口只放这里，进去先预检、再确认
+    on('btn-move-data', openMoveDataModal);
     // ⭐ 0.9.1：唯一会对外联网的那颗按钮（见 `checkVersions()` 的说明）
     on('btn-check-version', checkVersions);
     return;
@@ -1208,6 +1223,13 @@ function bindPane(id) {
     on('btn-change-name', () => openUsernameModal(renderSettings));
     on('btn-change-pw', openPasswordModal);
     on('btn-logout', doLogout);
+    // ⭐⭐ 0.9.8 第 11 轮：**个人授权目录**（账号资料下面那一块）。
+    //    ⚠️ 它自己拉数据、自己重画（`mountGrants`），这里只给容器与两样注入：
+    //    选择器（宿主 SDK）与提示函数。⛔ 别在这里再写一份「读清单 / 画行」。
+    //    ⚠️⚠️ 选择器走**动态 import**，⛔ 不做静态 import：`modules/secrets/` 是**可删**的模块，
+    //    静态 import 会让「删掉加密信息那个目录」变成「整个设置页打不开」（删目录验收要求相反）。
+    //    ⭐ 三样注入：选择器 / 提示 / **失败弹窗**（移除失败要指路，toast 一闪就没了）
+    mountGrants($('#grant-box'), { pick: grantPicker, toast, notice: openNoticeModal });
     return;
   }
   if (id === 'backup') {
@@ -1252,6 +1274,237 @@ function adminPaneInto() {
 function on(id, fn) {
   const node = document.getElementById(id);
   if (node) node.addEventListener('click', fn);
+}
+
+/**
+ * 功能：跳到「账号设置 → 个人授权目录」那一块（并滚到它）。
+ *
+ * 说明：⚠️ `selectPane('account')` 在「本来就在这一栏」时是空操作，所以滚动要单独做，
+ *      而且要等这一栏画完 —— 用一次短延时，⛔ 别用 `requestAnimationFrame`（它不等渲染完成）。
+ * @returns {void}
+ */
+function gotoGrantPane() {
+  // ⚠️ 三步缺一不可：**先切屏**（从「实验室 / 工作台任何一屏」过来时，设置页还没被显示，
+  //    此时 `selectPane()` 画出来的东西在 `hidden` 的容器里，`scrollIntoView` 什么也不会发生）——
+  //    这是「点了跳转没反应」的真正原因；再切栏；最后等这一栏画完再滚。
+  showView('settings');
+  selectPane('account');
+  setTimeout(() => {
+    const el = document.getElementById('grant-box');
+    if (el && typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }, 120);
+}
+
+// ⭐ 加密信息面板里的「没有对应的目录」也要能跳到这里 —— 那边是模块，不能反向 import 本文件，
+//    所以走 `core/grants.js` 的钩子。（模块作用域注册一次，设置页只要加载过就生效。）
+setGotoAuthHandler(gotoGrantPane);
+
+/**
+ * 功能：把一条路径折成末段（⛔ 页面上不出现完整路径之外的任何东西）。
+ * @param {string} p - 路径
+ * @returns {string} 末段
+ */
+function locTail(p) {
+  const parts = String(p || '')
+    .split('/')
+    .filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : String(p || '');
+}
+
+/**
+ * 功能：把预检结果画成一段说明（文件数 / 字节数 / 两个位置各自的可用空间）。
+ * @param {Object} info - `/api/admin/data-location/check` 的 `info`
+ * @returns {string} HTML
+ */
+function precheckHtml(info) {
+  if (!info) return '';
+  return (
+    `<div class="loc-pre-ok">预检通过：要搬 ${info.files} 个文件，共 ${esc(formatBytes(info.bytes))}。</div>` +
+    `<div class="loc-pre-dim">目标位置可用 ${esc(info.freeTarget == null ? '—' : formatBytes(info.freeTarget))}` +
+    ` ｜ 安装位置可用 ${esc(info.freeDefault == null ? '—' : formatBytes(info.freeDefault))}` +
+    (info.fstype ? ` ｜ ${esc(info.fstype)}` : '') +
+    `</div>`
+  );
+}
+
+/**
+ * 功能：打开「修改数据位置」弹窗 —— 选目录 → 预检 → 确认 → 搬迁 → 轮询进度。
+ *
+ * 说明：⚠️ 候选**只能从已授权目录里挑**（`GET /api/admin/data-location/dirs`，来源与预检同一处）：
+ *      数据位置必须已经授权给本应用，否则应用账号连读都读不了。⛔ 不再弹飞牛选择器 ——
+ *      选择器是「新授权」的通道，而这里要的是「在已授权的里面挑」。
+ *      ⚠️ 搬迁完成后**必须到应用中心重启**：本进程不会热切换数据库（那会让三个连接与全部状态重建）。
+ * @returns {Promise.<void>} 无返回值
+ */
+async function openMoveDataModal() {
+  openModal(
+    LOC_TEXT.DIALOG_TITLE,
+    `<div class="loc-move">
+      <p class="loc-move-step">从<b>已经授权给本应用</b>的目录里选一个<b>空</b>文件夹 —— 点箭头逐级展开，点名字就选中它。</p>
+      <div id="loc-browse" class="loc-browse"></div>
+      <div id="loc-picked" class="loc-picked"></div>
+      <div id="loc-pre" class="loc-pre"></div>
+      <ul class="loc-move-lines">
+        <li>${esc(LOC_TEXT.LINE_READONLY)}</li>
+        <li>${esc(LOC_TEXT.LINE_ARCHIVE)}</li>
+        <li class="loc-red">⚠️ ${esc(LOC_TEXT.RED)}</li>
+      </ul>
+    </div>`,
+    { mid: true },
+  );
+  // ⭐⭐ 「开始搬迁」用的是弹窗底下那颗**共用主按钮** —— 那里本来就有「取消」，两颗天然同一排。
+  //    ⚠️ 也正因为它全弹窗共用：进这一屏先复位 `disabled`，并且**不用 `disabled` 表达
+  //    「预检还没过」**（那个灰态会遗留给下一个弹窗），改成点下去给一句人话（见 `doApply()`）。
+  setModalSave(LOC_TEXT.DIALOG_APPLY);
+  const saveBtn = document.getElementById('modal-save');
+  if (saveBtn) saveBtn.disabled = false;
+
+  const browse = document.getElementById('loc-browse');
+  const picked = document.getElementById('loc-picked');
+  const pre = document.getElementById('loc-pre');
+  /** 当前所在目录 ＝ 要搬去的目录（根层还没进去时是空串） */
+  let target = '';
+  /** 这个目录**预检通过了**吗 */
+  let ready = false;
+  /** 已经在搬了 —— 防连点 */
+  let applying = false;
+  /** 预检序号：同上 */
+  let checkSeq = 0;
+
+  /**
+   * 功能：按选中的目录刷新「当前选择」那一行并跑预检。
+   *
+   * 说明：⭐⭐ 树上的每一次选中都会走到这里 —— 选中即预检，用户不用再点一次「检查」
+   *      就知道这个文件夹能不能用（空 / 非空、空间够不够、应用账号能不能写）。
+   * @param {string} p - 选中的目录（绝对路径）
+   * @returns {Promise.<void>} 完成
+   */
+  async function onPick(p) {
+    target = String(p || '');
+    pre.innerHTML = '';
+    ready = false;
+    picked.innerHTML = target
+      ? `<span class="loc-picked-k">${esc(DIR_TEXT.PICKED)}</span><code>${esc(target)}</code>`
+      : '';
+    if (target) await runCheck();
+  }
+
+  /**
+   * 功能：把已授权目录画成一棵可逐级展开的树（＋新建文件夹）。
+   *
+   * 说明：⚠️ 判据与子目录清单都由服务端给（`core/grant-tree.js`），这里只挂状态与事件；
+   *      ⛔ 前端不拼路径、不缓存授权结论 —— 展开时才问一次，回来什么画什么。
+   * @returns {Object} 树控制器
+   */
+  function mountBrowser() {
+    return mountDirTree(browse, {
+      // 展开某一级时取它的子目录（`dir` 为空 ＝ 授权根那一层）
+      fetchDirs: (dir) => api('GET', `/api/admin/data-location/dirs?dir=${encodeURIComponent(dir || '')}`),
+      // ⭐ 直接在选中的文件夹里建一个空目录：授权给你的目录常常已经有东西了，
+      //    而数据位置要求**空目录** —— 没有这一步就得先切到飞牛里建好再回来。
+      mkdir: (parent, name) => api('POST', '/api/admin/data-location/mkdir', { parent, name }),
+      onSelect: (p) => void onPick(p),
+      onGoto: () => {
+        closeModal();
+        gotoGrantPane();
+      },
+    });
+  }
+
+  /**
+   * 功能：对当前目录跑一次服务端预检，并把结果画成一块（失败是红底加粗那一块）。
+   * @returns {Promise.<void>} 完成
+   */
+  async function runCheck() {
+    const my = (checkSeq += 1);
+    pre.innerHTML = '<div class="loc-pre-dim">正在预检…</div>';
+    ready = false;
+    try {
+      const r = await api('POST', '/api/admin/data-location/check', { path: target });
+      if (my !== checkSeq) return;
+      pre.innerHTML = precheckHtml(r && r.info);
+      ready = true;
+    } catch (e) {
+      if (my !== checkSeq) return;
+      // ⚠️ 标题与原因**分两行**：整块加粗反而没有层次（`.loc-pre-bad > b` 是 800、正文 600）
+      pre.innerHTML = `<div class="loc-pre-bad"><b>预检没通过</b><span>${esc(e.message || '原因未知')}</span></div>`;
+    }
+  }
+
+  /**
+   * 功能：点「开始搬迁」—— 上遮罩、等相位、完成后给「去重启」的明确指引。
+   *
+   * 说明：⭐⭐ 这个动作在服务端**几十毫秒**就走完了，原来只在弹窗底部改一行 12px 的小字，
+   *      用户什么都没看见，于是报「点了没反应（实际已经迁移完成）」。现在：
+   *      ① 立刻挂全屏遮罩（旋转环 ＋ 相位 ＋ 进度），**先让用户看到"在跑"**；
+   *      ② 轮询用递归 `setTimeout`（首次 0ms），不依赖「500ms 后第一次」那个空窗；
+   *      ③ 完成态**不可关闭**，一直提示「请重新启动应用」—— 重启前应用只读，关掉它只会让人
+   *        以为「搬完了但好像又不对」（2026-11-10 老大：重启之前不能关闭这个弹窗）。
+   * @returns {Promise.<void>} 完成
+   */
+  async function doApply() {
+    // ⚠️⭐ 三道守卫（都不是形式主义）：
+    //    ① `#modal-save` 是共用节点，`onclick` 会留着上一次的闭包 ⇒ 先确认**这一层**还开着
+    //      （标题是「修改数据位置」），否则会在别的弹窗里凭空发一次搬迁请求；
+    //    ② 没选目录 / 预检没过 ⇒ 给一句人话，别发一个必然 409 的请求；
+    //    ③ `applying` 防连点。
+    const titleEl = document.getElementById('modal-title');
+    if (!titleEl || titleEl.textContent !== LOC_TEXT.DIALOG_TITLE) return;
+    if (applying) return;
+    if (!target) {
+      toast('请先点进一个要放数据的文件夹（根目录不能直接用）');
+      return;
+    }
+    if (!ready) {
+      toast('这个目录还没通过预检 —— 请看上面那句红字，或者换一个空文件夹', true);
+      return;
+    }
+    applying = true;
+    const busy = mountBusy();
+    busy.update('preparing');
+    try {
+      await api('POST', '/api/admin/data-location/apply', { path: target });
+    } catch (e) {
+      busy.fail((e && e.message) || '原因未知');
+      applying = false;
+      return;
+    }
+    const ACTIVE = ['preparing', 'dumping', 'copying', 'verifying', 'deploying', 'packaging', 'index'];
+    let tries = 0;
+    const poll = async () => {
+      let st;
+      try {
+        st = await api('GET', '/api/admin/data-location/status');
+      } catch (_e) {
+        // 迁移中的请求偶尔会被冻结闸门挡回来（都是 503）⇒ 继续问，别把遮罩卡死
+        if (tries < 600) {
+          tries += 1;
+          setTimeout(() => void poll(), 400);
+        } else {
+          busy.fail('等不到搬迁结果（状态接口一直失败），请刷新页面确认');
+        }
+        return;
+      }
+      const job = st && st.job;
+      if (job && ACTIVE.includes(String(job.phase))) {
+        busy.update(job.phase, job.bytesDone, job.bytesTotal);
+        tries += 1;
+        if (tries < 900) setTimeout(() => void poll(), 400);
+        else busy.fail('搬迁时间过长，请刷新页面确认');
+        return;
+      }
+      if (job && job.phase === 'pendingRestart') {
+        busy.done(locTail(target));
+        return;
+      }
+      busy.fail((job && job.error) || '原因未知');
+    };
+    void poll();
+  }
+
+  mountBrowser();
+
+  if (saveBtn) saveBtn.onclick = () => void doApply();
 }
 
 /**
@@ -1691,6 +1944,14 @@ async function doRestore(file) {
     });
     const r = await res.json().catch(() => null);
     if (!res.ok) throw new Error((r && r.error) || `恢复失败（HTTP ${res.status}）`);
+    // ⭐ 0.9.8：备份里**没有实验室那一份**时，服务端**刻意不动**现有实验室数据（失败方向 = 少删）。
+    //    「没动过」必须说出来 —— ⛔ 静默跳过正是这一层最贵的缺陷（用户以为被恢复了，其实原封未动）。
+    const skipped = (r && r.skippedDbs) || [];
+    const skipNote = skipped.includes('lab')
+      ? `<div class="set-note" style="margin-top:10px">
+           这份备份里没有「zx实验室」的数据，所以实验室当前的实验内容<b>一条没动</b>（没有被清空）。
+         </div>`
+      : '';
     openModal(
       '恢复完成',
       `<div class="set-note">
@@ -1700,7 +1961,7 @@ async function doRestore(file) {
        <div class="set-note" style="margin-top:10px">
          换掉之前的旧数据已另存为 <b>${esc((r.backupFile && r.backupFile) || '—')}</b>，
          就在 NAS 的数据文件夹里（路径见设置 →「数据来源」）。万一恢复错了，可以拿它退回去。
-       </div>`,
+       </div>${skipNote}`,
     );
     const b = $('#modal-save');
     b.disabled = false;
@@ -1805,4 +2066,29 @@ async function doMigrate() {
     setModalSave('开始迁移', true);
     toast(e.message, true);
   }
+}
+
+/**
+ * 功能：「个人授权目录」那一块用的**选择器** —— 动态取加密信息模块里那一份实现。
+ *
+ * 说明：⭐⭐ 0.9.8 第 11 轮。授权只能由**宿主选择器**完成（那是唯一能让飞牛记下授权的通道），
+ *      而那个实现住在 `modules/secrets/shared.js`。
+ *      ⚠️⚠️ 这里刻意用**动态** `import()`，⛔ 不做静态 import：`modules/secrets/` 是**可删**的模块，
+ *      静态 import 会让「删掉加密信息那个目录」变成「整个设置页白屏」——
+ *      而删目录验收要求的是「少一个入口，其余照常」。
+ *      ⚠️ 模块不在 / 宿主没应答时**如实返回失败**（⛔ 不静默），由 `mountGrants()` 弹提示。
+ * @param {Object} [opts] - 传给选择器的选项（`{title, onSlow}`）
+ * @returns {Promise.<{ok: boolean, path?: string, reason?: string, message?: string}>} 选择结果
+ */
+async function grantPicker(opts) {
+  let mod;
+  try {
+    mod = await import('../../modules/secrets/shared.js');
+  } catch (_e) {
+    mod = null;
+  }
+  if (!mod || typeof mod.pickAuthorizedDir !== 'function') {
+    return { ok: false, reason: 'no-sdk', message: GRANT_TEXT.NO_PICK };
+  }
+  return mod.pickAuthorizedDir(opts);
 }

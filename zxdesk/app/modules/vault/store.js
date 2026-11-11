@@ -50,10 +50,11 @@
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.8.18
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/16-密码库.md、docs/公共/开发方案/05-密码库-1期.md
  */
-const { nowStamp, notFoundErr, badRequest } = require('../../core/store/helpers.js');
+const crypto = require('node:crypto');
+const { nowStamp, notFoundErr, badRequest, isBlankPassword } = require('../../core/store/helpers.js');
 const vc = require('./lib/crypto.js');
 
 /** 自动锁定的默认分钟数（方案 §十三-3 定案：10 分钟，可设置） @type {number} */
@@ -62,6 +63,21 @@ const DEFAULT_LOCK_MINUTES = 10;
 /** 自动锁定分钟数的允许区间 —— 与 `validate.js` 的口径一致（**不允许 0**：自动锁定是安全特性） */
 const LOCK_MINUTES_MIN = 1;
 const LOCK_MINUTES_MAX = 120;
+
+/** 钥匙编号的前缀 —— 与 `.zxkey` 文件格式里的 `app` 同源，改它 = 旧钥匙的 `kid` 全部对不上 */
+const KID_PREFIX = 'zxdesk-key-v1';
+
+/** 钥匙文件的大小上限：64 KB（方案 §8.1）—— 超过一定不是我们的文件 */
+const KEY_FILE_MAX = 64 * 1024;
+
+/** 导入钥匙时允许的 KDF 参数上限（方案 §8.3）—— 防止有人用「N=2^30」让服务端卡死 */
+const IMPORT_KDF_MAX = { N: 1 << 17, r: 8, p: 4 };
+
+/** 「已开钥匙」的空闲超时：10 分钟滑动（与密码库解锁态同一条体感） */
+const READER_IDLE_MS = 10 * 60 * 1000;
+
+/** 「已开钥匙」的数量上限（LRU 淘汰） */
+const READER_MAX = 8;
 
 /** 一个标签名的长度上限 —— 与 `validate.js` 的 `MAX_SHORT_TEXT` 同口径（收藏夹分类名也是 50） */
 const MAX_TAG_LEN = 50;
@@ -110,6 +126,167 @@ function normTags(raw) {
 const unlocked = new Map();
 
 /**
+ * 进程内「已开钥匙」表：`"<会话账号>:<kid>" → {dek, ownerUid, at, timer}`。
+ *
+ * 说明：⭐⭐ 0.9.8 第 6 轮（阅读器）：这里的 DEK **不是**某个账号的解锁态，
+ *      而是「这一把钥匙刚刚被输对过密码」—— 它来自 `.zxkey` 导入的材料，
+ *      **不进 `unlocked`、不参与 `_vaultDek()`**，所以拿它打开别人的文件
+ *      ⛔ 不会把别人的密码库解锁（方案 §10.3 第 ③ 条）。
+ *      ⚠️ 键里带**会话账号**：同一把钥匙被两个人分别导入时，各自输各自的密码、各自计时。
+ *      ⚠️ 绝不落盘、绝不进响应、绝不进日志（与 `unlocked` 同一条纪律）。
+ * @type {Map.<string, {dek: Buffer, ownerUid: ?number, at: number, timer: ?Object}>}
+ */
+const readerKeys = new Map();
+
+/**
+ * 功能：校验一份 `.zxkey` 的**格式**（⛔ 不验密码、不解密、不碰数据库、不回任何密钥材料）。
+ *
+ * 说明：⭐⭐ 0.9.8 第 7 轮（方案 §14.6.1.3）：`keyInspect()` 与 `keyImport()` 共用这一处。
+ *      抽出来的理由是**失效方式**——两处各写一遍，早晚一边放宽一边没放宽，
+ *      症状是「识别说这是好钥匙，导入却说不是钥匙文件」，用户在两步之间被绕死。
+ *      ⚠️ 这里**不校验 `kid` 与材料是否对得上**：那要解密后才能算（`kidOf()`），
+ *      而 inspect 明确「不验密码」。⇒ `kid` 只当**文件里写的那一个**用（显示与查重）。
+ * @param {Object} obj - 解析后的 JSON
+ * @returns {{obj: Object, params: Object, salt: Buffer, kid: string, owner_uid: ?number, owner_name: string, created_at: string}}
+ *      校验通过的材料；⛔ 调用方别把 `salt` / `obj` 里的字段往外吐
+ * @throws {Error} 400（格式不合法 / 被截断 / 参数越界）
+ */
+function parseKeyFile(obj) {
+  const o = obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : null;
+  if (!o || o.app !== 'zxdesk' || Number(o.v) !== 1 || o.kind !== 'vault-key') {
+    throw badRequest('这不是一个有效的钥匙文件');
+  }
+  // ⚠️ 大小上限在**解析后**再兜一次：路由层已经按 `KEY_FILE_MAX` 限制读取长度，
+  //    但那个口头约定不该是唯一防线（少一处就是「一个 50 MB 的 JSON 进内存」）。
+  if (Buffer.byteLength(JSON.stringify(o), 'utf8') > KEY_FILE_MAX) {
+    throw badRequest('这不是一个有效的钥匙文件');
+  }
+  const str = (v) => String(v == null ? '' : v);
+  const need = ['kid', 'salt', 'dek_iv', 'dek_cipher', 'dek_tag', 'verifier_iv', 'verifier_cipher', 'verifier_tag'];
+  if (need.some((f) => !str(o[f]))) throw badRequest('钥匙文件不完整（可能被截断）');
+  if (String(o.kdf || 'scrypt') !== 'scrypt') throw badRequest('钥匙文件的参数不合法（可能被改过）');
+  let params;
+  try {
+    params = vc.normalizeKdfParams(o.kdf_params);
+  } catch (_e) {
+    throw badRequest('钥匙文件的参数不合法（可能被改过）');
+  }
+  if (params.N > IMPORT_KDF_MAX.N || params.r > IMPORT_KDF_MAX.r || params.p > IMPORT_KDF_MAX.p) {
+    throw badRequest('钥匙文件的参数不合法（可能被改过）');
+  }
+  const salt = Buffer.from(str(o.salt), 'base64');
+  if (salt.length < 8) throw badRequest('钥匙文件不完整（可能被截断）');
+  return {
+    obj: o,
+    params,
+    salt,
+    kid: str(o.kid),
+    owner_uid: Number.isInteger(Number(o.owner_uid)) ? Number(o.owner_uid) : null,
+    owner_name: str(o.owner_name).slice(0, 100),
+    created_at: str(o.created_at),
+  };
+}
+
+/**
+ * 功能：算一把钥匙的编号（DEK 指纹前 16 位十六进制）。
+ *
+ * 说明：⭐ `kid` **不是密钥**，只是「这两把钥匙是不是同一把」的指纹 ——
+ *      它进 `.zxkey` 文件、进数据库、进接口响应（方案 §8.1 / §8.4），所以绝不能由它反推 DEK。
+ *      ⚠️ 前缀 `zxdesk-key-v1` 刻意写死：换它就等于让所有已导出的钥匙「对不上号」。
+ * @param {Buffer} dek - 32 字节数据密钥
+ * @returns {string} 16 位小写十六进制
+ */
+function kidOf(dek) {
+  return crypto.createHash('sha256').update(KID_PREFIX).update(dek).digest('hex').slice(0, 16);
+}
+
+/**
+ * 功能：生成带本地时区偏移的 ISO 时间（`2026-11-08T22:40:00+08:00`）。
+ *
+ * 说明：⚠️ 刻意不用 `toISOString()`：它是 UTC（`…T14:40:00.000Z`），而钥匙文件是**给人看**的，
+ *      「这把钥匙是什么时候导出的」应当按用户所在时区写。差值用 `getTimezoneOffset()` 算，
+ *      不引入任何时区库（铁律 5）。
+ * @param {Date} [d] - 时间（缺省现在）
+ * @returns {string} 带偏移的 ISO 串
+ */
+function isoLocal(d) {
+  const t = d instanceof Date ? d : new Date();
+  const off = -t.getTimezoneOffset();
+  const sign = off >= 0 ? '+' : '-';
+  const pad = (n) => String(Math.floor(Math.abs(n))).padStart(2, '0');
+  const body =
+    `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())}` +
+    `T${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())}`;
+  return `${body}${sign}${pad(off / 60)}:${pad(off % 60)}`;
+}
+
+/**
+ * 功能：算「已开钥匙」在内存表里的键（会话账号 ＋ 钥匙编号）。
+ * @param {number} uid - 当前会话账号 id
+ * @param {string} kid - 钥匙编号
+ * @returns {string} 内存键
+ */
+function readerSlot(uid, kid) {
+  return `${Number(uid)}:${String(kid)}`;
+}
+
+/**
+ * 功能：把「已开钥匙」的内存键拆回 `[账号 id, 钥匙编号]`。
+ * @param {string} slot - `readerSlot()` 生成的键
+ * @returns {Array} `[uid, kid]`
+ */
+function splitSlot(slot) {
+  const s = String(slot);
+  const i = s.indexOf(':');
+  if (i < 0) return [NaN, s];
+  return [Number(s.slice(0, i)), s.slice(i + 1)];
+}
+
+/**
+ * 功能：给一把「已开钥匙」挂一个「到期就从内存表删掉」的定时器。
+ *
+ * 说明：⚠️ 必须 `unref()`（与 `scheduleDrop()` 同一理由）。正确性由 `readerDek()` /
+ *      `readerHas()` 里的时间比对兜底 —— 定时器只负责「尽早释放引用」，它可能晚触发。
+ * @param {string} slot - 内存键
+ * @returns {Object} Node 的 Timeout 句柄（已 unref）
+ */
+function scheduleReaderDrop(slot) {
+  const t = setTimeout(() => {
+    const e = readerKeys.get(slot);
+    if (e && e.timer) clearTimeout(e.timer);
+    readerKeys.delete(slot);
+  }, READER_IDLE_MS);
+  if (typeof t.unref === 'function') t.unref();
+  return t;
+}
+
+/**
+ * 功能：把这个账号在阅读器里**已经打开的**钥匙全部清掉（锁库时调）。
+ *
+ * 说明：⭐⭐ 0.9.8 第 7 轮（方案 §11.3 第 5 条）：老大要求「锁定过后自动回到这个界面」，
+ *      而阅读器是另一个页面 —— 它自己那把钥匙（`readerKeys`，10 分钟滑动）如果留着，
+ *      锁库之后那个窗口还能继续解密。⇒ 锁库这一下要**连它一起失效**，
+ *      让它下一次请求拿 403，前端据此回到「需要主密码」。
+ *      ⚠️ 只清**这个会话账号**导入的钥匙（键前缀 `uid:`）：同一把钥匙被别人导入是另一行记录，
+ *      锁 A 的库不该打断 B 正在看的文件。
+ *      ⚠️ 只删内存引用，⛔ 不碰库里已导入的钥匙记录（那是「下次还能用」，与「这次已经开着」是两件事）。
+ * @param {number} uid - 会话账号 id
+ * @returns {number} 清掉的把数
+ */
+function purgeReaderKeys(uid) {
+  const prefix = `${Number(uid)}:`;
+  let n = 0;
+  for (const k of [...readerKeys.keys()]) {
+    if (!k.startsWith(prefix)) continue;
+    const e = readerKeys.get(k);
+    if (e && e.timer) clearTimeout(e.timer);
+    readerKeys.delete(k);
+    n += 1;
+  }
+  return n;
+}
+
+/**
  * 功能：构造一个「需要解锁 / 主密码不对」的 403 错误。
  *
  * 说明：⭐ **刻意不用 401**：前端的规则是「遇到 401 一律跳登录页」，
@@ -154,6 +331,9 @@ function peekUnlocked(uid) {
   if (!e) return false;
   if (Date.now() - e.at > e.minutes * 60000) {
     dropUnlocked(key);
+    // ⭐ 0.9.8 第 7 轮：定时器可能晚触发（进程忙）⇒ 这里发现过期也把阅读器的钥匙一并清掉，
+    //    否则「已经超时」和「阅读器还能解密」会同时成立（方案 §11.3 第 5 条）
+    purgeReaderKeys(key);
     return false;
   }
   return true;
@@ -236,13 +416,22 @@ module.exports = {
    */
   vaultStatus(uid) {
     const minutes = lockMinutesOf(this, uid);
+    const e = unlocked.get(Number(uid));
+    const isOn = peekUnlocked(uid);
+    // ⭐⭐ 0.9.8 第 7 轮（方案 §11.3 第 1 条）：多回一个「还剩多少秒」。
+    //    ⚠️ 原来是靠前端各自算倒计时（只有密码库那一屏在跑），加密信息屏根本没有计时器 ⇒
+    //    到点也不会回到锁屏。现在由 `core/vault-watch.js` 统一按这个值排到期定时器。
+    //    ⚠️ 仍然走 `peekUnlocked()`（只读、**不续期**）—— 009 报告 S9 踩过
+    //    「轮询 status 让自动锁定永不触发」，⛔ 不能改成 `vaultIsUnlocked()`。
+    const left = isOn && e ? Math.max(0, Math.round((e.at + e.minutes * 60000 - Date.now()) / 1000)) : 0;
     return {
       initialized: !!this._bk.getVaultMeta(Number(uid)),
       // ⚠️ 只读判断（`peekUnlocked`）：这个接口是给界面问「现在锁没锁」的，
       //    **不算一次操作**、不续期 —— 否则脚本轮询就能让自动锁定永不触发（009 报告 S9）
-      unlocked: peekUnlocked(uid),
+      unlocked: isOn,
       lockAfterSeconds: minutes * 60,
       lockMinutes: minutes,
+      remainingSeconds: left,
     };
   },
 
@@ -394,8 +583,25 @@ module.exports = {
    * @returns {{ok: true}} 固定返回体（**不回「锁没锁上」之外的任何东西**）
    */
   vaultLock(uid) {
-    dropUnlocked(Number(uid));
+    // ⭐ 0.9.8 第 7 轮：手动锁定也要把阅读器已开的钥匙清掉（`lockAndPurge()`）
+    this.lockAndPurge(uid);
     return { ok: true };
+  },
+
+  /**
+   * 功能：锁定一个账号并**连带清掉它在阅读器里已开的钥匙**（锁库的唯一推荐入口）。
+   *
+   * 说明：⭐⭐ 0.9.8 第 7 轮（方案 §11.3 第 5 条）：老大要求锁库后「不留一个还在解密的窗口」。
+   *      三处调用：手动锁定（`vaultLock()`）、自动到期（`scheduleDrop()` 的定时器）、
+   *      `peekUnlocked()` 发现已过期。⛔ 别把清理塞进 `dropUnlocked()` ——
+   *      `_vaultHold()`（重新解锁）也调它，那样每次解锁都会误伤。
+   * @param {number} uid - 账号 id
+   * @returns {{ok: true, purged: number}} 清掉的阅读器钥匙把数（排查用，界面不看）
+   */
+  lockAndPurge(uid) {
+    const key = Number(uid);
+    dropUnlocked(key);
+    return { ok: true, purged: purgeReaderKeys(key) };
   },
 
   /**
@@ -405,6 +611,12 @@ module.exports = {
   vaultLockAll() {
     const n = unlocked.size;
     [...unlocked.keys()].forEach(dropUnlocked);
+    // ⭐ 0.9.8 第 7 轮：全局上锁同样要清阅读器钥匙（测试清场靠它，
+    //    运维「一键上锁」也不该留下还能解密的窗口）
+    readerKeys.forEach((e) => {
+      if (e && e.timer) clearTimeout(e.timer);
+    });
+    readerKeys.clear();
     return n;
   },
 
@@ -479,6 +691,10 @@ module.exports = {
           username: '',
           url: '',
           tags: [],
+          // ⭐ 0.9.8：解不开的那条**算不出**它有没有密码 ⇒ 一律 false。
+          //    ⚠️ 别给它 true：那会让界面在一条「已经坏了」的记录上再叠一句「这条没设密码」，
+          //    两句话指的其实是不同的毛病，混在一起用户只会更糊涂。
+          blank_password: false,
           broken: true,
           updated_at: row.updated_at,
         });
@@ -491,6 +707,11 @@ module.exports = {
         url: String(obj.url || ''),
         tags: normTags(obj.tags),
         has_note: !!obj.note,
+        // ⭐⭐ 0.9.8（方案 42 §一·4）：**算出来的**标记 —— 老库里已经存进去的空白密码条目
+        //    不自动删、不自动改（R-002），只在列表里标一句「这条没设密码」，由用户自己补或删。
+        //    ⚠️ 它**不进表、不加列**：库里多一列就多一份要维护的真相，
+        //    而「空不空」完全由密文里的 `password` 当场算得出来。
+        blank_password: isBlankPassword(obj.password),
         broken: false,
         updated_at: row.updated_at,
       });
@@ -852,6 +1073,485 @@ module.exports = {
   },
 
   /**
+   * 功能：用一个账号的 DEK 把一份**明文对象**封装成密文三列 —— 给 `secrets` 模块（加密信息）用。
+   *
+   * 说明：⭐⭐ 0.9.8（方案 42 §二·2）：加密信息**复用密码库的主密码与解锁态**（同一个 DEK），
+   *      而不是另起一套主密码。理由是产品性的：两者在界面上是同一屏的两格
+   *      （网址 ｜ 密码 ｜ 加密信息），用户心里就是「一个保险箱」；再让他记一个主密码是纯负担，
+   *      而且**必然有人忘**（忘了就是一个永久打不开的库）。
+   *      ⚠️⭐ 所以这两个方法是 `secrets` 模块碰密钥的**唯一通道**：
+   *      `secrets` **不做任何加解密**、也不许 `require('../vault/lib/crypto.js')`
+   *      （铁律 7 / 决策 76：跨模块只走业务方法）。它拿到的是三列字符串，原样落库。
+   *      ⚠️ **闸门不绕**：`_vaultDek()` 是「未解锁一律 403」的唯一执行点，
+   *      密码库锁着的时候这里照样抛 403 —— 于是「锁密码库 = 加密信息一起锁」是结构性的，
+   *      不是靠调用方记得多调一道检查。
+   *      ⚠️ IV 由 `encryptJson()` 内部随机生成（每条独立），本方法无从指定（GCM 的 IV 绝不复用）。
+   *
+   * @param {number} uid - 账号 id
+   * @param {Object} obj - 要加密的明文对象（`{title, body}` 之类）
+   * @returns {{iv: string, cipher: string, tag: string}} 三列密文（可直接落库）
+   * @throws {Error} 未解锁（403）
+   */
+  sealForUser(uid, obj) {
+    const dek = this._vaultDek(uid);
+    return vc.encryptJson(dek, obj && typeof obj === 'object' ? obj : {});
+  },
+
+  /**
+   * 功能：用一个账号的 DEK 把**一行密文**解回明文对象 —— 给 `secrets` 模块（加密信息）用。
+   *
+   * 说明：与 `sealForUser()` 是同一对（理由见上）。⚠️ 解不开时**不冒充 404**：
+   *      由调用方决定怎么说（`secrets` 那边照 `getVaultEntry()` 的口径回 400「已损坏，请从备份恢复」），
+   *      这里只把原语层的错误原样抛出去 —— 本方法不替调用方编用户话术。
+   *
+   * @param {number} uid - 账号 id
+   * @param {{iv: string, cipher: string, tag: string}} row - 密文三列
+   * @returns {Object} 解出来的对象（形状由 `sealForUser()` 写入时决定）
+   * @throws {Error} 未解锁（403）、密文损坏（原语层抛错）
+   */
+  openForUser(uid, row) {
+    const dek = this._vaultDek(uid);
+    const src = row && typeof row === 'object' ? row : {};
+    return vc.decryptJson(dek, { iv: src.iv, cipher: src.cipher, tag: src.tag });
+  },
+
+  /**
+   * 功能：用该账号的 DEK 加密**一段字节**（带 AAD）—— 给 `secrets` 的附件分块加密用。
+   *
+   * 说明：⭐⭐ 0.9.8（方案 42 §2.7·2）：附件是**密文文件**，每 1 MiB 封一帧，每帧独立 IV ＋
+   *      AAD（头 ‖ 块序号 ‖ 总块数）。这一层只做「`_vaultDek(uid)` ＋ 转手」，**DEK 不出 vault** ——
+   *      `secrets` 拿到的永远只是三件字节。
+   *      ⚠️ 与 `sealForUser()` 是同一道闸门（`_vaultDek` 未解锁抛 403），所以「锁上密码库 =
+   *      附件也读不出、也传不进」，不是靠调用方记得多调一次检查。
+   *      ⚠️ **入参/出参都是 Buffer**，不是 base64：附件块多且大，编码开销与拷贝都不该出现在这条路上。
+   *
+   * @param {number} uid - 账号 id
+   * @param {Buffer} buf - 明文块
+   * @param {Buffer} aad - 附加认证数据（没有也要显式传 `Buffer.alloc(0)`）
+   * @returns {{iv: Buffer, tag: Buffer, cipher: Buffer}} 三件（可直接写进 blob 帧）
+   * @throws {Error} 未解锁（403）、参数类型不对时抛出
+   */
+  sealBytes(uid, buf, aad) {
+    const dek = this._vaultDek(uid);
+    return vc.encryptBytes(dek, buf, aad);
+  },
+
+  /**
+   * 功能：用该账号的 DEK 解密**一段字节**（AAD 必须与加密时逐字节相同）—— `sealBytes()` 的逆运算。
+   *
+   * 说明：⚠️ **只解调用方点名的那一块** —— 视频拖进度时不需要从头解下来，
+   *      这也是「内存恒定」这条承诺的全部来源（方案 42 §2.7·2 的 O(1) 定位）。
+   *      ⚠️ 解不开就抛：⛔ 绝不返回空 Buffer（那会让用户拿到一个 0 字节文件却以为下载成功了）。
+   *
+   * @param {number} uid - 账号 id
+   * @param {{iv: Buffer, tag: Buffer, cipher: Buffer}} parts - 三件
+   * @param {Buffer} aad - 与加密时逐字节相同的 AAD
+   * @returns {Buffer} 明文块
+   * @throws {Error} 未解锁（403）、参数不合法、密文被篡改时抛出
+   */
+  openBytes(uid, parts, aad) {
+    const dek = this._vaultDek(uid);
+    const src = parts && typeof parts === 'object' ? parts : {};
+    return vc.decryptBytes(dek, src.iv, src.tag, src.cipher, aad);
+  },
+
+  // ==========================================================================================
+  // 钥匙文件（.zxkey）与阅读器的「已开钥匙」—— 0.9.8 第 6 轮（方案 2026-11-08-0.9.8-第6轮修改）
+  //
+  // ⭐⭐ 这一组方法解决的是「换机器 / 账号被删之后还能打开 .zxdesk」：
+  //    文件格式一个字不改（`.zxdesk` 里仍然没有任何钥匙材料），
+  //    钥匙改成一份**单独导出**的文件 `.zxkey`（`vault_meta` 的全部材料 ＋ `kid` 指纹），
+  //    导入后存进本机数据库（`vault_imported_keys`），用的时候仍要输那把锁的主密码。
+  //    ⇒ 偷到一个 `.zxdesk` 仍然猜不出密码（它连盐和验证块都没有）；这正是「数据与秘钥分开」。
+  // ==========================================================================================
+
+  /**
+   * 功能：导出钥匙文件的内容（**不落盘**，由路由层包成下载）。
+   *
+   * 说明：⭐ 门槛是「已解锁 ＋ 再输一次主密码」（方案 §8.2）：防止有人趁你开着页面把整库的钥匙导走。
+   *      ⚠️ 返回的 JSON 里**没有明文密钥**：`dek_*` / `verifier_*` 都是用 KEK 封装过的材料，
+   *      `kid` 只是指纹。它等于「全套数据的总钥匙」—— 文案必须写清这一点（§8.6）。
+   *      ⚠️ `created_at` 用本地时区偏移（给人看），不是 `toISOString()` 的 UTC。
+   *
+   * @param {number} uid - 账号 id
+   * @param {string} masterPassword - 主密码（用于确认身份）
+   * @returns {Object} `.zxkey` 的 JSON 对象（路由层 `JSON.stringify` 后下载）
+   * @throws {Error} 未解锁（403）、未初始化（400）、主密码不对（403）
+   */
+  keyExport(uid, masterPassword) {
+    this.vaultAssertUnlocked(uid);
+    const key = Number(uid);
+    const meta = this._bk.getVaultMeta(key);
+    if (!meta) throw badRequest('这个账号还没有设置主密码，没有钥匙可以导出');
+    const params = vc.parseKdfParams(meta.kdf_params);
+    const salt = Buffer.from(String(meta.salt || ''), 'base64');
+    if (salt.length < 8) throw badRequest('这个密码库的盐已损坏，无法导出钥匙（请从备份恢复）');
+    const kek = vc.deriveKek(masterPassword, salt, params);
+    if (!vc.checkVerifier(kek, { iv: meta.verifier_iv, cipher: meta.verifier_cipher, tag: meta.verifier_tag })) {
+      throw denied('主密码不正确');
+    }
+    const dek = vc.openDek(kek, { iv: meta.dek_iv, cipher: meta.dek_cipher, tag: meta.dek_tag });
+    const u = this.getUser(key) || {};
+    return {
+      app: 'zxdesk',
+      v: 1,
+      kind: 'vault-key',
+      kid: kidOf(dek),
+      owner_uid: key,
+      owner_name: String(u.username || ''),
+      kdf: 'scrypt',
+      kdf_params: { N: params.N, r: params.r, p: params.p, keylen: params.keylen },
+      salt: String(meta.salt),
+      dek_iv: String(meta.dek_iv),
+      dek_cipher: String(meta.dek_cipher),
+      dek_tag: String(meta.dek_tag),
+      verifier_iv: String(meta.verifier_iv),
+      verifier_cipher: String(meta.verifier_cipher),
+      verifier_tag: String(meta.verifier_tag),
+      created_at: isoLocal(),
+    };
+  },
+
+  /**
+   * 功能：**看一眼**一份钥匙文件属于谁（⛔ 不验密码、不落库、不回任何密钥材料）。
+   *
+   * 说明：⭐⭐ 0.9.8 第 7 轮（方案 §14.6.1.3）：阅读器把「换一把钥匙」改成
+   *      「选文件 → 识别 → 输密码解锁」三步，第 2 步要能告诉用户
+   *      「已识别：来自账号「xwj」的钥匙 · 编号 … · 2026-11-08 导出」，
+   *      并在「钥匙属于 A、文件属于 B」时先提醒一句「可能打不开」。
+   *      ⚠️ 正因为它**不验密码**，所以只回四个非敏感字段：编号只是指纹、账号名本来就显示在界面上。
+   *      ⛔ 不许回 `salt` / `dek_*` / `verifier_*` 任何一项 —— 那等于把钥匙材料抄给前端。
+   * @param {number} uid - 当前会话账号 id（只用于判「本机是否已有这把」）
+   * @param {Object} obj - 解析后的 `.zxkey` JSON
+   * @returns {{kid: string, owner_uid: ?number, owner_name: string, created_at: string, already: boolean}}
+   * @throws {Error} 400（格式不合法 / 被截断 / 参数越界）
+   */
+  keyInspect(uid, obj) {
+    const p = parseKeyFile(obj);
+    return {
+      kid: p.kid,
+      owner_uid: p.owner_uid,
+      owner_name: p.owner_name,
+      created_at: p.created_at,
+      already: !!this._bk.getImportedKey(Number(uid), p.kid),
+    };
+  },
+
+  /**
+   * 功能：导入一份钥匙文件（校验 6 条，通过后落库并**当场把这把钥匙打开**）。
+   *
+   * 说明：⭐⭐ 校验是「逐条给不同话术」（方案 §8.3）：
+   *      格式不对 → 「不是一个有效的钥匙文件」；字段缺 → 「不完整」；参数越界 →
+   *      「参数不合法」；验证块解不开 → 「主密码不对」；DEK 解不开 → 「已损坏」。
+   *      分成五句不是为了好看：它们的处置完全不同（换文件 / 找回原文件 / 找对方重导 / 重输密码）。
+   *      ⚠️ **KDF 参数有上限**（`N ≤ 2^17` / `r ≤ 8` / `p ≤ 4`）：钥匙文件是外部输入，
+   *      放任一个 `N=2^30` 进来就等于给了一个「让服务端算到死」的入口。
+   *      ⚠️ **幂等**：同一把钥匙（同一 `user_id` ＋ `kid`）重复导入不报错、不重复插行（方案 §8.3）；
+   *      JSON 后端没有唯一索引，所以「先查后写」是**唯一**的正确做法（不能靠数据库兜）。
+   *      ⚠️ 导入成功后把这把钥匙放进 `readerKeys`（10 分钟）：用户刚敲完密码，
+   *      再让他为同一个文件敲一遍是纯粹的添堵（与 `vaultInit()` 后直接算已解锁同一体感）。
+   *
+   * @param {number} uid - 导入者账号 id
+   * @param {Object} obj - 解析后的 `.zxkey` JSON
+   * @param {string} masterPassword - 那把钥匙的主密码
+   * @returns {{kid: string, owner_uid: ?number, owner_name: string, already: boolean}} 导入结果
+   * @throws {Error} 格式 / 参数 / 主密码 / 损坏（400 或 403，话术见 §8.3）
+   */
+  keyImport(uid, obj, masterPassword) {
+    this._assertWritable();
+    const key = Number(uid);
+    // ⭐ 0.9.8 第 7 轮：格式校验抽成 `parseKeyFile()`，与 `keyInspect()` 共用一处实现
+    //    （两处各写一遍的失效方式：一边放宽了一边没放宽 ⇒ 「识别通过但导入说不是钥匙文件」）
+    const p = parseKeyFile(obj);
+    const str = (v) => String(v == null ? '' : v);
+    const o = p.obj;
+    const salt = p.salt;
+    const params = p.params;
+    const kek = vc.deriveKek(masterPassword, salt, params);
+    if (!vc.checkVerifier(kek, { iv: str(o.verifier_iv), cipher: str(o.verifier_cipher), tag: str(o.verifier_tag) })) {
+      throw denied('这个钥匙文件的主密码不对');
+    }
+    let dek;
+    try {
+      dek = vc.openDek(kek, { iv: str(o.dek_iv), cipher: str(o.dek_cipher), tag: str(o.dek_tag) });
+    } catch (_e) {
+      throw badRequest('钥匙文件已损坏，无法使用');
+    }
+    const kid = kidOf(dek);
+    // ⚠️ 文件里带的 `kid` 与现算不一致 ⇒ 有人在改这个文件（或拼错了另一把钥匙的材料）
+    if (str(o.kid) !== kid) throw badRequest('钥匙文件已损坏，无法使用');
+
+    const ownerUid = p.owner_uid;
+    const ownerName = p.owner_name;
+    const existed = !!this._bk.getImportedKey(key, kid);
+    if (!existed) {
+      const stamp = nowStamp();
+      this._bk.insertImportedKey(key, {
+        kid,
+        owner_uid: ownerUid,
+        owner_name: ownerName,
+        kdf: 'scrypt',
+        kdf_params: JSON.stringify({ N: params.N, r: params.r, p: params.p, keylen: params.keylen }),
+        salt: str(o.salt),
+        dek_iv: str(o.dek_iv),
+        dek_cipher: str(o.dek_cipher),
+        dek_tag: str(o.dek_tag),
+        verifier_iv: str(o.verifier_iv),
+        verifier_cipher: str(o.verifier_cipher),
+        verifier_tag: str(o.verifier_tag),
+        created_at: stamp,
+        last_used_at: stamp,
+      });
+    }
+    this.readerHold(key, kid, dek, ownerUid);
+    return { kid, owner_uid: ownerUid, owner_name: ownerName, already: existed };
+  },
+
+  /**
+   * 功能：列出本账号导入过的钥匙（⛔ 不含任何密钥材料，方案 §8.4）。
+   * @param {number} uid - 账号 id
+   * @returns {Array.<{kid: string, owner_uid: ?number, owner_name: string, created_at: ?string, last_used_at: ?string}>}
+   *      钥匙列表（新的在前）
+   */
+  listImportedKeys(uid) {
+    return this._bk.listImportedKeys(Number(uid)).map((r) => ({
+      kid: String(r.kid),
+      owner_uid: r.owner_uid == null ? null : Number(r.owner_uid),
+      owner_name: String(r.owner_name || ''),
+      created_at: r.created_at || null,
+      last_used_at: r.last_used_at || null,
+    }));
+  },
+
+  /**
+   * 功能：删掉一条导入记录（只删数据库那一行，⛔ 不碰任何文件、不影响别人）。
+   * @param {number} uid - 账号 id
+   * @param {string} kid - 钥匙编号
+   * @returns {{ok: true, removed: boolean}} 结果
+   * @throws {Error} 数据层只读（503）
+   */
+  removeImportedKey(uid, kid) {
+    this._assertWritable();
+    const key = Number(uid);
+    const removed = this._bk.deleteImportedKey(key, String(kid));
+    this.readerDrop(key, String(kid));
+    return { ok: true, removed };
+  },
+
+  /**
+   * 功能：列出「打开这个文件可以试哪些钥匙」（**只报编号与来源，不报材料**）。
+   *
+   * 说明：⭐⭐ 顺序就是建议顺序（方案 §10.3）：
+   *      ① 文件属于本账号且密码库已解锁 ⇒ 用**会话 DEK**（不弹密码）；
+   *      ② 本账号亲手导入过的钥匙（`owner_uid` 与文件对得上的排前面）。
+   *      ⚠️ 这里**不判断「能不能开」**：`.zxdesk` 头里没有 `kid`（格式一个字不改），
+   *      所以「这把钥匙能不能开这个文件」只能由路由层**真解一帧**来验 —— 那是唯一诚实的证据。
+   *      ⚠️ `kind: 'session'` 的那一条**只在文件属于本账号时**出现：拿自己的 DEK 去开别人的文件
+   *      一定失败，把它列出来只会让人多点一次。
+   *
+   * @param {number} uid - 当前登录账号 id
+   * @param {number} fileUid - 文件头里记的账号 id
+   * @returns {{sessionKid: string, sessionHeld: boolean, keys: Array.<Object>}} 候选
+   */
+  readerCandidates(uid, fileUid) {
+    const key = Number(uid);
+    const own = Number(fileUid) === key;
+    const unlockedNow = peekUnlocked(key);
+    const sessionKid = own && unlockedNow ? kidOf(unlocked.get(key).dek) : '';
+    /** @type {Array.<Object>} */
+    const keys = [];
+    for (const r of this.listImportedKeys(key)) {
+      keys.push(
+        Object.assign({}, r, {
+          held: readerKeys.has(readerSlot(key, r.kid)),
+          matches: r.owner_uid != null && Number(r.owner_uid) === Number(fileUid),
+        }),
+      );
+    }
+    // 「来源对得上」的排前面（只是建议，不是判断）；同组内保持「新的在前」
+    keys.sort((a, b) => Number(b.matches) - Number(a.matches));
+    return { sessionKid, sessionHeld: !!sessionKid, keys };
+  },
+
+  /**
+   * 功能：用一把**导入的钥匙**的主密码打开它，把 DEK 放进 `readerKeys`（10 分钟滑动）。
+   *
+   * 说明：⭐⭐ 这是方案 §10.3 第 ③ 条的唯一实现：**只把 DEK 放进阅读器的内存表**，
+   *      ⛔ 不解锁任何账号的会话（不碰 `unlocked`）—— 于是「看了别人的文件」不等于
+   *      「拿到了别人的密码库」。
+   *      ⚠️ 失败只有一句「主密码不正确」（不区分密码错与密文损坏）：那种区分等于白送一个探测口。
+   *      ⚠️ 节流不在这里做（`scryptSync` 会阻塞事件循环）：路由层按 `reader:<账号>:<kid>` 计。
+   *
+   * @param {number} uid - 当前登录账号 id
+   * @param {string} kid - 钥匙编号
+   * @param {string} masterPassword - 那把钥匙的主密码
+   * @returns {{kid: string, owner_uid: ?number, owner_name: string}} 打开的那把钥匙
+   * @throws {Error} 没有这把钥匙（400）、参数损坏（400）、主密码不对（403）
+   */
+  readerDerive(uid, kid, masterPassword) {
+    const key = Number(uid);
+    const row = this._bk.getImportedKey(key, String(kid));
+    if (!row) throw badRequest('本机没有这把钥匙 —— 请先导入它的钥匙文件');
+    let params;
+    try {
+      params = vc.parseKdfParams(row.kdf_params);
+    } catch (_e) {
+      throw badRequest('这把钥匙的参数已损坏，请重新导入钥匙文件');
+    }
+    const salt = Buffer.from(String(row.salt || ''), 'base64');
+    if (salt.length < 8) throw badRequest('这把钥匙的盐已损坏，请重新导入钥匙文件');
+    const kek = vc.deriveKek(masterPassword, salt, params);
+    if (!vc.checkVerifier(kek, { iv: row.verifier_iv, cipher: row.verifier_cipher, tag: row.verifier_tag })) {
+      throw denied('主密码不正确');
+    }
+    const dek = vc.openDek(kek, { iv: row.dek_iv, cipher: row.dek_cipher, tag: row.dek_tag });
+    this.readerHold(key, String(kid), dek, row.owner_uid == null ? null : Number(row.owner_uid));
+    return {
+      kid: String(kid),
+      owner_uid: row.owner_uid == null ? null : Number(row.owner_uid),
+      owner_name: String(row.owner_name || ''),
+    };
+  },
+
+  /**
+   * 功能：把一把已开的钥匙放进内存表并挂到期定时器（`keyImport()` / `readerDerive()` 共用）。
+   *
+   * 说明：⚠️ 定时器必须 `unref()`（与 `_vaultHold()` 同一条理由：不 unref 会拖住事件循环，
+   *      真机上表现为「点了停止应用，进程却一直不退出」）。
+   *      ⚠️ 上限 8 把、超了淘汰**最久没动**的那把：内存里同时躺着十几把 DEK 没有任何好处。
+   * @param {number} uid - 会话账号 id
+   * @param {string} kid - 钥匙编号
+   * @param {Buffer} dek - 32 字节 DEK
+   * @param {?number} ownerUid - 原件所属账号
+   * @returns {void}
+   */
+  readerHold(uid, kid, dek, ownerUid) {
+    const key = readerSlot(uid, kid);
+    const old = readerKeys.get(key);
+    if (old && old.timer) clearTimeout(old.timer);
+    readerKeys.set(key, {
+      dek,
+      ownerUid: ownerUid == null ? null : Number(ownerUid),
+      at: Date.now(),
+      timer: scheduleReaderDrop(key),
+    });
+    while (readerKeys.size > READER_MAX) {
+      let oldest = null;
+      let oldestAt = Infinity;
+      for (const [k, v] of readerKeys) {
+        if (v.at < oldestAt) {
+          oldestAt = v.at;
+          oldest = k;
+        }
+      }
+      if (!oldest) break;
+      this.readerDrop(...splitSlot(oldest));
+    }
+  },
+
+  /**
+   * 功能：取一把已开钥匙的 DEK（**顺带滑动续期**）；没开或已超时一律 403。
+   * @param {number} uid - 会话账号 id
+   * @param {string} kid - 钥匙编号
+   * @returns {Buffer} 32 字节 DEK
+   * @throws {Error} 这把钥匙还没打开 / 已超时（403）
+   */
+  readerDek(uid, kid) {
+    const key = readerSlot(uid, kid);
+    const e = readerKeys.get(key);
+    if (!e) throw denied('这把钥匙还没打开 —— 请输入它的主密码');
+    if (Date.now() - e.at > READER_IDLE_MS) {
+      this.readerDrop(Number(uid), String(kid));
+      throw denied('这把钥匙已经自动锁上了 —— 请重新输入主密码');
+    }
+    e.at = Date.now();
+    if (e.timer) clearTimeout(e.timer);
+    e.timer = scheduleReaderDrop(key);
+    return e.dek;
+  },
+
+  /**
+   * 功能：判断某个会话账号手上**有没有**这把已开的钥匙（只判断，不续期）。
+   * @param {number} uid - 会话账号 id
+   * @param {string} kid - 钥匙编号
+   * @returns {boolean} 在内存表里且没超时则为 true
+   */
+  readerHas(uid, kid) {
+    const e = readerKeys.get(readerSlot(uid, kid));
+    if (!e) return false;
+    if (Date.now() - e.at > READER_IDLE_MS) {
+      this.readerDrop(Number(uid), String(kid));
+      return false;
+    }
+    return true;
+  },
+
+  /**
+   * 功能：用**指定的那把钥匙**解一段附件字节 —— 阅读器的流式解密出口。
+   *
+   * 说明：⭐ 与 `openBytes()` 的唯一差别是「密钥从哪来」：那个用**会话 DEK**（本账号已解锁），
+   *      这个用 `readerKeys` 里那把导入钥匙的 DEK。⛔ 两者都不把 DEK 交出去。
+   *      ⚠️ 解不开就抛（GCM tag 校验失败）—— 绝不返回空 Buffer（那会让用户拿到 0 字节文件却以为成功）。
+   * @param {number} uid - 会话账号 id
+   * @param {string} kid - 钥匙编号
+   * @param {{iv: Buffer, tag: Buffer, cipher: Buffer}} parts - 三件
+   * @param {Buffer} aad - 与加密时逐字节相同的 AAD
+   * @returns {Buffer} 明文块
+   * @throws {Error} 钥匙没开 / 已超时（403）、密文被篡改（原语层抛错）
+   */
+  openBytesAs(uid, kid, parts, aad) {
+    const dek = this.readerDek(uid, kid);
+    const src = parts && typeof parts === 'object' ? parts : {};
+    return vc.decryptBytes(dek, src.iv, src.tag, src.cipher, aad);
+  },
+
+  /**
+   * 功能：把一把（或某账号的全部）已开钥匙从内存里拿掉。
+   * @param {number} uid - 会话账号 id
+   * @param {?string} kid - 钥匙编号；不传 = 该账号全部
+   * @returns {void}
+   */
+  readerDrop(uid, kid) {
+    if (kid === undefined || kid === null) {
+      for (const k of [...readerKeys.keys()]) {
+        const [u] = splitSlot(k);
+        if (u === Number(uid)) {
+          const e = readerKeys.get(k);
+          if (e && e.timer) clearTimeout(e.timer);
+          readerKeys.delete(k);
+        }
+      }
+      return;
+    }
+    const k = readerSlot(uid, kid);
+    const e = readerKeys.get(k);
+    if (e && e.timer) clearTimeout(e.timer);
+    readerKeys.delete(k);
+  },
+
+  /**
+   * 功能：清空**全部**已开钥匙（退出登录 / 测试清场用）。
+   * @returns {number} 清掉的把数
+   */
+  readerPurgeAll() {
+    const n = readerKeys.size;
+    for (const k of [...readerKeys.keys()]) {
+      const e = readerKeys.get(k);
+      if (e && e.timer) clearTimeout(e.timer);
+    }
+    readerKeys.clear();
+    return n;
+  },
+
+  /**
+   * 功能：**仅供测试** —— 看当前有几把已开钥匙（⛔ 不返回任何密钥）。
+   * @returns {number} 把数
+   */
+  readerDebugCount() {
+    return readerKeys.size;
+  },
+
+  /**
    * 功能：生成一个强随机密码（密码生成器）。
    *
    * 说明：⚠️ 参数校验在 `validate.js` 做过一遍（给得出人话的 400），这里再兜一次
@@ -882,7 +1582,13 @@ module.exports = {
  * @returns {Object} Node 的 Timeout 句柄（已 unref）
  */
 function scheduleDrop(uid, minutes) {
-  const t = setTimeout(() => dropUnlocked(uid), Math.max(1, minutes) * 60000);
+  // ⭐⭐ 0.9.8 第 7 轮：到期时**顺手清掉这个账号在阅读器里已开的钥匙**（方案 §11.3 第 5 条）。
+  //    ⚠️ 为什么不在 `dropUnlocked()` 里做：`_vaultHold()`（重新解锁）也调它 ——
+  //    那样每次解锁都会把阅读器已开的钥匙一起清掉，用户会看到「刚输过密码又失效」。
+  const t = setTimeout(() => {
+    dropUnlocked(uid);
+    purgeReaderKeys(uid);
+  }, Math.max(1, minutes) * 60000);
   if (typeof t.unref === 'function') t.unref();
   return t;
 }

@@ -14,11 +14,13 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.13
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md
  */
 const fs = require('node:fs');
 const path = require('node:path');
+const { dbLabelOf, dbRoleOf } = require('../constants.js');
+const { listArchives, currentPhase, isFreezing } = require('../../data-location.js');
 
 module.exports = {
   /**
@@ -71,6 +73,18 @@ module.exports = {
       legacyNullStartDates: this.legacyNullStartDates,
       // username 唯一索引建不起来的原因（历史脏数据；正常为 null，由启动日志告警）
       usersIndexError: this.usersIndexError,
+      // ⭐ 0.9.8：**三个库各自的健康结论**（哪个库坏了要能一眼看出来）。
+      //    ⚠️ 只放 `label` / `ok` / `readOnly` / `journalMode` / `reason` —— ⛔ **不放文件路径**：
+      //    路径只经 `/api/admin/storage` 给管理员看（`/api/health` 对**所有已登录用户**开放）。
+      //    ⚠️ 它取自 `_refreshDbStatus()` 算好的快照，本方法不读库、不数条数。
+      databases: Object.fromEntries(
+        Object.entries(this.dbStatus || {}).map(([k, v]) => [
+          k,
+          v
+            ? { label: v.label, ok: v.ok, readOnly: v.readOnly, journalMode: v.journalMode, reason: v.reason }
+            : null,
+        ]),
+      ),
     };
   },
 
@@ -90,11 +104,43 @@ module.exports = {
     } catch (_e) {
       /* 读不到就显示「—」 */
     }
+    // ⭐ 三个库逐行：界面要「一行一个、写清各管什么」，所以这里给出结构化清单，
+    //    ⛔ 前端不再写死三个库名（库的清单唯一来源是 `dbStatus`，标签与用途来自 `store/constants.js`）。
+    const databases = Object.entries(this.dbStatus || {})
+      .map(([key, st]) => {
+        if (!st) return null;
+        let size = null;
+        try {
+          size = fs.statSync(st.file).size;
+        } catch (_e) {
+          /* 取不到大小就显示「—」 */
+        }
+        return { key, label: dbLabelOf(key), role: dbRoleOf(key), file: path.basename(String(st.file)), size, ok: !!st.ok, reason: st.reason || null };
+      })
+      .filter(Boolean);
+    const defaultDir = this.defaultDir || this.dataDir;
+    const custom = path.resolve(String(this.dataDir)) !== path.resolve(String(defaultDir));
+    const idx = this.locationIndex || null;
+    const hist = idx && Array.isArray(idx.history) ? idx.history : [];
+    const last = hist.length ? hist[hist.length - 1] : null;
     return {
       backend: i.backend,
       dataDir: i.dataDir,
       dbName: path.basename(String(i.dbFile)),
       dbSize,
+      // ⭐ 数据位置：默认 / 自定义、索引里的最近一次搬迁、安装位置的归档清单
+      dataDirSource: custom ? 'custom' : 'default',
+      databases,
+      location: {
+        dir: this.dataDir,
+        custom,
+        defaultDir,
+        since: (last && last.at) || '',
+        from: (last && last.from) || '',
+        history: hist,
+        archives: listArchives(defaultDir),
+        pendingRestart: isFreezing() && currentPhase() === 'pendingRestart',
+      },
       journalMode: i.journalMode,
       foreignKeys: i.foreignKeys,
       schemaVersion: i.schemaVersion,

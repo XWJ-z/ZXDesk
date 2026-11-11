@@ -29,7 +29,7 @@
  *
  * @author zx
  * @date   2026-09-14
- * @since 0.8.13
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/01-架构总览.md、02-存储层与数据模型.md、08-工程规范.md
  */
 
@@ -79,6 +79,41 @@ const CONTRACT = [
   ['archDoc', 'string'],
   ['test', 'string|null'],
 ];
+
+/**
+ * ⭐ 0.9.8：**库名白名单**（`module.json` 的 `database` 字段唯一认的三个值）。
+ *
+ * 说明：⭐⭐ 这是这一整个「多库」机制的**唯一定义处** —— `core/store/schema/index.js` 的
+ *      `dbOf()` 装配、`store/index.js` 的门面分派、`ttt/test/lab.test.js` 的反向验都从这里取，
+ *      ⛔ 不许在别处再写一份枚举（那种副本的失效方式是**静默的**：新增一个库名而副本没跟上，
+ *      表现是「表住进了错的库」且不报错）。
+ *
+ *      ⚠️⭐ 为什么它必须是**白名单 + 加载即抛**：改造前 `dbOf()` 的映射是二值
+ *      （`meta.database === 'ledger' ? 'ledger' : 'main'`）⇒ 写错一个字母（`"Lab"` / `"lab "` /
+ *      `"ledger-lab"`）的那张表**静默落进主库**，而这正是「实验数据污染正式数据」那条硬契约
+ *      最可能的破口。所以未知值一律**启动即抛**，报错里指名模块与非法值。
+ *
+ *      ⚠️ 三个值各自的含义：
+ *        · `main`   主库 `zxdesk.db` —— 缺省值（不写 `database` 就是它，与改造前的失败方向一致）；
+ *        · `ledger` 记账库 `zxdesk-ledger.db` —— 第一个例外（决策 21，2026-09-22）；
+ *        · `lab`    实验室库 `zxdesk-lab.db` —— 第二个例外（决策 21，2026-11-07 / 决策 143）。
+ *
+ * @type {{MAIN: string, LEDGER: string, LAB: string}}
+ */
+const DATABASES = Object.freeze({ MAIN: 'main', LEDGER: 'ledger', LAB: 'lab' });
+
+/**
+ * 白名单的**有序数组形态**（校验与报错文案用；顺序 = 主库在前）。
+ * @type {Array.<string>}
+ */
+const DATABASE_NAMES = Object.freeze(Object.values(DATABASES));
+
+/**
+ * 没写 `database` 时落在哪个库。
+ * ⚠️ 与改造前的失败方向**一字不差**（未知值兜到主库那半边）—— 变的是「未知值不再兜底，而是抛」。
+ * @type {string}
+ */
+const DEFAULT_DATABASE = DATABASES.MAIN;
 
 /**
  * 功能：判断一个契约字段的值是否属于期望类型。
@@ -203,6 +238,21 @@ function loadModules(dir) {
       }
     }
     if (!fieldsOk) continue;
+
+    // ⭐ 0.9.8：`database` 是**可选**字段，但一旦出现就必须在白名单里（见 `DATABASES` 的说明）。
+    //    ⚠️ 它刻意**不进**上面的 `CONTRACT`：那份清单是「必填字段」，而绝大多数模块压根不需要声明
+    //    自己住哪个库（缺省主库）—— 把可选字段塞进必填清单，等于让十几个模块凭空多一行
+    //    `"database": "main"`，而那与「契约字段必须显式」的初衷相反（同 `columnAliases` 的口径）。
+    //    ⇒ 可选字段的「出现即合法」在这里单独兑现。
+    //    ⚠️⭐ 失败方向：**抛**，不是「未知值兜到主库」。兜底看上去更宽容，实际是把
+    //    「写错库名」变成一次**静默的数据落错文件**——正是这次要根除的那个形态。
+    if (meta.database !== undefined && !DATABASE_NAMES.includes(meta.database)) {
+      bad.push(
+        `modules/${name}/module.json 的 database 是「${meta.database}」，只认 ${DATABASE_NAMES.join(' / ')}` +
+          '（写错的后果是它的表静默落进错的库 —— 实验数据会污染主库，所以这里直接拒绝启动）',
+      );
+      continue;
+    }
 
     if (meta.name !== name) {
       bad.push(`modules/${name}/module.json 的 name 是「${meta.name}」，必须与目录名一致（唯一标识＝文件夹名）`);
@@ -421,6 +471,10 @@ function exportFragments(reg, store, uid) {
 module.exports = {
   MODULES_DIR,
   CONTRACT,
+  // ⭐ 0.9.8：库名白名单（唯一出处）—— 见 `DATABASES` 的说明
+  DATABASES,
+  DATABASE_NAMES,
+  DEFAULT_DATABASE,
   apiPrefixesOf,
   switchFieldsOf,
   loadModules,

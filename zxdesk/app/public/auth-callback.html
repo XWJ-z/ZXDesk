@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>选择目录 · ZXDesk</title>
+    <!-- ⚠️ 资源一律**相对路径**（与 open/index.html 同一条理由）：统一网关下应用挂在 `/app/zxdesk`，
+         绝对路径会打到系统根目录。
+         ⛔ 本页**不写内联脚本**：CSP 的 `script-src` 只放行 `'self'` 与两段既有入口脚本的哈希
+         （见 `core/server.js`），新页面一律外链 —— 否则表现是「页面渲染了、脚本没跑」。
+         样式可以内联（`style-src` 已放行 `'unsafe-inline'`，那是既有取舍）。 -->
+    <link rel="stylesheet" href="core/tokens.css" />
+    <style>
+      /* 一屏一次性页面：居中一句结果 ＋ 一个兜底按钮，⛔ 不引第三方字体与调色板 */
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--zx-bg);
+        color: var(--zx-ink);
+        font-family: var(--zx-font);
+      }
+      .ac-box {
+        max-width: 420px;
+        padding: 24px;
+        text-align: center;
+      }
+      .ac-icon {
+        font-size: 40px;
+        line-height: 1;
+      }
+      .ac-title {
+        margin: 12px 0 6px;
+        font-size: 16px;
+        font-weight: 600;
+      }
+      .ac-text {
+        margin: 0;
+        color: var(--zx-ink-2);
+        font-size: 13px;
+        line-height: 1.7;
+        word-break: break-all;
+      }
+      .ac-path {
+        margin: 10px 0 0;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: var(--zx-ok-soft);
+        color: var(--zx-ok-ink);
+        font-size: 12.5px;
+        word-break: break-all;
+      }
+      .ac-btn {
+        margin-top: 16px;
+        padding: 8px 16px;
+        border: 0;
+        border-radius: 999px;
+        background: var(--zx-brand);
+        color: #fff;
+        font-family: inherit;
+        font-size: 13px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="ac-box">
+      <div class="ac-icon" id="ac-icon">⏳</div>
+      <h1 class="ac-title" id="ac-title">正在处理授权结果…</h1>
+      <p class="ac-text" id="ac-text">请稍候</p>
+      <p class="ac-path" id="ac-path" hidden></p>
+      <button class="ac-btn" id="ac-close" type="button" hidden>关闭这个窗口</button>
+    </div>
+    <script type="module" src="auth-callback.js"></script>
+  </body>
+</html>

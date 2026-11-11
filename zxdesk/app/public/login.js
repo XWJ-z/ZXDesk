@@ -62,6 +62,29 @@
     }
   }
   /**
+   * 功能：读登录闸门带过来的 `next`（登录成功后该回哪儿）—— **不合法一律当没有**。
+   *
+   * 说明：⭐⭐ 0.9.8 第 6 轮（方案 §十一）：`core/static.js` 在未登录时会 302 到
+   *      `/login.html?next=<应用内相对地址>`，这样「从文件管理器双击 `.zxdesk`」的人
+   *      登录完能回到**同一个文件**，而不是掉在工作台首页。
+   *      ⚠️ 这里是一道**安全闸**（开放重定向）：只接受 `/` 开头、且**不能**是 `//`、
+   *      也不能是 `/\` —— 后两种会被浏览器当成「协议相对地址」，等于把登录后的用户
+   *      送到 `evil.com` 去。指回登录 / 设置页也一律忽略（否则是死循环）。
+   * @returns {string} 合法的应用内地址（含查询串）；不合法时为空串
+   */
+  function nextTarget() {
+    try {
+      const n = String(new URLSearchParams(location.search).get('next') || '');
+      if (!n || n.charAt(0) !== '/') return '';
+      if (n.startsWith('//') || n.charAt(1) === '\\') return '';
+      const only = n.split('?')[0];
+      if (only === '/login.html' || only === '/setup.html') return '';
+      return n;
+    } catch (_e) {
+      return '';
+    }
+  }
+  /**
    * 功能：按 id 取元素，是 `document.getElementById` 的简写。
    * @param {string} id - 元素 id
    * @returns {?HTMLElement} 命中的元素；没有则为 null
@@ -248,7 +271,9 @@
         /* 存储不可用：本来也没有缓存 */
       }
       // ⚠️ 带上查询串（见 `carrySearch()`）—— 丢掉它会被飞牛网关重新弹访问码
-      window.location.replace(BASE + '/' + carrySearch());
+      // ⭐ 0.9.8 第 6 轮：闸门带了 `next` 就回那一屏（双击 `.zxdesk` 的动线靠它）
+      const next = nextTarget();
+      window.location.replace(next ? BASE + next : BASE + '/' + carrySearch());
     } catch (_e) {
       showError('网络异常，请重试');
     } finally {
@@ -266,8 +291,9 @@
       const s = await res.json();
       if (s && s.authenticated) {
         // ⭐ 首登强制：账号还在用公开初始口令 ⇒ 先去设置页
+        const next = nextTarget();
         window.location.replace(
-          s.mustSetup ? BASE + '/setup.html' + carrySearch() : BASE + '/' + carrySearch(),
+          s.mustSetup ? BASE + '/setup.html' + carrySearch() : next ? BASE + next : BASE + '/' + carrySearch(),
         );
         return;
       }

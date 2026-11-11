@@ -36,12 +36,12 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.21
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md
  */
 const fs = require('node:fs');
 const path = require('node:path');
-const { SCHEMA, IMPORT_KEEP_TABLES } = require('../constants.js');
+const { SCHEMA, IMPORT_KEEP_TABLES, dbLabelOf } = require('../constants.js');
 const { compactStamp, deref, uidOf } = require('../helpers.js');
 
 const ops = {
@@ -291,6 +291,46 @@ const ops = {
     const u = (this.data.users || []).find((x) => x.id === Number(uid));
     if (!u) return false;
     u.hide_idea = hide ? 1 : 0;
+    u.updated_at = stamp;
+    this._saveJson();
+    return true;
+  },
+
+  /**
+   * 功能：改写某个账号「不显示 zx 实验室」开关，并刷新 `updated_at`。
+   *
+   * 说明：与 SQLite 后端保持同名同参（`backend/index.js` 在加载时逐个比对）。
+   *      ⚠️ 与 `setHideIdea` 同一条规矩：只改这个账号自己的偏好、不碰 `session_epoch`、
+   *      十三个偏好互不影响；实验室库里的数据一行不动。
+   *
+   * @param {(number|string)} uid - 用户 id
+   * @param {*} hide - 真值表示该账号不显示 zx 实验室，落盘成 1 / 0
+   * @param {string} stamp - 写入 `updated_at` 的时间戳
+   * @returns {boolean} 账号存在并已改写返回 true，找不到该账号返回 false
+   */
+  setHideLab(uid, hide, stamp) {
+    const u = (this.data.users || []).find((x) => x.id === Number(uid));
+    if (!u) return false;
+    u.hide_lab = hide ? 1 : 0;
+    u.updated_at = stamp;
+    this._saveJson();
+    return true;
+  },
+
+  /**
+   * 功能：记下「这个账号已同意 zx 实验室使用须知」，并刷新 `updated_at`。
+   *
+   * 说明：与 SQLite 后端保持同名同参（`backend/index.js` 在加载时逐个比对）。
+   *      老 JSON 数据里没有这一字段，读侧由 `sanitizeUser` 兜成 **0（还没同意）**。
+   * @param {(number|string)} uid - 用户 id
+   * @param {*} agreed - 真值表示已同意，落盘成 1 / 0
+   * @param {string} stamp - 写入 `updated_at` 的时间戳
+   * @returns {boolean} 账号存在并已改写返回 true，找不到该账号返回 false
+   */
+  setLabAgreed(uid, agreed, stamp) {
+    const u = (this.data.users || []).find((x) => x.id === Number(uid));
+    if (!u) return false;
+    u.lab_agreed = agreed ? 1 : 0;
     u.updated_at = stamp;
     this._saveJson();
     return true;
@@ -640,22 +680,29 @@ const ops = {
    *      凭空造出一个 `zxdesk-ledger.json`（那个文件要等第一次真正的写入才出现）。
    */
   deleteUser(u) {
-    // ---- 第一段：记账那一份（它必须先成功，否则账号行不能删）----
-    const ledgerTables = SCHEMA.userScopedTablesIn(SCHEMA.LEDGER_DB);
-    if (ledgerTables.length) {
-      this._assertLedgerWritable();
+    // ---- 第一段 / 第二段：分库（实验室 → 记账），它们必须先成功，否则账号行不能删 ----
+    // ⭐ 0.9.8：与 SQLite 侧逐条同构 —— 三段执行（实验室 → 记账 → 主库），账号行最后删；
+    //    排在越前面的段越可能在同一次重试里被再删一遍（幂等），代价最小。
+    for (const dbName of [SCHEMA.LAB_DB, SCHEMA.LEDGER_DB]) {
+      const tables = SCHEMA.userScopedTablesIn(dbName);
+      if (!tables.length) continue;
+      if (dbName === SCHEMA.LAB_DB) this._assertLabWritable();
+      else this._assertLedgerWritable();
+      const data = dbName === SCHEMA.LAB_DB ? this.labData : this.ledgerData;
       let removed = 0;
       const mine = (x) => uidOf(x) === u;
-      ledgerTables.forEach((t) => {
-        const arr = this.ledgerData[t] || [];
+      tables.forEach((t) => {
+        const arr = data[t] || [];
         const kept = arr.filter((x) => !mine(x));
         removed += arr.length - kept.length;
-        this.ledgerData[t] = kept;
+        data[t] = kept;
       });
-      if (removed) this._saveJson(SCHEMA.LEDGER_DB);
+      // ⚠️ 只在真的删掉了行时才落盘：库文件本来就还不存在时，不因为一次「清了 0 行」
+      //    凭空造出一个数据文件（那条规矩对两个分库都成立）。
+      if (removed) this._saveJson(dbName);
     }
 
-    // ---- 第二段：主库那一份（过对话 → 通用清空 → 好友补刀 → 收拾孤儿 → 删账号行）----
+    // ---- 第三段：主库那一份（过对话 → 通用清空 → 好友补刀 → 收拾孤儿 → 删账号行）----
     const before = (this.data.users || []).length;
     /** 功能：判断一行是否属于该账号。 */
     const mine = (x) => uidOf(x) === u;
@@ -697,6 +744,73 @@ const ops = {
     return true;
   },
 
+  // ---- 个人授权目录（跨模块的「我授权过哪些目录」登记）----
+
+  /**
+   * 功能：列出某账号登记过的全部授权目录（按路径升序）。
+   *
+   * 说明：⭐ 与 SQLite 那一条**同名同参、同一排序**（`path` 升序，不是时间）——
+   *      两个后端的返回形状必须逐字一致，否则换后端就换了一屏界面。
+   *      返回的是**浅拷贝行**：调用方拿去改不会污染内存里的库。
+   * @param {number} uid - 账号 id
+   * @returns {Array.<Object>} 登记行数组
+   */
+  listDirGrants(uid) {
+    const d = this._dataFor('user_dir_grants');
+    return (d.user_dir_grants || [])
+      .filter((r) => uidOf(r) === Number(uid))
+      .map((r) => Object.assign({}, r))
+      .sort((a, b) => String(a.path).localeCompare(String(b.path)));
+  },
+
+  /**
+   * 功能：登记 / 更新一个授权目录（按 `(user_id, path)` 唯一键 upsert）。
+   *
+   * 说明：⭐⭐ `granted_at` 只在第一次写（`cur.granted_at || row.granted_at`）——
+   *      与 SQLite 那边的 `COALESCE(旧值, 新值)` 是**同一条语义**：它是「曾经成功授权过」的凭据。
+   *      ⚠️ JSON 后端没有约束，唯一性只能在这里拦（与 `users.username` 查重同一个做法）。
+   * @param {number} uid - 账号 id
+   * @param {Object} row - `{path, purpose, source, granted_at, checked_at, created_at, updated_at}`
+   * @returns {boolean} 恒为 true
+   */
+  saveDirGrant(uid, row) {
+    const d = this._dataFor('user_dir_grants');
+    const arr = (d.user_dir_grants = d.user_dir_grants || []);
+    const key = String((row && row.path) || '');
+    const i = arr.findIndex((r) => uidOf(r) === Number(uid) && String(r.path) === key);
+    if (i < 0) {
+      // ⚠️ id 走 `_seq`（与 `insert` 同一条序列）：新行若从 1 开始发号，会与恢复回来的行撞车
+      arr.push(Object.assign({ id: d._seq++ }, row, { user_id: Number(uid), path: key }));
+    } else {
+      const cur = arr[i];
+      arr[i] = Object.assign({}, cur, row, {
+        id: cur.id,
+        user_id: cur.user_id,
+        path: key,
+        granted_at: cur.granted_at || (row && row.granted_at) || null,
+      });
+    }
+    this._saveJson(this._dbFor('user_dir_grants'));
+    return true;
+  },
+
+  /**
+   * 功能：删掉一条授权目录登记（**只删这一行，不碰任何文件、也不动宿主授权**）。
+   * @param {number} uid - 账号 id
+   * @param {string} path - 目录绝对路径（登记时的原样）
+   * @returns {boolean} 真的删掉了一行为 true
+   */
+  deleteDirGrant(uid, path) {
+    const d = this._dataFor('user_dir_grants');
+    const arr = d.user_dir_grants || [];
+    const key = String(path);
+    const i = arr.findIndex((r) => uidOf(r) === Number(uid) && String(r.path) === key);
+    if (i < 0) return false;
+    arr.splice(i, 1);
+    this._saveJson(this._dbFor('user_dir_grants'));
+    return true;
+  },
+
   // ---- 备份与恢复（0.2.1）----
 
   /**
@@ -717,6 +831,8 @@ const ops = {
     // ⚠️⭐ 与 SQLite 那边同一道闸门：少了两半中的任何一半，导出就该**明说失败**，
     //    而不是给出一份「看着成功、少了记账数据」的包（那在用户看来与完整备份一模一样）。
     if (SCHEMA.ledgerTables().length) this._assertLedgerWritable();
+    // ⭐ 0.9.8：实验室库同款闸门（0.9.8 里它没有表 ⇒ 这半句不跑）
+    if (SCHEMA.labTables().length) this._assertLabWritable();
     const out = {};
     SCHEMA.tableNames().forEach((t) => {
       const d = this._dataFor(t);
@@ -766,27 +882,43 @@ const ops = {
       next._seq = maxId + 1;
       return next;
     };
-    const order = [SCHEMA.LEDGER_DB, SCHEMA.MAIN_DB];
+    // ⭐ 0.9.8：三段（实验室 → 记账 → 主库）—— 与 SQLite 侧同一次序
+    const order = [SCHEMA.LAB_DB, SCHEMA.LEDGER_DB, SCHEMA.MAIN_DB];
+    const applied = [];
+    // ⭐ 被跳过的库（备份里没有它那一份）—— 由调用方如实告诉用户，⛔ 不许静默
+    const skipped = [];
+    const has = (t) => Object.prototype.hasOwnProperty.call(src, t);
     for (const dbName of order) {
-      // ⚠️ 记账那一份先过闸门（与 SQLite 那条一字不差：不该以一句内部错收场）
-      if (dbName === SCHEMA.LEDGER_DB && SCHEMA.ledgerTables().length) this._assertLedgerWritable();
+      const mine = SCHEMA.tablesByDb(dbName);
+      // ⚠️ 一个表都没有的库**整段不碰**：`build()` 会造出一个空壳（`{_seq:1}`）并落盘 ——
+      //    那等于「一次恢复凭空多出一个空文件」，而它之前压根不存在。
+      if (!mine.length) continue;
+      // ⭐⭐ 0.9.8：备份里一张实验室的表都没有 ⇒ 整段跳过，现有实验室库保持不动（失败方向 = 少删）。
+      //    ⚠️ 判据在闸门之前：实验室库坏了但这份备份本来就不含它 ⇒ 不该因此拒绝整次恢复。
+      if (dbName === SCHEMA.LAB_DB && !mine.some(has)) {
+        skipped.push(dbName);
+        continue;
+      }
+      // ⚠️ 分库那一份先过闸门（与 SQLite 那条一字不差：不该以一句内部错收场）
+      if (dbName === SCHEMA.LAB_DB) this._assertLabWritable();
+      else if (dbName === SCHEMA.LEDGER_DB) this._assertLedgerWritable();
       const next = build(dbName);
-      if (dbName === SCHEMA.LEDGER_DB) this.ledgerData = next;
+      if (dbName === SCHEMA.LAB_DB) this.labData = next;
+      else if (dbName === SCHEMA.LEDGER_DB) this.ledgerData = next;
       else this.data = next;
       try {
         this._saveJson(dbName);
+        applied.push(dbName);
       } catch (e) {
-        const label = dbName === SCHEMA.LEDGER_DB ? '记账库' : '主库';
-        const did =
-          dbName === SCHEMA.LEDGER_DB
-            ? '两半都还没落盘，数据仍是操作前的样子。'
-            : '⚠️「记账库」那一份**已经落盘且不回滚**，当前处于「部分恢复」状态 —— 请重试一次（重跑就是照着同一份备份再写一遍）。';
-        const err = new Error(`整体恢复的「${label}」那一段写盘失败：${(e && e.message) || e}。${did}`);
+        const did = applied.length
+          ? `⚠️「${applied.map(dbLabelOf).join('、')}」那一份**已经落盘且不回滚**，当前处于「部分恢复」状态 —— 请重试一次（重跑就是照着同一份备份再写一遍）。`
+          : '所有库都还没落盘，数据仍是操作前的样子。';
+        const err = new Error(`整体恢复的「${dbLabelOf(dbName)}」那一段写盘失败：${(e && e.message) || e}。${did}`);
         err.status = 500;
         throw err;
       }
     }
-    return true;
+    return { skipped };
   },
 
   /**
@@ -809,12 +941,14 @@ const ops = {
     // ⚠️ 对话四张表**刻意跳过**（`IMPORT_KEEP_TABLES`）：跨账号数据 + 个人导入不重建它，
     //    清掉等于白丢一段真实聊天记录（理由写在 store/constants.js 那张清单上）。
     const keep = (t) => !IMPORT_KEEP_TABLES.includes(t);
-    [SCHEMA.LEDGER_DB, SCHEMA.MAIN_DB].forEach((dbName) => {
+    // ⭐ 0.9.8：三库三段（实验室 → 记账 → 主库）—— 与其余跨库操作同一次序
+    [SCHEMA.LAB_DB, SCHEMA.LEDGER_DB, SCHEMA.MAIN_DB].forEach((dbName) => {
       const mineTables = SCHEMA.userScopedTablesIn(dbName).filter(keep);
       if (!mineTables.length) return;
-      // ⚠️ 记账那一份先过闸门（理由同 `replaceWhole`）
-      if (dbName === SCHEMA.LEDGER_DB) this._assertLedgerWritable();
-      const d = dbName === SCHEMA.LEDGER_DB ? this.ledgerData : this.data;
+      // ⚠️ 分库那一份先过闸门（理由同 `replaceWhole`）
+      if (dbName === SCHEMA.LAB_DB) this._assertLabWritable();
+      else if (dbName === SCHEMA.LEDGER_DB) this._assertLedgerWritable();
+      const d = dbName === SCHEMA.LAB_DB ? this.labData : dbName === SCHEMA.LEDGER_DB ? this.ledgerData : this.data;
       mineTables.forEach((t) => {
         d[t] = (d[t] || []).filter((x) => !mine(x));
       });
@@ -842,12 +976,14 @@ const ops = {
   insertMany(items) {
     const list = Array.isArray(items) ? items : [];
     const out = [];
-    [SCHEMA.LEDGER_DB, SCHEMA.MAIN_DB].forEach((dbName) => {
+    // ⭐ 0.9.8：三库三组（实验室 → 记账 → 主库）
+    [SCHEMA.LAB_DB, SCHEMA.LEDGER_DB, SCHEMA.MAIN_DB].forEach((dbName) => {
       const mine = list.filter((it) => this._dbFor(it.table) === dbName);
       if (!mine.length) return;
-      // ⚠️ 记账那一份先过闸门（理由同 `replaceWhole`）
-      if (dbName === SCHEMA.LEDGER_DB) this._assertLedgerWritable();
-      const d = dbName === SCHEMA.LEDGER_DB ? this.ledgerData : this.data;
+      // ⚠️ 分库那一份先过闸门（理由同 `replaceWhole`）
+      if (dbName === SCHEMA.LAB_DB) this._assertLabWritable();
+      else if (dbName === SCHEMA.LEDGER_DB) this._assertLedgerWritable();
+      const d = dbName === SCHEMA.LAB_DB ? this.labData : dbName === SCHEMA.LEDGER_DB ? this.ledgerData : this.data;
       mine.forEach((it) => {
         // `deref` 解开子项外键上的延迟引用（父项此刻已插好、`id` 已回填）—— 见 helpers.js。
         // ⚠️ 这一步不能省：漏了会把 `{__ref:…}` 这个对象直接写进数据文件里，
@@ -891,6 +1027,10 @@ const ops = {
     if (fs.existsSync(this.ledgerJsonFile)) {
       fs.copyFileSync(this.ledgerJsonFile, path.join(this.dataDir, `zxdesk-ledger.json.bak-${safe}-${stamp}`));
     }
+    // ⭐ 0.9.8：第三个文件同款（同样「只有文件真的存在时才拷」—— 它可能从来还没落过盘）
+    if (fs.existsSync(this.labJsonFile)) {
+      fs.copyFileSync(this.labJsonFile, path.join(this.dataDir, `zxdesk-lab.json.bak-${safe}-${stamp}`));
+    }
     return name;
   },
 
@@ -916,6 +1056,8 @@ const ops = {
     //    本方法在那一侧不可用时会退回「按内存现生成」，而内存里是 null ⇒ 写出一份内容为 `null`
     //    的假文件（一个彻头彻尾的谎言，比失败糟得多）。
     if (SCHEMA.ledgerTables().length) this._assertLedgerWritable();
+    // ⭐ 0.9.8：实验室库同款闸门（0.9.8 里它没有表 ⇒ 这半句不跑）
+    if (SCHEMA.labTables().length) this._assertLabWritable();
     /** 功能：读一个数据文件；文件不存在时用内存里的那份现生成（保证永远能给出东西）。 */
     const dumpOf = (file, data, entry) => {
       if (fs.existsSync(file)) return { entry, buf: fs.readFileSync(file) };
@@ -924,6 +1066,8 @@ const ops = {
     return [
       dumpOf(this.jsonFile, this.data, 'zxdesk.json'),
       dumpOf(this.ledgerJsonFile, this.ledgerData, 'zxdesk-ledger.json'),
+      // ⭐ 0.9.8：第三个成员（形状与 SQLite 侧一致：主库在前、分库随后）
+      dumpOf(this.labJsonFile, this.labData, 'zxdesk-lab.json'),
     ];
   },
 
@@ -980,8 +1124,10 @@ const methods = {
    *    排查时它会被当成「记账数据被清空了」的证据。它要等到第一次真正的写入才出现。
    */
   _loadJson(side) {
-    const which = side === SCHEMA.LEDGER_DB ? SCHEMA.LEDGER_DB : SCHEMA.MAIN_DB;
-    const file = which === SCHEMA.LEDGER_DB ? this.ledgerJsonFile : this.jsonFile;
+    const which =
+      side === SCHEMA.LEDGER_DB ? SCHEMA.LEDGER_DB : side === SCHEMA.LAB_DB ? SCHEMA.LAB_DB : SCHEMA.MAIN_DB;
+    const file =
+      which === SCHEMA.LEDGER_DB ? this.ledgerJsonFile : which === SCHEMA.LAB_DB ? this.labJsonFile : this.jsonFile;
     let data = this._emptyJson(which);
     if (fs.existsSync(file)) {
       try {
@@ -993,6 +1139,7 @@ const methods = {
       }
     }
     if (which === SCHEMA.LEDGER_DB) this.ledgerData = data;
+    else if (which === SCHEMA.LAB_DB) this.labData = data;
     else this.data = data;
     // ⚠️ 空库种子只在主库那一侧跑：它是主库初始化流程里的固定一步（当前为空实现），
     //    而且它的钩子名与主库文件绑在一起 —— 在账本那一侧再跑一次只会多出一次无意义的调用。
@@ -1083,7 +1230,12 @@ const methods = {
     //    而 `ttt/test/store-json.test.js` 里那份「手写清单等价性」基线也继续成立。
     // ⚠️ 账本那一份**只放它自己的表**（`tablesByDb`）：它是一个全新的文件，没有历史包袱，
     //    往里塞 38 个恒空的键只会让「这个文件里到底住着什么」变得难以一眼看清。
-    const names = side === SCHEMA.LEDGER_DB ? SCHEMA.ledgerTables() : SCHEMA.tableNames();
+    const names =
+      side === SCHEMA.LEDGER_DB
+        ? SCHEMA.ledgerTables()
+        : side === SCHEMA.LAB_DB
+          ? SCHEMA.labTables()
+          : SCHEMA.tableNames();
     names.forEach((t) => {
       out[t] = t === 'settings' ? {} : [];
     });
@@ -1107,9 +1259,14 @@ const methods = {
    *    `_runOnLedger`）的落盘目标仍然是主库 —— 时序上也是对的。
    */
   _saveJson(which) {
-    const target = which === SCHEMA.LEDGER_DB || which === SCHEMA.MAIN_DB ? which : this.activeDb;
-    if (target === SCHEMA.LEDGER_DB) {
+    const known =
+      which === SCHEMA.LEDGER_DB || which === SCHEMA.LAB_DB || which === SCHEMA.MAIN_DB ? which : this.activeDb;
+    if (known === SCHEMA.LEDGER_DB) {
       fs.writeFileSync(this.ledgerJsonFile, JSON.stringify(this.ledgerData, null, 2), 'utf8');
+      return;
+    }
+    if (known === SCHEMA.LAB_DB) {
+      fs.writeFileSync(this.labJsonFile, JSON.stringify(this.labData, null, 2), 'utf8');
       return;
     }
     fs.writeFileSync(this.jsonFile, JSON.stringify(this.data, null, 2), 'utf8');

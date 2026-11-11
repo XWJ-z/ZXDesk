@@ -142,6 +142,27 @@ export function aboutBodyHtml() {
 }
 
 /**
+ * 功能：单张二维码卡片（`group` = 交流群，`form` = 问题收集表）—— 给**实验室顶部三入口**用。
+ *
+ * 说明：⭐⭐ 0.9.8 第 3 轮（方案 §8.3）：实验室顶部那两颗「反馈调研 / 交流群」要各开一个弹窗，
+ *      弹窗里就一块二维码 ＋ 一句说明。这里**只导出这一块**，因为群号与图片路径只有本文件一份
+ *      （⛔ 两端各写一份必然漂：换群号时忘改一边，界面就自相矛盾）。
+ *      ⚠️ 二维码图片仍是本地 PNG，路径走 `QR_DIR`（理由见文件头：MIME 表只认 .png/.svg）。
+ * @param {'group'|'form'} kind - 要哪一张
+ * @returns {string} 一块 `<figure>` 的 HTML
+ */
+export function qrBlockHtml(kind) {
+  const isGroup = kind !== 'form';
+  const src = `${QR_DIR}${isGroup ? 'community.png' : 'form.png'}`;
+  const cap = isGroup ? `ZXDesk工作台交流群 · ${GROUP_NO}` : '问题收集表（腾讯问卷）';
+  const alt = isGroup ? 'ZXDesk工作台交流群二维码' : '问题收集表二维码';
+  return `<figure class="about-qr about-qr-wide">
+      <img src="${src}" alt="${alt}" loading="lazy" />
+      <figcaption>${esc(cap)}</figcaption>
+    </figure>`;
+}
+
+/**
  * 功能：渲染「联系与反馈」的正文（两端共用同一份 HTML）。
  *
  * 说明：⚠️ 两块二维码**上下排**，不并排 —— 群卡片是竖长的、问卷是方的，并排会把群卡片

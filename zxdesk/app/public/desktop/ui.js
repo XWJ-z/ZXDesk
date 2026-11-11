@@ -7,7 +7,7 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.24
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/07-前端-电脑版与手机版.md
  */
 
@@ -61,6 +61,30 @@ export function hideToast() {
 
 // ---------- 模态框通用 ----------
 /**
+ * 弹窗是不是「锁着的」—— ⭐⭐ 0.9.8 第 3 轮：zx 实验室首次进入的那份知情协议**必须**先同意
+ * 才能关（老大 2026-11-08：「不可关，必须先同意」）。
+ *
+ * ⚠️ 锁的是**关闭通路**，不是一个新组件：`closeModal()` 在锁着时直接返回 ⇒
+ *    ✕、取消、点遮罩、Esc 四条路全都被那句话挡住（它们最终都调它）。
+ * ⚠️ 解锁只有一个出口：`unlockModal()` —— 只有「同意」那一支该调它，
+ *    ⛔ 别在别处顺手解，否则那道门等于没有。
+ * @type {boolean}
+ */
+let modalLocked = false;
+
+/**
+ * 当前这个弹窗是不是「只留主按钮」（`openModal(..., { single: true })`）。
+ *
+ * ⚠️⚠️ 必须存成模块级的**状态**，而不是在 `openModal()` 里写一次 `cancel.hidden` ——
+ *    调用方紧接着还会调 `setModalSave('我已知晓')`，而那个函数**自己也会摆弄** `#modal-cancel`
+ *    （「文案是关闭/取消就把取消收掉」）。于是 `openModal()` 里那一次隐藏当场被它覆盖回来：
+ *    老大 2026-11-08 真机第二次报「电脑端还是有取消按键」，根因就是这一处**顺序**。
+ *    ⇒ 判据只留一份（`modalSingle`），`setModalSave()` 也要读它。
+ * @type {boolean}
+ */
+let modalSingle = false;
+
+/**
  * 功能：打开通用模态框 —— 写入标题、注入正文 HTML 并显示弹窗，随后延迟把光标放到正文里的第一个输入框
  *      （键盘流「打开 → 输入 → Enter」不需要碰鼠标）。
  *
@@ -74,11 +98,19 @@ export function hideToast() {
  * @param {boolean} [opts.wide] - 为真时用加宽版（760px）
  * @param {boolean} [opts.mid] - 为真时用中等宽度版（620px）—— 给「主体是一小片等宽网格」的那种
  *      表单用（记一笔的分类网格）：760px 下 `auto-fill` 会摊成一片过小的格子。
+ * @param {boolean} [opts.locked] - 为真时**锁住关闭通路**（✕ / 取消 / 遮罩 / Esc 都不生效），
+ *      只有 `unlockModal()` 能放行 —— 给「必须先同意」的协议弹窗用。
+ * @param {boolean} [opts.single] - 为真时**只留主按钮**（藏掉「取消」）—— 给「只有一个动作」的
+ *      只读弹层用（例如协议 / 二维码：除了关掉它没有第二种选择，摆两颗就是让人犹豫）。
  * @returns {void}
  */
 export function openModal(title, html, opts) {
   $('#modal-title').textContent = title;
   $('#modal-body').innerHTML = html;
+  // ⭐⭐ 0.9.8 第 3 轮：协议弹窗的「必须先同意」—— 锁着时那四条关闭通路一律失效，
+  //    并把 ✕ 与「取消」两颗**藏起来**（让用户一眼看出这里只能同意，不是点了没反应）。
+  modalLocked = !!(opts && opts.locked);
+  $('#modal').classList.toggle('modal-locked', modalLocked);
   $('#modal').classList.toggle('modal-wide', !!(opts && opts.wide));
   // ⭐ 0.8.22（「电脑端的【记一笔】弹窗显示宽些」）：**中等宽度**版
   //    （`app.css` 的 `.modal-mid .modal-card { width: 620px }`）。
@@ -103,7 +135,14 @@ export function openModal(title, html, opts) {
   //    （见那个函数的说明）。⚠️ 重置放这里而不是 `closeModal()`：**打开时归位**比**关闭时归位**
   //    少管一个「下一个弹层忘了调 setModalSave」的分支 —— 不调就等于没来过，行为与从前一致。
   const cancel = $('#modal-cancel');
-  if (cancel) cancel.hidden = false;
+  // ⭐⭐ 0.9.8 第 3 轮：`{ single: true }` 的弹层**只有主按钮**（协议 / 二维码那种只读弹层）。
+  //    老大 2026-11-08 真机截图：「去掉取消按键」—— 那一屏除了关掉没有第二种选择，
+  //    摆一颗「取消」只会让人多点一次（而且它和「我已知晓」做的是同一件事）。
+  //    ⚠️⚠️ 判据记进模块级 `modalSingle`：调用方紧接着调的 `setModalSave()` **自己也会摆弄**
+  //    `#modal-cancel`，在那一句里写死 `hidden = false` 会把这里当场覆盖回来
+  //    —— 这正是第二次真机报「还是有取消按键」的根因。
+  modalSingle = !!(opts && opts.single);
+  if (cancel) cancel.hidden = modalSingle;
   $('#modal').classList.remove('hidden');
   // 打开就把光标放到第一个输入框：键盘流「打开 → 输入 → Enter」不需要碰鼠标
   setTimeout(() => {
@@ -122,7 +161,11 @@ export function openModal(title, html, opts) {
  * @returns {void}
  */
 export function closeModal() {
+  // ⚠️⚠️ 0.9.8 第 3 轮：锁着的弹窗**关不掉** —— ✕ / 取消 / 点遮罩 / Esc 最终都走到这里。
+  //    唯一的出口是先勾选、点「同意」（那一支会先 `unlockModal()`）。
+  if (modalLocked) return;
   $('#modal').classList.add('hidden');
+  $('#modal').classList.remove('modal-locked');
   $('#modal').classList.remove('modal-wide');
   // ⭐ 0.8.22：中等宽度版同款还原（理由与上面那句一模一样）
   $('#modal').classList.remove('modal-mid');
@@ -132,7 +175,47 @@ export function closeModal() {
   $('#modal').classList.remove('modal-fixed');
   // 弹窗可能改过主按钮的文案与样式（删除类操作会换成红色「永久删除」），关掉就还原，
   // 否则下一个表单会顶着上一次的按钮文字 —— 这种串味很难查。
+  // ⭐⭐ 0.9.8 第 3 轮：协议弹窗还动过主按钮的**可用状态与点击处理**（未勾选时 disabled）——
+  //    不一起还原的话，下一个弹窗会顶着一颗灰掉、点不动的「保存（Enter）」（而且**不报错**）。
+  const saveBtn = $('#modal-save');
+  if (saveBtn) {
+    saveBtn.disabled = false;
+    saveBtn.onclick = null;
+  }
   setModalSave('保存（Enter）', false);
+  // ⭐⭐ 0.9.8：**关掉就把正文拆掉** —— 只加 `hidden` 的话，弹窗里那个 `<video>` 仍在文档里，
+  //    它的缓冲 / 下载可能继续跑；下次打开又会把同一份大文件从头拉一遍（`no-store` 不进缓存）。
+  //    这曾让「1 条记录挂 3 个附件、其中 120 MB」的那一屏看着像「进列表卡 3 秒」。
+  //    ⚠️ 先 `pause()` 再清 `src` 再清 DOM：只清 DOM 在某些浏览器上不会立刻停下已开始的请求。
+  const body = $('#modal-body');
+  if (body) {
+    body.querySelectorAll('video, audio').forEach((el) => {
+      try {
+        el.pause();
+      } catch (_e) {
+        /* 没在播 */
+      }
+      el.removeAttribute('src');
+      try {
+        el.load();
+      } catch (_e) {
+        /* 某些内核上 load() 会抛，忽略即可 */
+      }
+    });
+    body.innerHTML = '';
+  }
+}
+
+/**
+ * 功能：解开「锁住的弹窗」—— ⭐⭐ 0.9.8 第 3 轮，**唯一**给协议弹窗用的出口。
+ *
+ * 说明：⚠️ 只有「同意」那一支该调它，调完紧接着 `closeModal()`。
+ *      ⛔ 别把它塞进 `closeModal()` 里自动调（那等于没锁）。
+ * @returns {void}
+ */
+export function unlockModal() {
+  modalLocked = false;
+  $('#modal').classList.remove('modal-locked');
 }
 
 /**
@@ -166,7 +249,7 @@ export function setModalSave(label, danger) {
   //    ⚠️ 归位由 `openModal()` 负责（每次打开先放回来）—— ⛔ 别在 `closeModal()` 里再写一遍：
   //    同一个状态两处还原，迟早有一处忘掉。
   const cancel = $('#modal-cancel');
-  if (cancel) cancel.hidden = label === '关闭' || label === '取消';
+  if (cancel) cancel.hidden = modalSingle || label === '关闭' || label === '取消';
 }
 
 /**
@@ -262,6 +345,30 @@ export function openConfirmModal(title, html, okLabel, fn) {
       toast(e.message, true);
     }
   };
+}
+
+/**
+ * 功能：弹一个**只有「知道了」一颗键**的提示框（只读信息，没有第二种选择）。
+ *
+ * 说明：⭐ 0.9.8（老大：「https 不行就弹窗说请使用 http 再次尝试」）：
+ *      `openConfirmModal` 的主按钮点完**不关窗**（它是给「确认之后还有下一步」用的），
+ *      纯提示用它会卡在屏幕上、用户还得自己找 ✕。这里走 `openModal` 的 `{ single: true }`
+ *      —— 只剩一颗键、点完就关。
+ *      ⚠️ 正文**转义后**插入：话术里常带 `http://127.0.0.1:11434/v1` 这类串，
+ *      与手机端 `askConfirm` 的 `esc(opts.text)` 同一口径（⛔ 不拼 HTML）。
+ *
+ * @param {string} title - 标题
+ * @param {string} text - 正文（纯文本，可含换行 —— 换行会原样保留）
+ * @returns {void}
+ */
+export function openNoticeModal(title, text) {
+  openModal(
+    title,
+    `<p style="font-size:14px;line-height:1.65;color:var(--ink-2);white-space:pre-wrap">${esc(text)}</p>`,
+    { single: true },
+  );
+  setModalSave('知道了', false);
+  $('#modal-save').onclick = () => closeModal();
 }
 
 /**

@@ -13,10 +13,11 @@
  * ⚠️ **加载顺序即语义**：`process.env.HOME` 必须在 `Store` 构造**之前**改好（飞牛 package 用户没有真实 home，
  *    不改会写文件 EACCES）；`store` 构造必须先于任何 handler 被调用。所以 `server.js` 必须**第一个** require 本文件。
  *
- * ⭐ 0.8.1（记账 2 期）：数据层现在是**两个库**（主库 + 记账库），启动日志因此**两段各报一次** ——
- *    后端 / 文件 / WAL 探测 / 只读降级 / 迁移前备份 / 建索引失败，两套结果**分开写**。
- *    判据来自 `store._backendStatus()`（`{main, ledger}`，只含非敏感信息）而不是 `storeInfo`：
- *    `info()` 住在 `store/methods/admin.js`，本次改造刻意没有动它。
+ * ⭐ 0.8.1（记账 2 期）＋ 0.9.8（zx 实验室）：数据层现在是**三个库**（主库 + 记账库 + 实验室库），
+ *    两个**分库**的启动日志各报一次 —— 后端 / 文件 / WAL 探测 / 只读降级 / 迁移前备份 / 建索引失败，
+ *    两套结果**分开写**（`logSideDb()` 一份实现，两个库各调一次）。
+ *    判据来自 `dbStatusOf(store)`（`{main, ledger, lab}`，只含非敏感信息）而不是 `storeInfo`：
+ *    `info()` 住在 `store/methods/admin.js`。
  *
  * @author zx
  * @date   2026-09-12
@@ -30,6 +31,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { Store, dbStatusOf } = require('./storage.js');
 const { hashPassword, hashUsable, loadOrCreateSecret } = require('./auth.js');
+const { resolveStartup, runCleanupSync, repairState } = require('./data-location.js');
 
 ('use strict');
 
@@ -66,18 +68,127 @@ function logLine(level, msg) {
   console.log(`[${t}] [${level}] ${msg}`);
 }
 
+/**
+ * 功能：把一个**分库**（记账 / 实验室）的体检结果写进启动日志 —— 三件事各报一次。
+ *
+ * 说明：⭐ 0.8.1 起「主库正常」**完全不代表**分库正常；0.9.8 起分库变成两个。
+ *      两个分库的报法**逐字同构**（后端/文件、不可用原因、WAL、迁移前备份、建索引失败），
+ *      所以只写一份、用名字参数区分 —— ⛔ 别复制成两段：那种副本的失效方式是
+ *      「改了一个忘了另一个」，而症状是某个库坏了却**没有人说得出来**。
+ *      ⚠️ 状态拿不到时**照实说拿不到**，绝不让一段体检报告把整个进程打挂。
+ *
+ * @param {string} name - 日志里的库名（如 `'记账数据库'`）
+ * @param {string} short - 功能名（如 `'记账'`，用于「已停止 X 读写」）
+ * @param {?Object} st - `dbStatusOf().<库>` 的状态项
+ * @param {Array.<string>} indexErrors - 该库建索引失败的原因
+ * @param {?string} backupFile - 该库的迁移前自动备份文件名
+ * @returns {void}
+ */
+function logSideDb(name, short, st, indexErrors, backupFile) {
+  if (!st) {
+    logLine('warn', `⚠️ ${name}的状态未取到（数据层初始化没有跑到状态快照那一步）—— 启动日志中缺少它的后两端信息`);
+  } else {
+    logLine('info', `${name}: ${st.file}（后端 ${st.backend}）`);
+    if (!st.ok) {
+      logLine(
+        'error',
+        `⚠️ ${name}不可用：${st.reason || '原因未知'}` +
+          (st.readOnly
+            ? ` —— 【已停止${short}读写】为避免出现两套数据，${short}相关的读写一律拒绝（503）；` +
+              '其余功能不受影响，修好后重启应用即可恢复。'
+            : ` —— ${short}相关的读写一律拒绝（503）；其余功能不受影响。`),
+      );
+    } else if (st.backend === 'sqlite') {
+      if (st.journalMode === 'wal') {
+        logLine('info', `${name}日志模式: WAL（与主库各自探测、各自生效）`);
+      } else {
+        logLine(
+          'warn',
+          `${name}日志模式: ${st.journalMode}（未启用 WAL）—— 与主库同一个成因：` +
+            '数据目录若在网络盘（NFS/SMB），WAL 会因缺少共享内存而失败。',
+        );
+      }
+    }
+  }
+  if (backupFile) {
+    logLine('info', `${name}迁移前已自动备份: ${backupFile}（保留最近 5 份）`);
+  }
+  // 建索引失败与主库同一条口径（逐条 try/catch、只报告不上抛），单独一行是为了让人一眼看出「慢的是哪个库」
+  if (indexErrors && indexErrors.length) {
+    logLine(
+      'warn',
+      `⚠️ ${name}有 ${indexErrors.length} 个索引未能建立（只是查询变慢，不影响数据与可用性）: ` +
+        indexErrors.slice(0, 3).join('；'),
+    );
+  }
+}
+
 // ---- 初始化数据层 ----
-const dataDir = resolveDataDir();
+/**
+ * 默认目录：安装时由 `data-share` 定的那一个，索引与归档住在它里面。
+ * ⚠️ 它与「数据目录」不是同一件事：迁移过之后数据在别处，默认目录只留 `data-location.json`
+ *    与 `zxdesk-data-*.zip`。
+ */
+const DEFAULT_DIR = resolveDataDir();
 
-fs.mkdirSync(dataDir, { recursive: true });
+/**
+ * 启动判定：用默认目录 / 用索引里的自定义位置 / 位置不可信（只能出恢复引导）。
+ * ⚠️ 判定必须在**建目录与开库之前**完成 —— 否则一个没挂上的卷会被 `mkdirSync` 建出来，
+ *    `Store` 再在里面建一个空库，用户看到的就是「数据全没了」。
+ */
+const STARTUP = resolveStartup({ defaultDir: DEFAULT_DIR, pkgvar: PKGVAR });
 
-const store = new Store(dataDir);
+/** 位置不可信时的现场（`null` 表示正常启动） */
+const repair = STARTUP.mode === 'repair' ? STARTUP : null;
 
-const storeInfo = store.info();
+const dataDir = repair ? DEFAULT_DIR : STARTUP.dir;
+
+/**
+ * 功能：建目录并打开数据层（只在「位置可信」时调用）。
+ * @param {string} dir - 数据目录
+ * @returns {Object} `Store` 实例
+ */
+function openStore(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  return new Store(dir);
+}
+
+// ⭐ 索引已提交、源位置还没清理完：**在建库之前**清掉（此刻源库的句柄还没打开，删才安全）。
+//    清理只动索引 `cleanup.paths` 里列出的相对路径，目录里别人的文件一个都不动；删失败就留到下次启动。
+if (!repair && STARTUP.index) {
+  try {
+    runCleanupSync({ index: STARTUP.index, defaultDir: DEFAULT_DIR, pkgvar: PKGVAR, log: logLine });
+  } catch (e) {
+    logLine('warn', `源位置清理未能完成（不影响本次使用，下次启动会重试）: ${(e && e.message) || e}`);
+  }
+}
+
+const store = repair ? null : openStore(dataDir);
+
+// ⭐ 把「安装位置」与「位置索引」交给数据层：`storageInfo()` 要据此算出「默认 / 自定义」、
+//    列出归档与最近一次搬迁。⚠️ 不放进构造参数是为了不改 `Store` 的签名（那边有 100+ 处调用）。
+if (store) {
+  store.defaultDir = DEFAULT_DIR;
+  store.locationIndex = STARTUP.index || null;
+}
+
+const storeInfo = store ? store.info() : null;
 
 // ⭐ 0.8.1：两个库的只读体检结果（主库那一半另有 `storeInfo`，见 store/methods/admin.js）——
 //    读口统一在 `storage.js` 的 `dbStatusOf()` 上，本文件不直接去摸实例字段。
-const dbStatus = dbStatusOf(store);
+const dbStatus = store ? dbStatusOf(store) : null;
+
+if (repair) {
+  logLine(
+    'error',
+    `数据位置不可用（${repair.reason}）：${dataDir} —— 应用没有打开数据库，也没有新建任何文件；` +
+      '请在恢复引导页重新授权、换一个位置，或用安装位置里的归档恢复。',
+  );
+  if (repair.detail) logLine('info', `数据位置不可用的细节：${repair.detail}`);
+}
+
+// ⚠️ 位置不可信时下面这一整段体检都不成立（没有库可体检）：只出恢复引导，不建库、不登录
+if (!repair) {
 
 // ⭐ 0.8.9：启动日志**固定一行**「Node 版本 · 存储后端 · 库路径」。
 //   换运行时这种改动，事后只能靠日志回答「这个包到底跑在哪个 Node 上」「数据写进了哪个文件」——
@@ -109,48 +220,17 @@ if (storeInfo.backend === 'sqlite') {
   }
 }
 
-// ⭐ 0.8.1：**第二个库（记账）**—— 后端 / 文件 / WAL 探测 / 只读降级**各报一次**。
-//   ⚠️ 两个库的探测结果必须能分开看：合成一行之后，就再也说不清「是哪个库没启用 WAL」，
+// ⭐ 0.8.1 / 0.9.8：**两个分库（记账 ＋ 实验室）** 各报一次体检结果。
+//   ⚠️ 两组探测结果必须能分开看：合成一行之后就再也说不清「是哪个库没启用 WAL」，
 //   而这条日志的用处正是「一眼看出数据目录是不是网络盘」。同理，只报「主库正常」会让
-//   记账库打不开这件事**完全无声**（用户那边只看到记账功能整天 503）。
-const ledgerStatus = dbStatus.ledger;
-// ⚠️ `ledgerStatus` 理论上一定有（`_init` 的每条出口都会刷新状态快照），但启动日志**绝不能**
-// 因为一段体检报告而把整个进程打挂 —— 拿不到就照实说「拿不到」，其余照常。
-if (!ledgerStatus) {
-  logLine('warn', '⚠️ 记账数据库的状态未取到（数据层初始化没有跑到状态快照那一步）—— 启动日志中缺少它的后两端信息');
-} else {
-  logLine('info', `记账数据库: ${ledgerStatus.file}（后端 ${ledgerStatus.backend}）`);
-  if (!ledgerStatus.ok) {
-    logLine(
-      'error',
-      `⚠️ 记账数据库不可用：${ledgerStatus.reason || '原因未知'}` +
-        (ledgerStatus.readOnly
-          ? ' —— 【已停止记账读写】为避免出现两套数据，记账相关的读写一律拒绝（503）；' +
-            '其余功能不受影响，修好后重启应用即可恢复。'
-          : ' —— 记账相关的读写一律拒绝（503）；其余功能不受影响。'),
-    );
-  } else if (ledgerStatus.backend === 'sqlite') {
-    if (ledgerStatus.journalMode === 'wal') {
-      logLine('info', '记账数据库日志模式: WAL（与主库各自探测、各自生效）');
-    } else {
-      logLine(
-        'warn',
-        `记账数据库日志模式: ${ledgerStatus.journalMode}（未启用 WAL）—— 与主库同一个成因：` +
-          '数据目录若在网络盘（NFS/SMB），WAL 会因缺少共享内存而失败。',
-      );
-    }
-  }
-}
+//   某个分库打不开这件事**完全无声**（用户那边只看到那块功能整天 503）。
+logSideDb('记账数据库', '记账', dbStatus.ledger, dbStatus.ledgerIndexErrors, dbStatus.ledgerBackupFile);
+// ⭐ 第三个库：它坏的时候只让实验功能停摆，但必须被说出来，不能被主库带崩
+logSideDb('实验室数据库', '实验室', dbStatus.lab, dbStatus.labIndexErrors, dbStatus.labBackupFile);
 
 // 迁移前自动备份：本次启动若做过 schema 迁移，库旁边会多一份 .bak（出问题可回滚）
 if (storeInfo.backupFile) {
   logLine('info', `迁移前已自动备份数据库: ${storeInfo.backupFile}（自动备份保留最近 5 份）`);
-}
-
-// ⭐ 0.8.1：记账库的迁移前自动备份 —— 它用自己的前缀（`zxdesk-ledger.db.bak-v…`）与自己的版本号，
-// 各转各的圈；⚠️ 它**失败时也走 `backupError`**（正文以「记账库：」开头），所以下面的告警一行就够。
-if (dbStatus.ledgerBackupFile) {
-  logLine('info', `记账数据库迁移前已自动备份: ${dbStatus.ledgerBackupFile}（保留最近 5 份）`);
 }
 
 if (storeInfo.backupError) {
@@ -216,16 +296,6 @@ if (storeInfo.indexErrors && storeInfo.indexErrors.length) {
   );
 }
 
-// ⭐ 0.8.1：记账库的建索引失败 —— 与主库同一条口径（逐条 try/catch、只报告不上抛），
-// 单独一行是为了让人一眼看出「慢的是哪一个库」。
-if (dbStatus.ledgerIndexErrors.length) {
-  logLine(
-    'warn',
-    `⚠️ 记账数据库有 ${dbStatus.ledgerIndexErrors.length} 个索引未能建立（只是查询变慢，不影响数据与可用性）: ` +
-      dbStatus.ledgerIndexErrors.slice(0, 3).join('；'),
-  );
-}
-
 if (storeInfo.importedFromJson > 0) {
   logLine(
     'info',
@@ -247,7 +317,14 @@ if (storeInfo.legacyNullStartDates > 0) {
   );
 }
 
-logLine('info', `数据目录: ${dataDir}`);
+if (repair) {
+  // 恢复态不报路径：此时「默认目录」只是索引与归档的落点，不是真正的数据位置
+  logLine('info', `数据目录: （不可用，见上面的原因）`);
+} else if (STARTUP.mode === 'custom') {
+  logLine('info', `数据目录: ${dataDir}（自定义；默认目录 ${DEFAULT_DIR} 存有索引与归档）`);
+} else {
+  logLine('info', `数据目录: ${dataDir}`);
+}
 
 // ⭐⭐ 0.8.12：协作附件**孤儿巡检** —— 「库里有记录、磁盘没文件」与
 //   「磁盘有文件、库里没记录」各报一次。⚠️⭐ **只报告、绝不自动删**（绝不改写用户数据）。
@@ -277,12 +354,18 @@ if (storeInfo.usersIndexError) {
   );
 }
 
+}
+
 /**
  * 会话签名密钥。
  * ⚠️ 必须落盘：不落盘则每次重启换密钥 → 所有人被登出。
  * ⚠️ 落盘失败**不阻断启动**，但要显著告警 —— 静默降级是不可接受的。
  */
-const secretInfo = loadOrCreateSecret(dataDir);
+const secretInfo = store
+  ? loadOrCreateSecret(dataDir)
+  : // 恢复态没有数据目录：给一个**临时**密钥，让模块加载与未登录页面照常工作。
+    // 这个进程里本来也开不了库、登不了录，重启即失效。
+    { secret: crypto.randomBytes(32).toString('hex'), file: '', error: null };
 
 const AUTH_SECRET = secretInfo.secret;
 
@@ -531,7 +614,7 @@ function ensureBuiltinAdmin() {
   }
 }
 
-ensureBuiltinAdmin();
+if (store) ensureBuiltinAdmin();
 
 // ---- 异常兜底（不退出，记录） ----
 process.on('uncaughtException', (e) => logLine('error', 'uncaught: ' + ((e && e.stack) || e)));
@@ -560,12 +643,21 @@ process.on('SIGINT', () => {
  */
 const runtime = { port: null };
 
+/** 恢复引导页需要的那份状态（不含完整路径的裁剪在路由层做） */
+function locationState() {
+  return repairState({ defaultDir: DEFAULT_DIR, pkgvar: PKGVAR, startup: STARTUP });
+}
+
 module.exports = {
   DATA_DIR_ENV,
   PKGVAR,
   HOME_ENV,
   resolveDataDir,
   logLine,
+  DEFAULT_DIR,
+  STARTUP,
+  repair,
+  locationState,
   dataDir,
   store,
   storeInfo,

@@ -22,7 +22,7 @@
  *
  * @author zx
  * @date   2026-09-29
- * @since 0.8.19
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/16-密码库.md、docs/公共/开发方案/27-网址与密码合并屏.md、38-网址密码夹的滑动与顶部.md、
  *      39-网址密码夹的卡片与按钮.md、core/slots.js
  */
@@ -40,8 +40,10 @@ import {
   vaultFilterInput,
   vaultForm,
   vaultGen,
+  vaultInitAckSet,
+  vaultInitBack,
   vaultInitGo,
-  vaultInitSheet,
+  vaultInitNext,
   vaultLock,
   vaultCopyRowUrl,
   vaultReveal,
@@ -139,8 +141,13 @@ const SKELETON = `
 let sheetBound = false;
 
 const VAULT_ACTS = {
-  'vault-init': () => {
-    vaultInitSheet();
+  // ⭐⭐ 0.9.8 第 3 轮：知情页改「页内两步」⇒ 原来那颗「设置主密码」按钮（`vault-init` →
+  //    打开底部弹层）**已撤**，换成「下一步 / 返回上一步」两颗页内按钮。
+  'vault-init-next': () => {
+    vaultInitNext();
+  },
+  'vault-init-back': () => {
+    vaultInitBack();
   },
   'vault-init-go': () => {
     vaultInitGo();
@@ -252,9 +259,6 @@ const VAULT_ACTS = {
   },
 };
 
-/** 弹层里那个回车键**只挂一次**（见文件头） */
-let sheetKeyBound = false;
-
 /**
  * 功能：把密码库挂进宿主给的容器 —— 造根节点 → 进文档 → 挂委托 → 取状态并渲染。
  * @param {Object} ctx - 宿主上下文（`{ container, end, modules, uiOf, me }`）
@@ -280,6 +284,13 @@ export async function render(ctx) {
   });
   root.addEventListener('change', (e) => {
     if (!e.target) return;
+    // ⭐⭐ 0.9.8 第 3 轮：知情页那颗勾选框 —— 勾了才放开「下一步」（没勾时按钮 `disabled`）。
+    //    确认态写在**内存**里（`vaultInitAck`），不读 DOM：设置页没有勾选框，
+    //    提交前那次校验读的就是那份变量（⛔ 别改成「回头找 #vault-init-ack」）。
+    if (e.target.id === 'vault-init-ack') {
+      vaultInitAckSet(!!e.target.checked);
+      return;
+    }
     // ⭐⭐ 0.8.18：这里原来有一个 `#vault-lock-minutes` 分支（改自动锁定）—— 那一枚下拉
     //    已**搬去设置页**（`mobile-settings-pane.js` 自己挂监听、自己发请求），
     //    本屏不再有那个 id。⛔ 别为了「万一」留一个永不命中的分支。
@@ -294,24 +305,23 @@ export async function render(ctx) {
       else vaultSetFilter(null);
     }
   });
-  // 解锁框里回车 = 点「🔓 解锁」（软键盘的回车就是那个动作键，什么都不做会很像坏了）
+  // 回车提交：解锁框 → 解锁；设主密码那两个框 → 提交（软键盘的回车就是那个动作键，
+  // 什么都不做会很像坏了）。
+  // ⚠️⭐ 0.9.8 第 3 轮：那两个框原来住在**底部弹层**里（`#sheet` 与 `#app` 是兄弟节点，
+  // 根节点收不到）⇒ 当时挂的是一处 `document` 级监听。改成页内两步之后它们就在本片段里，
+  // 那一处全局监听**已撤**（留着一个永不命中的委托就是死代码）。
   root.addEventListener('keydown', (e) => {
     if (!e.target || e.key !== 'Enter' || e.shiftKey) return;
-    if (e.target.id !== 'vault-unlock-pw') return;
-    e.preventDefault();
-    vaultUnlockGo();
-  });
-  // ⚠️ 「设置主密码」那两个框住在**弹层**里（`#sheet` 是 `#app` 的兄弟节点，根节点上的委托收不到）——
-  //    所以挂一处**全局**键盘监听，且**只挂一次**。
-  if (!sheetKeyBound) {
-    sheetKeyBound = true;
-    document.addEventListener('keydown', (e) => {
-      if (!e.target || e.key !== 'Enter' || e.shiftKey) return;
-      if (e.target.id !== 'vault-master' && e.target.id !== 'vault-master2') return;
+    if (e.target.id === 'vault-unlock-pw') {
       e.preventDefault();
-      vaultInitGo();
-    });
-  }
+      void vaultUnlockGo();
+      return;
+    }
+    if (e.target.id === 'vault-master' || e.target.id === 'vault-master2') {
+      e.preventDefault();
+      void vaultInitGo();
+    }
+  });
 
   // ⚠️⭐ 0.8.7：本模块有一批动作住在**宿主的底部弹层**里（表单 / 确认 / 标签管理）——
   //    而 `#sheet` 与 `#app` 是**兄弟节点**，片段根节点上的委托**收不到它**。

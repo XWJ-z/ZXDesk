@@ -55,12 +55,17 @@
  *
  * @author zx
  * @date   2026-09-10
- * @since 0.8.13
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md、docs/公共/开发方案/21-记账2期-记账.md（决策 3）
  */
 
 const core = require('./core.js');
-const { registry, schemaModules } = require('../../../modules/registry.js');
+const {
+  registry,
+  schemaModules,
+  DATABASES,
+  DEFAULT_DATABASE,
+} = require('../../../modules/registry.js');
 
 /**
  * 尚未搬进 `app/modules/` 的模块 → 它旧的表结构声明。
@@ -219,14 +224,28 @@ assertModules(MODULES);
 // ============================================================================
 
 /** 主库（`zxdesk.db` / `zxdesk.json`）：除记账模块之外的一切 */
-const MAIN_DB = 'main';
+const MAIN_DB = DATABASES.MAIN;
 
 /**
  * 记账独立库（`zxdesk-ledger.db` / `zxdesk-ledger.json`）。
  * ⚠️ 这个字符串是**契约值**：模块在 `module.json` 里写的就是它（`"database": "ledger"`），
- *    两边必须逐字一致 —— 写错了不会报错，只会「这个模块悄悄留在主库」。
+ *    两边必须逐字一致。⭐ 0.9.8 起**不再靠人守**：`modules/registry.js` 的白名单在加载时校验，
+ *    写错一个字母就是启动即抛（改造前是静默落主库）。
  */
-const LEDGER_DB = 'ledger';
+const LEDGER_DB = DATABASES.LEDGER;
+
+/**
+ * ⭐ 实验室独立库（`zxdesk-lab.db` / `zxdesk-lab.json`）—— 「一个应用一个库」的**第二个例外**。
+ *
+ * 说明：装所有 `database: "lab"` 的模块的表。`0.9.8` 里声明它的是**加密信息**
+ *      （`modules/secrets`，表 `secrets_items`）；实验室宿主模块 `lab` 自己是零张表的
+ *      ⇒ 这个库文件从 0.9.8 起**真的有业务表**，不再是空壳。
+ *      ⚠️ 它存在的意义是**把地基先接通**：库文件、连接、体检、备份、恢复、删账号六处都按三库写死，
+ *      第一个实验功能落地时只写模块、不碰地基。
+ *      ⚠️ 与记账库同一条纪律：库名（这个字符串）与文件名（`store/index.js` 的 `LAB_DB_FILE`）
+ *      是**两件事**，⛔ 文件名一旦改，用户机器上已有的实验室库就会「消失」。
+ */
+const LAB_DB = DATABASES.LAB;
 
 /**
  * 表名 → 库名（`'main'` / `'ledger'`）。
@@ -245,22 +264,30 @@ const LEDGER_DB = 'ledger';
  *
  * @type {Map.<string, string>}
  */
-const DB_OF_TABLE = new Map();
-for (const meta of registry.list) {
-  const db = meta.database === LEDGER_DB ? LEDGER_DB : MAIN_DB;
-  for (const t of meta.tables || []) DB_OF_TABLE.set(t, db);
+function buildDbOfTable(list) {
+  const map = new Map();
+  for (const meta of list || []) {
+    // ⚠️ 值合法性**不在这里判**：`modules/registry.js` 的 `loadModules()` 已经对白名单校验过
+    //    （非法值加载即抛，根本走不到这里）。这里只做「缺省 = 主库」的归一。
+    const db = meta.database || DEFAULT_DATABASE;
+    for (const t of meta.tables || []) map.set(t, db);
+  }
+  return map;
 }
+
+const DB_OF_TABLE = buildDbOfTable(registry.list);
 
 /**
  * 功能：查一张表住在哪个库 —— **「表 → 库」映射的唯一入口**。
  *
  * 说明：⭐ 所有「这个操作该走哪个连接」的判断都必须经过它（`store._dbFor()` / `_dataFor()` /
- *      两个后端原语的表名参数 / 迁移工具的表清单）。⛔ 不许在别处再写一份「记账表有哪些」的
+ *      两个后端原语的表名参数 / 迁移工具的表清单）。⛔ 不许在别处再写一份「哪些表在哪个库」的
  *      清单：那种副本的失效方式是**静默的** —— 加了新表而副本没跟上，表现是「新表的数据
  *      写进了主库」（备份里少一份、删账号删不干净，且都不报错）。
+ *      ⭐ 0.9.8：三个库三个值（`main` / `ledger` / `lab`），来源见 `buildDbOfTable()`。
  *
  * @param {string} table - 表名
- * @returns {string} `'main'` 或 `'ledger'`；**未登记的表回 `'main'`**（失败方向安全）
+ * @returns {string} `'main'` / `'ledger'` / `'lab'`；**未登记的表回 `'main'`**（失败方向安全）
  */
 function dbOf(table) {
   return DB_OF_TABLE.get(String(table)) || MAIN_DB;
@@ -268,7 +295,7 @@ function dbOf(table) {
 
 /**
  * 功能：列出住在某个库里的全部表（顺序 = `tableNames()` 的顺序）。
- * @param {string} db - `'main'` / `'ledger'`
+ * @param {string} db - `'main'` / `'ledger'` / `'lab'`
  * @returns {Array.<string>} 该库的表名数组；`db` 不认识时为空数组
  */
 function tablesByDb(db) {
@@ -281,6 +308,18 @@ function tablesByDb(db) {
  */
 function ledgerTables() {
   return tablesByDb(LEDGER_DB);
+}
+
+/**
+ * 功能：⭐ 0.9.8：实验室独立库里的全部表 —— 转正工具、实验室库建表与实验室库备份都认它。
+ *
+ * 说明：⭐ 0.9.8 里它是 `['secrets_items']`（加密信息那个实验功能）。⚠️ 调用方仍然必须能安全地吃
+ *      **空数组** —— 实验室一旦没有任何实验功能（实验被撤光 / 模块目录被删），这里就是空的；
+ *      而「0 张表的库」不是错误状态（`createAllIn()` 得到一条空语句，备份那一段整段跳过）。
+ * @returns {Array.<string>} 实验室库的表名数组（0.9.8 里是加密信息那一张）
+ */
+function labTables() {
+  return tablesByDb(LAB_DB);
 }
 
 /**
@@ -334,6 +373,17 @@ const SCHEMA_VERSION = 7;
  *    那三件事本来就是幂等补齐的。
  */
 const LEDGER_SCHEMA_VERSION = 1;
+
+/**
+ * ⭐ 0.9.8：**实验室独立库自己的结构版本**（写在实验室库连接的 `PRAGMA user_version` 里）。
+ *
+ * 说明：⚠️⭐ 理由与 `LEDGER_SCHEMA_VERSION` **逐字同构**（三个库各数各的历史）：
+ *      混成一个号会让「新建的实验室库被当成落后于主库的老库」⇒ 触发一次毫无意义的整库重建；
+ *      反过来，将来实验室库真需要一次结构升级时，主库会被它连累着重建。
+ *      主库 v7 / 记账库 v1 / 实验室库 v1 —— **三个号互不相干**。
+ * ⚠️ 加表 / 加列 / 加索引都**不升**这个号（与另外两个库同一条纪律）：那三件事本来就是幂等补齐的。
+ */
+const LAB_SCHEMA_VERSION = 1;
 
 /**
  * 功能：汇总全部模块声明的表名。
@@ -538,8 +588,12 @@ module.exports = {
   SCHEMA_VERSION,
   // ⭐ 0.8.1：记账独立库自己的结构版本（与主库的 SCHEMA_VERSION **分开数**）
   LEDGER_SCHEMA_VERSION,
+  // ⭐ 0.9.8：实验室独立库自己的结构版本（同上，三个号互不相干）
+  LAB_SCHEMA_VERSION,
   MAIN_DB,
   LEDGER_DB,
+  // ⭐ 第三个库（「一个应用一个库」的第二个例外）
+  LAB_DB,
   MODULES,
   assertModules,
   tableNames,
@@ -548,6 +602,10 @@ module.exports = {
   dbOf,
   tablesByDb,
   ledgerTables,
+  // ⭐ 0.9.8：实验室库的表清单（0.9.8 里是加密信息的 `secrets_items`）
+  labTables,
+  // ⭐ 0.9.8：映射装配器（`dbOf()` 的唯一实现；测试用它注入含 `database: "lab"` 的夹具）
+  buildDbOfTable,
   createAllIn,
   ensureColumnsIn,
   indexStatementsIn,

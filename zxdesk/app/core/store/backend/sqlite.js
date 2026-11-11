@@ -31,7 +31,7 @@
  */
 const fs = require('node:fs');
 const path = require('node:path');
-const { SCHEMA, SCHEMA_VERSION, BACKUP_KEEP, IMPORT_KEEP_TABLES } = require('../constants.js');
+const { SCHEMA, SCHEMA_VERSION, BACKUP_KEEP, IMPORT_KEEP_TABLES, dbLabelOf } = require('../constants.js');
 const { compactStamp, deref } = require('../helpers.js');
 
 /**
@@ -284,6 +284,43 @@ const ops = {
    */
   setHideIdea(uid, hide, stamp) {
     const r = this.db.prepare('UPDATE users SET hide_idea=?, updated_at=? WHERE id=?').run(hide ? 1 : 0, stamp, uid);
+    return r.changes > 0;
+  },
+
+  /**
+   * 功能：改写某个账号「不显示 zx 实验室」开关并刷新 `updated_at`，返回是否更新到了行。
+   *
+   * 说明：⭐ 与 `setHideIdea` 同一条规矩：**只是这个账号自己的偏好**，
+   *      **不碰 `session_epoch`**，改个开关不踢人下线。
+   *      ⚠️ 只改自己勾的那一列：十三个偏好必须能**互不影响**地开关。
+   *      ⚠️ 关掉的是**入口**：实验室库（`zxdesk-lab.db`）里的实验数据一行不动，重新打开立刻回来。
+   *
+   * @param {number} uid - 用户 id
+   * @param {boolean} hide - 真值表示该账号不显示 zx 实验室（落库时转成 1 / 0）
+   * @param {string} stamp - 更新时间戳
+   * @returns {boolean} 更新到行则为 true
+   */
+  setHideLab(uid, hide, stamp) {
+    const r = this.db.prepare('UPDATE users SET hide_lab=?, updated_at=? WHERE id=?').run(hide ? 1 : 0, stamp, uid);
+    return r.changes > 0;
+  },
+
+  /**
+   * 功能：记下「这个账号已同意 zx 实验室使用须知」，并刷新 `updated_at`。
+   *
+   * 说明：⭐ 首次进入实验室要弹知情协议、勾选过后才能点同意，
+   *      且按账号记在服务端 —— 与 `setHideLab` **同一条规矩**：只改自己那一列、
+   *      不碰 `session_epoch`、删账号随行消失。
+   *      ⚠️ 它不是开关：`1` = 以后进实验室不再弹这份协议，`0` = 下次还要读、还要勾。
+   * @param {number} uid - 用户 id
+   * @param {boolean} agreed - 真值表示已同意（落库时转成 1 / 0）
+   * @param {string} stamp - 更新时间戳
+   * @returns {boolean} 更新到行则为 true
+   */
+  setLabAgreed(uid, agreed, stamp) {
+    const r = this.db
+      .prepare('UPDATE users SET lab_agreed=?, updated_at=? WHERE id=?')
+      .run(agreed ? 1 : 0, stamp, uid);
     return r.changes > 0;
   },
 
@@ -600,30 +637,37 @@ const ops = {
    * @throws {Error} 记账库不可用（503）或清记账库失败时抛出（记账库那一段已回滚）
    */
   deleteUser(u) {
-    // ---- 第一段：记账库（它必须先成功，否则账号行不能删）----
-    const ledgerTables = SCHEMA.userScopedTablesIn(SCHEMA.LEDGER_DB);
-    if (ledgerTables.length) {
-      this._assertLedgerWritable();
-      const ldb = this.ledgerDb;
-      ldb.exec('BEGIN IMMEDIATE');
+    // ---- 第一段 / 第二段：分库（实验室 → 记账），它们必须先成功，否则账号行不能删 ----
+    // ⭐ 0.9.8：三库之后是**三段执行**（实验室 → 记账 → 主库）。为什么实验室排在记账前面：
+    //    两段之间没有事务（跨连接做不到），任何一段失败都会留下「前一段已删」的中间态；
+    //    排在越前面的段，越可能在**同一次重试**里被再删一遍（幂等，删 0 行），代价最小。
+    //    ⚠️ 次序的唯一硬约束仍然是「**账号行最后删**」：反过来的话，某一段失败就留下
+    //    「账号已经没了、那段数据还在」—— 那种残留**再也没人去清**。
+    for (const dbName of [SCHEMA.LAB_DB, SCHEMA.LEDGER_DB]) {
+      const tables = SCHEMA.userScopedTablesIn(dbName);
+      if (!tables.length) continue;
+      if (dbName === SCHEMA.LAB_DB) this._assertLabWritable();
+      else this._assertLedgerWritable();
+      const conn = dbName === SCHEMA.LAB_DB ? this.labDb : this.ledgerDb;
+      conn.exec('BEGIN IMMEDIATE');
       try {
-        ledgerTables.forEach((t) => ldb.prepare(`DELETE FROM ${t} WHERE user_id=?`).run(u));
-        ldb.exec('COMMIT');
+        tables.forEach((t) => conn.prepare(`DELETE FROM ${t} WHERE user_id=?`).run(u));
+        conn.exec('COMMIT');
       } catch (e) {
         try {
-          ldb.exec('ROLLBACK');
+          conn.exec('ROLLBACK');
         } catch (_e) {
           /* 回滚本身失败无可挽回，把原始错误抛出去 */
         }
         const err = new Error(
-          `删除账号时清空记账数据失败（账号与其余数据**一个字节都没动**，可以再点一次）：${(e && e.message) || e}`,
+          `删除账号时清空${dbLabelOf(dbName)}数据失败（账号与其余数据**一个字节都没动**，可以再点一次）：${(e && e.message) || e}`,
         );
         err.status = 500;
         throw err;
       }
     }
 
-    // ---- 第二段：主库（过对话 → 通用清空 → 好友补刀 → 收拾孤儿 → 删账号行）----
+    // ---- 第三段：主库（过对话 → 通用清空 → 好友补刀 → 收拾孤儿 → 删账号行）----
     // ⭐ 0.8.12：这三段**对话专属**的处置已搬进 `modules/teamwork/`
     //    （业务方法 → 模块自己的两个 op），核心这里只剩**两个可选钩子**（先例：`_seedModuleData()`）。
     //    ⚠️ 顺序一个字都不能换：过户必须在通用清空**之前**（成员行一清就无从知道「会话里还有谁」）、
@@ -662,6 +706,73 @@ const ops = {
     return true;
   },
 
+  // ---- 个人授权目录（跨模块的「我授权过哪些目录」登记）----
+
+  /**
+   * 功能：列出某账号登记过的全部授权目录（按路径升序）。
+   *
+   * 说明：⚠️ 这里**只读登记表**，不问飞牛宿主 —— 「现在还有没有效」是业务层的事
+   *      （要调 `trim.file.getUserAccessibleFolders`，走 `store/methods/grants.js`）。
+   *      ⚠️ 排序用 `path` 升序而不是时间：界面上这几行是「一份清单」，位置稳定比「最近加的在上面」重要
+   *      （每次打开都换序会让人以为自己点错了）。
+   * @param {number} uid - 账号 id
+   * @returns {Array.<Object>} 登记行数组
+   */
+  listDirGrants(uid) {
+    return this._listSql('SELECT * FROM user_dir_grants WHERE user_id=? ORDER BY path ASC', [uid]);
+  },
+
+  /**
+   * 功能：登记 / 更新一个授权目录（按 `(user_id, path)` 唯一键 upsert）。
+   *
+   * 说明：⭐⭐ `granted_at` 用 `COALESCE(旧值, 新值)` —— **只写第一次**。
+   *      它是「曾经成功授权过」的凭据（「需重新授权」与「未授权」的分界线），
+   *      每次重新授权都覆盖成今天，就再也说不出「这个目录是当初什么时候给的」。
+   *      ⚠️ `purpose` / `source` 允许被覆盖成空串（用户清掉备注就是清掉）。
+   * @param {number} uid - 账号 id
+   * @param {Object} row - `{path, purpose, source, granted_at, checked_at, created_at, updated_at}`
+   * @returns {boolean} 恒为 true
+   */
+  saveDirGrant(uid, row) {
+    const r = row || {};
+    const s = (v) => (v == null ? null : String(v));
+    this.db
+      .prepare(
+        `INSERT INTO user_dir_grants (user_id, path, purpose, source, granted_at, checked_at, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?)
+         ON CONFLICT(user_id, path) DO UPDATE SET
+           purpose=excluded.purpose,
+           source=excluded.source,
+           granted_at=COALESCE(user_dir_grants.granted_at, excluded.granted_at),
+           checked_at=excluded.checked_at,
+           updated_at=excluded.updated_at`,
+      )
+      .run(
+        Number(uid),
+        String(r.path || ''),
+        String(r.purpose || ''),
+        String(r.source || ''),
+        s(r.granted_at),
+        s(r.checked_at),
+        s(r.created_at),
+        s(r.updated_at),
+      );
+    return true;
+  },
+
+  /**
+   * 功能：删掉一条授权目录登记（**只删这一行，不碰任何文件、也不动宿主授权**）。
+   * @param {number} uid - 账号 id
+   * @param {string} path - 目录绝对路径（登记时的原样）
+   * @returns {boolean} 真的删掉了一行为 true
+   */
+  deleteDirGrant(uid, path) {
+    const r = this.db
+      .prepare('DELETE FROM user_dir_grants WHERE user_id=? AND path=?')
+      .run(Number(uid), String(path));
+    return r.changes > 0;
+  },
+
   // ---- 备份与恢复（0.2.1）----
 
   /**
@@ -686,6 +797,8 @@ const ops = {
     //    用户拿到的是一句英文内部错（`Cannot read properties of null`），
     //    而真正的原因（那个库打不开）一个字都没说 —— 正是「库打不开必须被可见地报告」要挡的情况。
     if (SCHEMA.ledgerTables().length) this._assertLedgerWritable();
+    // ⭐ 0.9.8：实验室库同款闸门（0.9.8 里它没有表 ⇒ 这半句不跑，但第一个实验功能落地后立刻生效）
+    if (SCHEMA.labTables().length) this._assertLabWritable();
     const out = {};
     SCHEMA.tableNames().forEach((t) => {
       out[t] = this._connFor(t).prepare(`SELECT * FROM ${t}`).all();
@@ -730,16 +843,28 @@ const ops = {
   replaceWhole(tables) {
     const src = tables || {};
     const names = SCHEMA.tableNames();
-    // ⚠️ 两段的次序：记账库在前、主库在后（理由见方法说明）
-    const segments = [SCHEMA.LEDGER_DB, SCHEMA.MAIN_DB];
+    // ⚠️ 三段的次序：实验室 → 记账 → 主库（理由见方法说明；与 `deleteUser` 同一条次序）
+    const segments = [SCHEMA.LAB_DB, SCHEMA.LEDGER_DB, SCHEMA.MAIN_DB];
     const applied = [];
+    // ⭐ 0.9.8：**被跳过的库**（备份里没有它那一份）—— 由调用方如实告诉用户，⛔ 不许静默
+    const skipped = [];
+    const has = (t) => Object.prototype.hasOwnProperty.call(src, t);
     for (const dbName of segments) {
       const mine = names.filter((t) => this._dbFor(t) === dbName);
       if (!mine.length) continue;
-      // ⚠️⭐ 记账那一段进门前先过闸门：库打不开时这里会撞 null 句柄，
+      // ⭐⭐ 0.9.8：备份里**一张实验室的表都没有** ⇒ 整段**跳过**，现有实验室库保持不动。
+      //    这是全项目唯一的「失败方向必须是少删」的地方：恢复是唯一会删用户数据的操作，
+      //    一份不含实验室的旧备份不该把用户的实验数据清空。
+      //    ⚠️ 判据在**闸门之前**：实验室库坏了但这份备份本来就不含它 ⇒ 不该因此拒绝整次恢复。
+      if (dbName === SCHEMA.LAB_DB && !mine.some(has)) {
+        skipped.push(dbName);
+        continue;
+      }
+      // ⚠️⭐ 分库那一段进门前先过闸门：库打不开时这里会撞 null 句柄，
       //    而「全量替换到一半撞内部错」是最不该出现的形态（宁可整次拒绝、什么都别动）。
-      if (dbName === SCHEMA.LEDGER_DB) this._assertLedgerWritable();
-      const conn = dbName === SCHEMA.LEDGER_DB ? this.ledgerDb : this.db;
+      if (dbName === SCHEMA.LAB_DB) this._assertLabWritable();
+      else if (dbName === SCHEMA.LEDGER_DB) this._assertLedgerWritable();
+      const conn = dbName === SCHEMA.LAB_DB ? this.labDb : dbName === SCHEMA.LEDGER_DB ? this.ledgerDb : this.db;
       conn.exec('BEGIN IMMEDIATE');
       try {
         conn.exec('PRAGMA defer_foreign_keys=ON');
@@ -776,17 +901,17 @@ const ops = {
           /* 回滚本身失败无可挽回，把原始错误抛出去 */
         }
         const did = applied.length
-          ? `⚠️「${applied.map((d) => (d === SCHEMA.LEDGER_DB ? '记账库' : '主库')).join('、')}」那一段**已经生效且不回滚**，` +
+          ? `⚠️「${applied.map(dbLabelOf).join('、')}」那一段**已经生效且不回滚**，` +
             `当前处于「部分恢复」状态 —— 请重试一次（重跑就是照着同一份备份再写一遍）。`
-          : '两段都还没生效，数据仍是操作前的样子。';
+          : '所有段都还没生效，数据仍是操作前的样子。';
         const err = new Error(
-          `整体恢复的「${dbName === SCHEMA.LEDGER_DB ? '记账库' : '主库'}」那一段失败：${(e && e.message) || e}。${did}`,
+          `整体恢复的「${dbLabelOf(dbName)}」那一段失败：${(e && e.message) || e}。${did}`,
         );
         err.status = 500;
         throw err;
       }
     }
-    return true;
+    return { skipped };
   },
 
   /**
@@ -810,12 +935,14 @@ const ops = {
     // ⚠️ 对话四张表**刻意跳过**（`IMPORT_KEEP_TABLES`）：它们是跨账号数据、而且个人导入不重建它们，
     //    清掉等于白丢一段真实聊天记录（详细理由写在 store/constants.js 那张清单上）。
     const keep = (t) => !IMPORT_KEEP_TABLES.includes(t);
-    [SCHEMA.LEDGER_DB, SCHEMA.MAIN_DB].forEach((dbName) => {
+    // ⭐ 0.9.8：三库三段（实验室 → 记账 → 主库）—— 与 `deleteUser` / `replaceWhole` 同一条次序
+    [SCHEMA.LAB_DB, SCHEMA.LEDGER_DB, SCHEMA.MAIN_DB].forEach((dbName) => {
       const mine = SCHEMA.userScopedTablesIn(dbName).filter(keep);
       if (!mine.length) return;
-      // ⚠️ 记账那一段先过闸门（理由与 `replaceWhole` 那条一字不差：null 句柄换不来任何有用信息）
-      if (dbName === SCHEMA.LEDGER_DB) this._assertLedgerWritable();
-      const conn = dbName === SCHEMA.LEDGER_DB ? this.ledgerDb : this.db;
+      // ⚠️ 分库那一段先过闸门（理由与 `replaceWhole` 那条一字不差：null 句柄换不来任何有用信息）
+      if (dbName === SCHEMA.LAB_DB) this._assertLabWritable();
+      else if (dbName === SCHEMA.LEDGER_DB) this._assertLedgerWritable();
+      const conn = dbName === SCHEMA.LAB_DB ? this.labDb : dbName === SCHEMA.LEDGER_DB ? this.ledgerDb : this.db;
       conn.exec('BEGIN IMMEDIATE');
       try {
         mine.forEach((t) => conn.prepare(`DELETE FROM ${t} WHERE user_id=?`).run(u));
@@ -826,9 +953,7 @@ const ops = {
         } catch (_e) {
           /* 回滚本身失败无可挽回，把原始错误抛出去 */
         }
-        const err = new Error(
-          `清空账号数据时「${dbName === SCHEMA.LEDGER_DB ? '记账库' : '主库'}」那一段失败：${(e && e.message) || e}`,
-        );
+        const err = new Error(`清空账号数据时「${dbLabelOf(dbName)}」那一段失败：${(e && e.message) || e}`);
         err.status = 500;
         throw err;
       }
@@ -860,12 +985,14 @@ const ops = {
     if (!list.length) return [];
     const out = [];
     const applied = [];
-    [SCHEMA.LEDGER_DB, SCHEMA.MAIN_DB].forEach((dbName) => {
+    // ⭐ 0.9.8：三库三组（实验室 → 记账 → 主库）—— 与其余跨库操作同一次序
+    [SCHEMA.LAB_DB, SCHEMA.LEDGER_DB, SCHEMA.MAIN_DB].forEach((dbName) => {
       const mine = list.filter((it) => this._dbFor(it.table) === dbName);
       if (!mine.length) return;
-      // ⚠️ 记账那一组先过闸门（理由同上：null 句柄换不来任何有用信息）
-      if (dbName === SCHEMA.LEDGER_DB) this._assertLedgerWritable();
-      const conn = dbName === SCHEMA.LEDGER_DB ? this.ledgerDb : this.db;
+      // ⚠️ 分库那一组先过闸门（理由同上：null 句柄换不来任何有用信息）
+      if (dbName === SCHEMA.LAB_DB) this._assertLabWritable();
+      else if (dbName === SCHEMA.LEDGER_DB) this._assertLedgerWritable();
+      const conn = dbName === SCHEMA.LAB_DB ? this.labDb : dbName === SCHEMA.LEDGER_DB ? this.ledgerDb : this.db;
       conn.exec('BEGIN IMMEDIATE');
       try {
         mine.forEach((it) => {
@@ -885,14 +1012,10 @@ const ops = {
           /* 回滚本身失败无可挽回，把原始错误抛出去 */
         }
         const did = applied.length
-          ? `⚠️「${applied
-              .map((d) => (d === SCHEMA.LEDGER_DB ? '记账库' : '主库'))
-              .join(
-                '、',
-              )}」那一段**已经写入且不回滚**（个人导入是逐条追加，重来一次只会多出这一段的副本，请先清空或改用替换模式）。`
-          : '两段都还没写入。';
+          ? `⚠️「${applied.map(dbLabelOf).join('、')}」那一段**已经写入且不回滚**（个人导入是逐条追加，重来一次只会多出这一段的副本，请先清空或改用替换模式）。`
+          : '所有段都还没写入。';
         const err = new Error(
-          `导入写入时「${dbName === SCHEMA.LEDGER_DB ? '记账库' : '主库'}」那一段失败：${(e && e.message) || e}。${did}`,
+          `导入写入时「${dbLabelOf(dbName)}」那一段失败：${(e && e.message) || e}。${did}`,
         );
         err.status = 500;
         throw err;
@@ -933,6 +1056,12 @@ const ops = {
     this._assertLedgerWritable();
     const ledgerDest = path.join(this.dataDir, `zxdesk-ledger.db.bak-${safe}-${stamp}`);
     this.ledgerDb.exec(`VACUUM INTO '${ledgerDest.replace(/'/g, "''")}'`);
+    // ⭐ 0.9.8：**第三个库**同款 —— 同一命名规则、只换前缀。
+    //    ⚠️ 与记账库同一条纪律：不做「这个库不在就跳过」—— 在需要退路的这条路上
+    //    「静默少一份」比直接失败糟得多（调用方会以为三库都有退路）。
+    this._assertLabWritable();
+    const labDest = path.join(this.dataDir, `zxdesk-lab.db.bak-${safe}-${stamp}`);
+    this.labDb.exec(`VACUUM INTO '${labDest.replace(/'/g, "''")}'`);
     return name;
   },
 
@@ -958,6 +1087,8 @@ const ops = {
     // ⚠️⭐ 先过闸门：库打不开时这里会撞 null 句柄（一句内部英文错），而它的语义是
     //    「导出**两个库**的原始字节」—— 少一个库的降级路径不该以内部错收场。
     this._assertLedgerWritable();
+    // ⭐ 0.9.8：实验室库同款闸门（少一份就不是「整体备份」了）
+    this._assertLabWritable();
     const dumpOf = (conn, entry) => {
       const tmp = path.join(this.dataDir, `${entry}.export-${compactStamp()}`);
       try {
@@ -971,7 +1102,12 @@ const ops = {
         }
       }
     };
-    return [dumpOf(this.db, 'zxdesk.db'), dumpOf(this.ledgerDb, 'zxdesk-ledger.db')];
+    return [
+      dumpOf(this.db, 'zxdesk.db'),
+      dumpOf(this.ledgerDb, 'zxdesk-ledger.db'),
+      // ⭐ 0.9.8：第三个成员（顺序与其余跨库操作一致：主库在前、分库随后）
+      dumpOf(this.labDb, 'zxdesk-lab.db'),
+    ];
   },
 
   // ---- ⭐ 内置高校模板（0.3.5；**没有 user_id** 的只读内置数据）----
@@ -1099,7 +1235,9 @@ const methods = {
    */
   _tunePragmas(db, which) {
     const onLedger = which === SCHEMA.LEDGER_DB;
+    const onLab = which === SCHEMA.LAB_DB;
     if (onLedger) this.ledgerJournalMode = 'unknown';
+    else if (onLab) this.labJournalMode = 'unknown';
     else {
       this.journalMode = 'unknown';
       this.foreignKeys = false;
@@ -1115,13 +1253,14 @@ const methods = {
       const v = row ? row.journal_mode || Object.values(row)[0] : '';
       if (v) {
         if (onLedger) this.ledgerJournalMode = String(v).toLowerCase();
+        else if (onLab) this.labJournalMode = String(v).toLowerCase();
         else this.journalMode = String(v).toLowerCase();
       }
     } catch (_e) {}
     try {
       db.exec('PRAGMA foreign_keys=ON');
       const r = db.prepare('PRAGMA foreign_keys').get();
-      if (!onLedger) this.foreignKeys = !!(r && Number(Object.values(r)[0]));
+      if (!onLedger && !onLab) this.foreignKeys = !!(r && Number(Object.values(r)[0]));
     } catch (_e) {}
   },
 
@@ -1152,30 +1291,38 @@ const methods = {
    */
   _backupBeforeMigrate(db, which) {
     const onLedger = which === SCHEMA.LEDGER_DB;
-    const want = onLedger ? SCHEMA.LEDGER_SCHEMA_VERSION : SCHEMA_VERSION;
-    const existedBefore = onLedger ? this.ledgerExistedBefore : this.dbExistedBefore;
+    const onLab = which === SCHEMA.LAB_DB;
+    const want = onLedger
+      ? SCHEMA.LEDGER_SCHEMA_VERSION
+      : onLab
+        ? SCHEMA.LAB_SCHEMA_VERSION
+        : SCHEMA_VERSION;
+    const existedBefore = onLedger ? this.ledgerExistedBefore : onLab ? this.labExistedBefore : this.dbExistedBefore;
     const row = db.prepare('PRAGMA user_version').get();
     const version = Number(row && row.user_version) || 0;
     if (onLedger) this.ledgerSchemaVersion = version;
+    else if (onLab) this.labSchemaVersion = version;
     else this.schemaVersion = version;
 
     // 本次启动是否需要迁移结构（⚠️ 0.8.12 起**只**决定「要不要动结构 / 先留一份退路」——
     // 「要不要跑 v5 那次整库重建」是另一件事，判据是常量 `REBUILD_UP_TO`，见 `_upgradeStructureToV5()`）
     const needs = existedBefore && version < want;
     if (onLedger) this.ledgerNeedsMigrate = needs;
+    else if (onLab) this.labNeedsMigrate = needs;
     else this.needsMigrate = needs;
     if (!needs) return;
 
-    const prefix = onLedger ? 'zxdesk-ledger.db' : 'zxdesk.db';
+    const prefix = onLedger ? 'zxdesk-ledger.db' : onLab ? 'zxdesk-lab.db' : 'zxdesk.db';
     const dest = path.join(this.dataDir, `${prefix}.bak-v${this.appVersion}-${compactStamp()}`);
     try {
       db.exec(`VACUUM INTO '${dest.replace(/'/g, "''")}'`);
       if (onLedger) this.ledgerBackupFile = dest;
+      else if (onLab) this.labBackupFile = dest;
       else this.backupFile = dest;
       this._rotateBackups();
     } catch (e) {
       const why = (e && e.message) || String(e);
-      this.backupError = onLedger ? `记账库：${why}` : why;
+      this.backupError = onLedger ? `记账库：${why}` : onLab ? `实验室库：${why}` : why;
     }
     // ⚠️ 这里**不再**推进 `user_version`（v5 改动）：
     //    它是「结构已经是最新的」的**承诺**。以前在备份后立刻推进，一旦后面的结构迁移失败或
@@ -1192,7 +1339,7 @@ const methods = {
    * @returns {void}
    */
   _rotateBackups() {
-    ['zxdesk.db.bak-v', 'zxdesk-ledger.db.bak-v'].forEach((prefix) => {
+    ['zxdesk.db.bak-v', 'zxdesk-ledger.db.bak-v', 'zxdesk-lab.db.bak-v'].forEach((prefix) => {
       try {
         const files = fs
           .readdirSync(this.dataDir)
@@ -1699,7 +1846,10 @@ const methods = {
    * @returns {Object} 主库连接或记账库连接
    */
   _connFor(table) {
-    return this._dbFor(table) === SCHEMA.LEDGER_DB ? this.ledgerDb : this.db;
+    const db = this._dbFor(table);
+    if (db === SCHEMA.LEDGER_DB) return this.ledgerDb;
+    if (db === SCHEMA.LAB_DB) return this.labDb;
+    return this.db;
   },
 
   /**

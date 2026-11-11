@@ -31,6 +31,8 @@
   --brand-soft: #eceefe; /* 手机版浅品牌底：与电脑版（#eef0ff）不同，各自保留 */
   --danger: var(--zx-danger);
   --ok: var(--zx-ok);
+  /* ⭐ 0.9.8 第 7 轮：浅绿底与深绿字搬进 `core/tokens.css`（两端同一对），这里只留别名 */
+  --ok-soft: var(--zx-ok-soft);
   --warn: var(--zx-warn);
   --q1: var(--zx-q1);
   --q2: var(--zx-q2);
@@ -1149,6 +1151,819 @@ svg {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+/* ⭐ 0.9.8：zx 实验室那一屏（纯屏宿主）—— 与网址/密码夹**同一条链**：
+   药丸住第一行（`#lab-tabs`，在 `#lab-body` 外面 ⇒ 天然固定），正文一个内容区。
+   ⚠️ `#lab-body` 少一句 `flex:1; min-height:0` 的后果：里面的片段滚动区塌成 0 高
+   = **列表看不见且不报错**（`#webpass-body` 上踩过同款）。 */
+#view-lab {
+  padding: 2px 16px 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+#lab-tabs {
+  flex: none;
+}
+#lab-tabs:empty {
+  display: none;
+}
+/* ⭐⭐ 0.9.8 第 3 轮（方案 §8.3）：实验室**顶部三入口** —— 知情协议 / 反馈调研 / 交流群。
+   ⚠️ 它住 `#lab-body` **外面**（`#lab-tabs` 前面那一行），所以切实验不会把它清掉。
+   ⚠️ 手机端每颗最小 44px 高（指头够得着）、字号 12.5px；三颗等分一行。 */
+.lab-tools {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  padding: 6px 0 4px;
+  /* ⭐ 0.9.8 第 7 轮：三入口里最长那颗变成「实验室设计说明」7 个字，320px 屏上等宽三颗会挤
+     ⇒ 放不下就换行，⛔ 不缩字号到 12px 以下（小屏可读性比「一行塞下」重要） */
+  flex-wrap: wrap;
+}
+.lab-tools:empty {
+  display: none;
+}
+.lab-tool {
+  /* ⭐ 0.9.8 第 7 轮：原 `flex: 1 1 0`（等宽）会让 7 个字的按钮被压得换行 ⇒ 改自适应宽度 */
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-family: inherit;
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.lab-tool:active {
+  background: var(--surface-2);
+}
+/* 二维码弹层（反馈调研 / 交流群）：单张居中 ＋ 一句说明 */
+.lab-qr {
+  padding: 4px 0 8px;
+  text-align: center;
+}
+.lab-qr-note {
+  margin: 10px 0 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.7;
+}
+/* 知情协议弹层：六条，各自「小标题 ＋ 一句正文」 */
+.lab-agr-lead {
+  margin: 0 0 12px;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.8;
+}
+.lab-agr-item + .lab-agr-item {
+  margin-top: 12px;
+}
+.lab-agr-item h4 {
+  margin: 0 0 4px;
+  color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 700;
+}
+.lab-agr-item p {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.75;
+}
+/* ⭐ 协议里那条「欠用户的事」（数据迁移）：颜色 ＋ 左侧竖条 ＋ 加粗三重可辨。
+   ⚠️ 不靠颜色单独承载语义 —— 条文本身就写着「将提供」，红只是让这句被看见。
+   ⚠️ 用 `--danger` 而不是写死色值：深色主题跟着令牌走。 */
+.lab-agr-red {
+  padding-left: 10px;
+  border-left: 3px solid var(--danger);
+}
+.lab-agr-red h4,
+.lab-agr-red p {
+  color: var(--danger);
+  font-weight: 600;
+}
+/* 设计说明弹层：正文沿用上面这套 `h4 ＋ p`（⛔ 不新造第二版式），只补子条目间距 */
+.lab-doc p + p {
+  margin-top: 6px;
+}
+/* 首次进入那道门的勾选框（与密码库那处同一套 `.vault-confirm` 外观，只是间距单独给）；
+   未勾选时底部「同意」不可点（`disabled` 由 JS 跟着勾选框走） */
+.lab-agree-ack {
+  margin: 14px 0 0;
+}
+#lab-agree-go:disabled {
+  opacity: 0.5;
+}
+#lab-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* ⭐ 0.9.8 修订：这一层不再滚（从前是 `auto`）—— 卡片首页与实验视图各自管滚动，
+     父级再开 `auto` 就是「滚动套滚动」（内层滚不动、外层偷偷滚一条）。 */
+  overflow: hidden;
+}
+/* ⭐⭐ 0.9.8：**卡片首页** —— 每个实验功能一张卡（老大 2026-11-07：「每个实验室模块都要有一个卡片进入」）。
+   ⚠️ 手机端单列（`1fr`）：390px 宽放两列会把说明压成三行。 */
+.lab-cards {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  padding: 2px 0 12px;
+  align-content: start;
+}
+.lab-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  text-align: left;
+}
+.lab-card:active {
+  background: var(--surface-2);
+}
+.lab-card-ico {
+  flex: none;
+  font-size: 20px;
+  line-height: 1;
+}
+.lab-card-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.lab-card-main b {
+  font-weight: 600;
+}
+.lab-card-main small {
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.lab-card-badge {
+  flex: none;
+  align-self: flex-start;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 10.5px;
+}
+/* ⭐ 第一行那一条（返回 ＋ 实验名 ＋ 设计说明）：与三入口**二选一**，两者不同时出现。
+   ⚠️ 每颗按钮 ≥44px 触控高（指头够得着），返回在左、设计说明在右（`margin-left:auto`）。
+   ⚠️ `:empty` 必须收掉：卡片首页时它是空的，留着会多出一条白带。 */
+#lab-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+}
+#lab-bar:empty {
+  display: none;
+}
+.lab-back,
+.lab-doc-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--brand);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.lab-doc-btn {
+  margin-left: auto;
+}
+/* ⭐⭐ 0.9.8 第 7 轮（方案 §3.3）：屏头的按键按**类别**着色（与电脑端同一套语义、同一对色）。
+   ⚠️ 必须写在 `.lab-tool` / `.lab-back` / `.lab-doc-btn` **之后** —— 同权重后写的赢，
+   不然那几条的 `background: var(--surface) / transparent` 会把颜色盖掉。
+   ⚠️ 手机比桌面多两件事：`min-height: 44px`（指头够得着）、`border-radius: 12px`（小屏别做成胶囊）。 */
+.lab-cat-nav,
+.lab-cat-doc,
+.lab-cat-help {
+  border: 0;
+  border-radius: 12px;
+  min-height: 44px;
+  padding: 0 10px;
+  font-size: 12.5px;
+}
+.lab-cat-nav {
+  background: var(--brand-soft);
+  color: var(--brand);
+}
+.lab-cat-doc {
+  background: var(--ok-soft);
+  color: var(--zx-ok-ink);
+}
+.lab-cat-help {
+  background: var(--zx-warn-soft);
+  color: var(--zx-warn-ink);
+}
+/* 名字过长省略而不换行：换行会把整条顶到第二行、按钮跟着跑位 */
+.lab-bar-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lab-host {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.lab-body > .empty,
+#lab-body > .empty {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* ⭐ 0.9.8：加密信息（实验室第一格，`public/modules/secrets/mobile-lab-pane.js`）——
+   与电脑版**同一条高度链**：`.secrets-pane` 拿满 `#lab-body` 的可用高度，列表自己滚。
+   ⚠️⭐ 少一句 `flex:1; min-height:0` 就是「列表看不见且不报错」（`#webpass-body` 踩过同款）。 */
+.secrets-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  /* ⭐ 这颗 ＋ 要相对**这一块**定位（下面 `.secrets-pane > .fab`）—— 不给它定位上下文，
+     `position: absolute` 会一路往上找到整页，按钮跑到标签栏那一层去。 */
+  position: relative;
+}
+/* ⭐ 新建那颗 ＋：与全局 `#fab` 同款（56px 圆形渐变 ＋ 同一个 SVG），
+   **相对片段**贴右下角 —— 实验室片段住在 `.lab-host` 里，不跟着整页算。
+   ⚠️⚠️ 底部必须**让开底栏**：`.tabbar` 是 `position: absolute; z-index: 50`，
+   而 `#view-lab` 没有（也不该有）`padding-bottom` ⇒ `#lab-body` 一直延伸到底栏**下面**。
+   所以只写 `safe-area + 16px` 的那一版，整颗 ＋ 就落在底栏正下方（z 5 < 50）——
+   屏幕上看起来就是「这一屏根本没有新建按钮」。
+   ⇒ 与全局那颗用**同一条公式**：`safe-area + --tabbar-h + 28px`。 */
+.secrets-pane > .fab {
+  position: absolute;
+  right: 0;
+  bottom: calc(env(safe-area-inset-bottom) + var(--tabbar-h) + 28px);
+  z-index: 5;
+}
+.secrets-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0 10px;
+}
+.secrets-count {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.secrets-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* 底部留白：这一块一直延伸到底栏**下面**（见上面 `.secrets-pane > .fab` 那段的说明），
+     所以要一次让开「底栏 ＋ 那颗 56px 的 ＋」两样东西，否则最后一条会被压住 / 滚不出来。 */
+  padding-bottom: calc(env(safe-area-inset-bottom) + var(--tabbar-h) + 100px);
+}
+.secret-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.secret-row:active {
+  background: var(--surface-2);
+}
+.secret-row.broken {
+  color: var(--danger);
+}
+/* ⭐ 0.9.8：标题与概要竖着排（手机屏幕窄，挤同一行会把标题压没），时间仍在右侧那一列 */
+.secret-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.secret-t {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+/* 附件概要：「图片 2 · 视频 1」，纯文字小字；没有附件时整段不渲染（⛔ 不显示「0 个」） */
+.secret-att {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+/* 附件位置弹层里那排按钮：手机上竖着排，每颗 ≥44px 触控高 */
+.sec-root-acts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+/* ⭐ 换目录的两问（与电脑端同一份结构与文案，只是量级按手机走） */
+.root-mig-lead,
+.root-mig-note {
+  margin: 0 0 10px;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.root-mig-lead b {
+  color: var(--ink);
+  font-weight: 600;
+  word-break: break-all;
+}
+.root-q {
+  margin: 0 0 14px;
+}
+.root-q h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.root-opt {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+}
+.root-opt:last-child {
+  margin-bottom: 0;
+}
+.root-opt input {
+  flex: none;
+  margin-top: 3px;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--brand);
+}
+.root-opt span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.root-opt b {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.root-opt i {
+  font-style: normal;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ink-3);
+}
+.root-opt.is-off {
+  opacity: 0.5;
+}
+.sec-root-acts .btn {
+  width: 100%;
+  min-height: 44px;
+}
+.secret-time {
+  flex: none;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.secrets-unlock {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.secrets-unlock input {
+  flex: 1;
+  min-width: 0;
+}
+.secrets-delrow {
+  margin-top: 12px;
+}
+.secrets-body {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.65;
+}
+
+/* ⭐ 0.9.8 附件（方案 42 §2.7）：工具条右侧两颗键 ＋ 附件区 ＋ 「附件位置」面板。
+   ⚠️ 这些选择器全部带 `.sec-` / `.secrets-` 前缀：`.btn` / `.empty-state` 是全站共用的（铁律 4）。 */
+.secrets-bar-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.sec-files {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+.sec-files.drop {
+  outline: 2px dashed var(--brand);
+  outline-offset: 6px;
+  border-radius: 12px;
+}
+.sec-files-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.sec-files-head b {
+  flex: none;
+}
+.sec-files-tip {
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.sec-files-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sec-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.sec-file-ico {
+  flex: none;
+  font-size: 18px;
+  line-height: 1;
+}
+.sec-file-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sec-file-main b {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sec-file-main small {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.sec-file-acts {
+  flex: none;
+  display: inline-flex;
+  gap: 6px;
+}
+.sec-file-prev {
+  display: block;
+  margin-top: 6px;
+}
+.sec-file-prev img,
+.sec-file-video {
+  max-width: 100%;
+  max-height: 260px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+}
+.sec-files-prog {
+  margin-top: 8px;
+  color: var(--ink-3);
+  font-size: 12px;
+  min-height: 16px;
+}
+/* 「附件位置」面板 */
+/* ⭐⭐ 0.9.8 第 7 轮：与电脑端同形的「当前目录」块（R-114 两端同改）；
+   路径允许断行 —— `/vol1/…` 那种长串在 320px 上不 break 会顶出屏幕。 */
+.sec-cur-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.sec-cur-label {
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+.sec-cur-path {
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-all;
+}
+/* ⭐ 2026-11-09：目录块合并后那一行 —— 标题 ＋ 状态徽标 ＋（靠右的）复制路径（与电脑端同形）。 */
+.sec-cur-copy {
+  margin-left: auto;
+}
+/* 路径状态徽标：正常 / 部分缺失 / 路径缺失（与电脑端同一套语义令牌）。 */
+.sec-state {
+  display: inline-block;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.sec-state-normal {
+  background: var(--zx-ok-soft);
+  color: var(--zx-ok-ink);
+}
+.sec-state-partial {
+  background: var(--zx-warn-soft);
+  color: var(--zx-warn-ink);
+}
+.sec-state-missing {
+  background: var(--zx-danger-soft);
+  color: var(--zx-danger-ink);
+}
+/* ---- 个人授权目录（0.9.8 第 11 轮 · 设置 → 账号设置卡内）----
+   ⚠️ 与电脑端**共用同一份 HTML**（`core/grants.js`），类名是 `.grant-*`，本文件只按小屏改写版式：
+   路径独占一行（宽度不够时路径必须能换行，⛔ 不许省略成 `…`，那是**判断依据**）。
+   ⚠️ 按钮触控高度 ≥ 30px（与本站其余次级按钮同档，见 `.lab-cat-nav` 那条例外）。 */
+.grant-box {
+  margin-top: 14px;
+  background: #fff;
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  padding: 12px;
+}
+.grant-head {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+  margin-bottom: 6px;
+}
+.grant-hint {
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--ink-2);
+  margin-bottom: 10px;
+}
+.grant-banner {
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--zx-warn-ink);
+  background: var(--zx-warn-soft);
+  border: 1px solid var(--zx-warn-line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+}
+.grant-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.grant-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.grant-main {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+.grant-path {
+  font-size: 12.5px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.grant-purpose {
+  font-size: 11.5px;
+  color: var(--ink-2);
+  margin-top: 2px;
+}
+.grant-purpose.dim {
+  color: var(--ink-3);
+}
+.grant-note {
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--zx-warn-ink);
+  margin-top: 4px;
+}
+.grant-state {
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.grant-state-ok {
+  background: var(--zx-ok-soft);
+  color: var(--zx-ok-ink);
+}
+.grant-state-warn {
+  background: var(--zx-warn-soft);
+  color: var(--zx-warn-ink);
+}
+.grant-state-mute {
+  background: var(--line);
+  color: var(--ink-2);
+}
+.grant-acts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.grant-act {
+  min-height: 30px;
+  border: 1px solid var(--line-2);
+  background: transparent;
+  color: var(--ink-2);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+}
+.grant-act.danger {
+  color: var(--zx-danger-ink);
+}
+.grant-input {
+  width: 100%;
+  margin: 4px 0 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12.5px;
+}
+.grant-empty {
+  font-size: 11.5px;
+  color: var(--ink-2);
+  padding: 4px 0;
+}
+.grant-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.grant-add {
+  min-height: 32px;
+  border: 1px solid var(--line-2);
+  /* ⚠️ 任何状态都不填底色：实心蓝会被当成主按钮（与「移除 / 备注」不是一档）。 */
+  background: transparent;
+  color: var(--brand);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 12.5px;
+}
+.grant-add:active {
+  background: transparent;
+}
+.grant-remove-note {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ink-3);
+}
+/* 「从已授权目录里挑一个」的列表（加密信息这类要用目录的模块）：不可点的照样列出来但置灰。 */
+.grant-pick-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.grant-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  text-align: left;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  font: inherit;
+}
+.grant-pick-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.grant-pick[disabled] {
+  opacity: 0.55;
+}
+/* ⚠️ 例外：工具条里那颗「⚙ 附件位置」在 `.lab-cat-nav` 的 44px 之外还要矮一点 ——
+   它就是一行工具条上的次级动作，占 44px 会把列表整体压下去。触控仍 ≥ 32px。 */
+.secrets-bar .lab-cat-nav {
+  min-height: 32px;
+}
+/* ⭐ 0.9.8 第 8 轮：与电脑端同形的两条兜底路（R-114） */
+.sec-pick-fb {
+  margin: 10px 0 4px;
+}
+.sec-pick-manual {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.sec-pick-manual input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 13px;
+}
+/* ⭐ 0.9.8 第 6 轮：「钥匙文件」区（与电脑端同形，变量用手机端这一套：--ink-3 / --line） */
+.sec-key-box {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.sec-key-pw {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.sec-key-pw input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+}
+.sec-key-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 6px 0 0;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.sec-key-del {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.sec-key-del:hover {
+  color: var(--danger);
+}
+.sec-root-title {
+  font-weight: 600;
+  margin-bottom: 8px;
 }
 /* 片段根节点（`bookmarks` / `vault` 各造一个）—— 它才是「撑满 + 只让列表滚」的那一层。
    ⚠️⭐ `flex:1` 与 `min-height:0` 缺一个 ⇒ 里面的内部滚动区塌成 0 高
@@ -2332,17 +3147,29 @@ svg {
   overflow-wrap: anywhere;
 }
 /* 数据位置（仅管理员）：路径可长按选中复制 */
-/* 数据目录那一行 = 路径 + 一颗「复制路径」（与电脑端 `.path-row` 同构，见 07 分册）。
-   ⚠️ 路径那段必须 `flex: 1` + `min-width: 0` 才能被压窄并换行；
-   按钮 `flex: none` 免得被长路径挤变形。 */
+/* 数据目录那一块 = **上一行整条路径 + 下一行两颗按钮**（见 07 分册）。
+   ⭐ 2026-11-11（第 18 轮，老大真机截图）：原来路径、标签、两颗按钮全挤在一行 ——
+   手机上路径被压成一条窄缝，`/vol1/1000/测试/12` 竖着折了四行，「复制路径 / 修改位置」贴着它右边。
+   ⇒ 改成纵向两段：`.path-box` 独占一行（`width: 100%`，长路径只在自己这块里折），
+   `.path-acts` 另起一行（左「自定义」标签、右两颗按钮）。⚠️ 电脑端不跟改：那栏横向够宽。 */
 .path-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.path-row .path-box {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.path-acts {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.path-row .path-box {
-  flex: 1;
-  min-width: 0;
+/* 标签留在左边、按钮被推到右边（没有标签时按钮依然靠右，视觉位置稳定） */
+.path-acts .loc-badge {
+  margin-right: auto;
 }
 .path-row .btn {
   flex: none;
@@ -5867,6 +6694,12 @@ svg {
   color: var(--brand);
   font-size: 11.5px;
 }
+/* ⭐ 0.9.8：空白密码条目的标记（「这条没设密码」）—— 它是一句**告警**，不是分类标签，
+   所以用警示色而不是品牌色。⚠️ 只加修饰类，`.vault-tag` 本身一个字不动（别处都在用它）。 */
+.vault-tag.warn {
+  background: rgba(217, 119, 6, 0.14);
+  color: var(--warn);
+}
 /* ⭐ 0.8.17：「移除这两个 UI 上的记录数」—— 这里原有 `.vault-count-note`
    （「筛出来几条 / 一共几条」那一行小字），节点与规则一并删掉（⛔ 别留在原地当死规则）。
    收藏夹那边同族的那一行走的是通用 `.sec-note`，那条**留着** —— 别处还在用。 */
@@ -5892,7 +6725,7 @@ svg {
    ⚠️ 真机待核：卡片比可视区还高时 `justify-content:center` 会把它顶出上边 —— 那一档靠
     这里的 `overflow-y:auto` 兜住。 */
 #vault-body.gate {
-  justify-content: center;
+  justify-content: flex-start;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-bottom: calc(env(safe-area-inset-bottom) + var(--tabbar-h) + 96px);
@@ -5902,6 +6735,15 @@ svg {
 #vault-body.gate::-webkit-scrollbar {
   width: 0;
   height: 0;
+}
+/* ⚠️⚠️ 0.9.8 第 3 轮（方案 §4.3）：上面那段注释自己写着「真机待核：卡片比可视区还高时
+   `justify-content:center` 会把它顶出上边」—— 真机上确实如此（电脑端截图里主按钮只剩一条边，
+   手机端同一个病）。⇒ `justify-content` 已改 `flex-start`，居中改由卡片自己 `margin: auto` 表达：
+     · 不足一屏 ⇒ auto 边距吸走空白 ⇒ 仍然居中；
+     · 超出一屏 ⇒ auto 算成 0 ⇒ 贴顶，且能一路滚到底。
+   ⛔ 别写 `justify-content: safe center`（旧 Safari 不支持，且不解决「滚不到」）。 */
+#vault-body.gate > .vault-gate {
+  margin: auto;
 }
 /* 已解锁那一支：`.sec` 撑满整块 → 状态层（跟着滚）与列表层（唯一滚动区）依次排。
     ⭐⭐ 0.8.19（截图批注：「这里空隙太大了，要与网址收藏夹对齐」）：
@@ -5969,10 +6811,74 @@ svg {
   min-height: 46px;
   font-size: 16px;
 }
+/* ⚠️⚠️ 勾选框是**原生控件**，⛔ 不许吃上面那条（宽 100% ＋ 46px 高会把方框撑成一个大空白块，
+   文字被挤到最右边并换行 —— 2026-11-11 手机端实拍就是这样）。
+   勾选框只要一个方框：固定 18px、不参与拉伸；点击目标靠整块 `<label>`（整行都能点）。 */
+.vault-gate input[type='checkbox'] {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  margin: 0;
+  accent-color: var(--brand);
+}
 .vault-gate .btn.primary {
   width: 100%;
   min-height: 48px;
   margin-top: 12px;
+}
+/* ⭐⭐ 0.9.8 第 3 轮（方案 §4.2）：知情页 → 设置页 = **页内两步**（与电脑版同构）。
+   卡片用现有 `.sec`（与设置页同款），左右边距由 `.view` 的页面内边距给到（16px）。
+   ⚠️ 这里只是把「一屏两张卡 / 弹层里再来一遍」留下的间距补齐 —— ⛔ 别新增悬浮卡。 */
+.vault-init .sec {
+  margin-top: 0;
+}
+.vault-init-head {
+  margin-bottom: 10px;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.6;
+}
+.vault-init .vault-terms {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  line-height: 1.8;
+}
+.vault-init .vault-terms li {
+  margin-bottom: 0;
+}
+.vault-init .vault-terms li + li {
+  margin-top: 8px;
+}
+/* 勾选块与按钮之间留一截（⛔ 别贴成一个整体） */
+.vault-init-ack {
+  margin: 14px 0 0;
+}
+.vault-init-tip {
+  margin-top: 10px;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+/* 未勾选时「下一步」不可点（`disabled` 属性由 JS 跟着勾选框走） */
+.vault-init .btn.primary:disabled {
+  opacity: 0.5;
+}
+/* 「返回上一步」= 文字链接（老大 2026-11-08 拍板必给）：回第一步、勾选态保留 */
+.vault-init-back {
+  display: block;
+  width: 100%;
+  margin: 8px 0 0;
+  padding: 8px 6px;
+  border: none;
+  background: none;
+  color: var(--ink-3);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: center;
+  cursor: pointer;
 }
 /* ⚠️⛔「忘记主密码没有任何找回办法」= **安全边界**（方案 §1.2）：
    它必须显眼 —— ⛔ 不许为了「层级好看」把它弱化成灰字脚注。 */
@@ -6277,15 +7183,27 @@ svg {
 }
 .vault-confirm {
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  /* ⭐ 单行勾选文案与方框居中对齐（换行时也落在方框右侧，不会吊在顶边）；
+     ⚠️ 从前是 `flex-start`，配上被撑大的方框，看起来像「文字掉到了右下角」。 */
+  align-items: center;
+  gap: 10px;
   margin: 12px 0;
-  padding: 10px 12px;
+  padding: 12px 14px;
   border: 1px solid var(--line-2);
   border-radius: 12px;
   background: var(--surface-2);
   font-size: 13px;
   line-height: 1.6;
+  /* 整块都是可点区域（它本身是 `<label>`），给个手型才看得出能点 */
+  cursor: pointer;
+}
+/* 勾选框本体：两端同一档（见 `desktop/app.css` 同段落），⛔ 别在这里按端各写一个尺寸 */
+.vault-confirm input[type='checkbox'] {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--brand);
 }
 .vault-confirm.sm {
   margin: 4px 0 0;
@@ -12286,7 +13204,11 @@ body.lg-sorting {
   height: 100%;
   padding: 0;
   border: 0;
-  opacity: 0;
+  /* ⚠️⭐ 是 `.01` 不是 `0`：`showPicker()` 要求元素「对用户可见」，而不同 Chromium 版本的
+     可见性判定不一样（有的把 `opacity: 0` 当成不可见 ⇒ 抛 `InvalidStateError` ⇒ 整行点了
+     什么都不会发生）。`.01` 肉眼完全看不出，但任何版本都算「可见」。
+     2026-11-10 真机反馈「浏览器访问点日期没反应」的一条根因就在这里。 */
+  opacity: 0.01;
   cursor: pointer;
 }
 /* 这一页最后那颗「导出」—— 宽满、居中、主色（照给的那张图）。 */
@@ -15795,4 +16717,457 @@ body.navset-sorting {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* ==== 数据位置（紧凑三行库 / 红字 / 修改位置）====
+   与电脑端同一个文案模块（`core/data-location.js`），这里只做手机布局。 */
+.loc-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(79, 70, 229, 0.1);
+  color: var(--zx-brand);
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.loc-red {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--zx-danger-soft);
+  border: 1px solid var(--zx-danger-line);
+  color: var(--zx-danger-ink);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.loc-lead {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--zx-ink-2);
+}
+
+.loc-old,
+.loc-archives {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--zx-ink-2);
+  word-break: break-all;
+}
+
+.loc-db-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.loc-db {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--zx-bg);
+}
+
+.loc-db-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.loc-db-name {
+  color: var(--zx-ink);
+  font-weight: 600;
+}
+
+.loc-db-size {
+  color: var(--zx-ink);
+  white-space: nowrap;
+}
+
+.loc-db-file {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--zx-ink-2);
+  word-break: break-all;
+}
+
+.loc-db-role {
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--zx-ink-2);
+}
+
+.loc-db-total {
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--zx-ink);
+  text-align: right;
+}
+
+.loc-db-bad {
+  color: var(--zx-danger-ink);
+}
+
+.loc-wal {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--zx-ink-2);
+}
+
+/* 「没有对应的目录：点击跳转授权」——整宽虚线，与上面的目录条目区分开 */
+.grant-pick-goto {
+  width: 100%;
+  margin-top: 8px;
+  border-style: dashed;
+  color: var(--brand);
+  text-align: left;
+}
+.grant-pick-goto:active {
+  background: transparent;
+}
+
+/* 阅读器的自有选择器：当前目录 ＋ 上一级 */
+.sec-browse-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.sec-browse-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--zx-ink-2);
+  word-break: break-all;
+}
+
+/* ==== 搬迁遮罩（`core/data-location.js` 的 `mountBusy()`；与电脑端同一个结构，这里只调手机尺寸）====
+   ⚠️ 手机端原来只弹一句 toast，服务端几十毫秒就搬完 ⇒ 用户以为「没反应」。
+   ⚠️ 遮罩比抽屉（`.sheet`）更高一层：迁移期间不该能碰到任何东西。 */
+.busy-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 22px;
+  background: rgba(17, 24, 39, 0.42);
+}
+
+.busy-card {
+  width: 100%;
+  max-width: 340px;
+  padding: 22px 18px 16px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.24);
+  text-align: center;
+}
+
+.busy-ring {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  margin: 0 auto 12px;
+  border: 3px solid rgba(79, 70, 229, 0.18);
+  border-top-color: var(--zx-brand);
+  border-radius: 50%;
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--zx-ok-ink);
+  animation: busySpin 0.9s linear infinite;
+}
+
+.busy-ring.ok {
+  border-color: var(--zx-ok-ink);
+  background: var(--zx-ok-soft);
+  animation: none;
+}
+
+.busy-ring.bad {
+  border-color: var(--zx-danger-ink);
+  background: var(--zx-danger-soft);
+  color: var(--zx-danger-ink);
+  animation: none;
+}
+
+@keyframes busySpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.busy-title {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--zx-ink);
+}
+
+.busy-sub {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--zx-ink-2);
+}
+
+.busy-how {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--zx-bg);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--zx-ink);
+  text-align: left;
+}
+
+.busy-bar {
+  height: 6px;
+  margin: 12px 0 8px;
+  border-radius: 999px;
+  background: var(--zx-bg);
+  overflow: hidden;
+}
+
+.busy-bar > i {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--zx-brand);
+  /* 进度条在遮罩里 ⇒ 四级（`--dur-4` = 300ms），⛔ 不写死 0.3s（`transition.test.js` 钉住） */
+  transition: width var(--dur-4) var(--ease-4);
+}
+
+.busy-bar.indet > i {
+  width: 40%;
+  animation: busySlide 1.1s ease-in-out infinite;
+}
+
+@keyframes busySlide {
+  0% {
+    margin-left: -40%;
+  }
+  100% {
+    margin-left: 100%;
+  }
+}
+
+.busy-num {
+  min-height: 14px;
+  font-size: 11px;
+  color: var(--zx-ink-2);
+}
+
+.busy-btn {
+  width: 100%;
+  margin-top: 14px;
+}
+
+/* ==== 已授权目录：可逐级展开的树 ＋ 新建文件夹（`core/dir-tree.js` 出结构）====
+   与电脑端同一套类名，这里按触屏调整行高与缩进。 */
+.dt-host {
+  margin: 10px 0 0;
+}
+
+.dt-host {
+  margin: 10px 0 0;
+}
+
+.dt-new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.dt-newbtn {
+  flex: none;
+  min-height: 34px;
+  padding: 6px 11px;
+  border: 1px dashed var(--line-2);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--brand);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.dt-newhint {
+  font-size: 11px;
+  color: var(--zx-ink-2);
+}
+
+.dt-newinput {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+  color: var(--zx-ink);
+}
+
+.dt-tip {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--zx-danger-soft);
+  border: 1px solid var(--zx-danger-line);
+  color: var(--zx-danger-ink);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.dt-tree {
+  max-height: 46vh;
+  overflow: auto;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.dt-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.dt-line:last-child {
+  border-bottom: 0;
+}
+
+.dt-line.sel {
+  background: rgba(79, 70, 229, 0.08);
+}
+
+.dt-line[data-lv='1'] {
+  padding-left: 22px;
+}
+.dt-line[data-lv='2'] {
+  padding-left: 34px;
+}
+.dt-line[data-lv='3'] {
+  padding-left: 46px;
+}
+.dt-line[data-lv='4'] {
+  padding-left: 58px;
+}
+.dt-line[data-lv='5'] {
+  padding-left: 70px;
+}
+.dt-line[data-lv='6'] {
+  padding-left: 82px;
+}
+
+.dt-caret {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--zx-ink-2);
+  font: inherit;
+  font-size: 12px;
+  line-height: 22px;
+  text-align: center;
+}
+
+.dt-ico {
+  flex: none;
+  width: 13px;
+  height: 10px;
+  border-radius: 2px;
+  background: #8fb8e6;
+}
+
+.dt-line.sel .dt-ico {
+  background: var(--brand);
+}
+
+.dt-namebtn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--zx-ink);
+  font: inherit;
+  text-align: left;
+}
+
+.dt-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.dt-line.sel .dt-name {
+  font-weight: 600;
+}
+
+.dt-note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  color: var(--zx-ink-2);
+}
+
+.dt-empty {
+  padding: 6px 10px 9px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--zx-ink-2);
+}
+
+.dt-err {
+  padding: 6px 10px 9px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--zx-danger-ink);
+}
+
+.dt-hint,
+.dt-loading {
+  padding: 14px 12px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--zx-ink-2);
+}
+
+.dt-goto {
+  width: 100%;
+  margin-top: 8px;
+  padding: 9px 10px;
+  border: 1px dashed var(--line-2);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--brand);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
 }

@@ -2489,15 +2489,24 @@ const isPresetLabel = (label) => MEM_PRESET_LABELS.includes(String(label == null
  *      后端因此默认拦私网地址，但**本地 ollama（`http://127.0.0.1:11434`）是真实用法**，
  *      一刀切会伤它，所以留了这个显式开关（默认关 = 拦）。开关只是一次 `PUT`，
  *      当前值永远以服务端返回的 `allowPrivate` 为准（`fill` 回填，不做本地记忆）。
+ *      ⭐ 0.9.8：接口地址下面多一条**常显**说明（`data-ai="tlsnote"`）—— 本地模型（ollama /
+ *      LM Studio / vLLM）默认只开明文 http://，地址写成 https 连不上，而这句话必须在**填地址
+ *      的那一刻**就看得到：⛔ 别只把它塞进「测连通」的失败结果里（那时的报错会被理解成
+ *      「产品不支持本地模型」，其实只要把 https 改回 http）。
  *
- * @param {{toast: Function, ask: Function}} host - 端注入：toast 与二次确认
- *        （`ask({title, text, ok, danger}, fn)` —— 桌面走确认模态框、手机走确认弹层）
+ * @param {{toast: Function, ask: Function, notice?: Function}} host - 端注入：toast / 二次确认 / 只读提示
+ *        （`ask({title, text, ok, danger}, fn)` —— 桌面走确认模态框、手机走确认弹层；
+ *        `notice(title, text)` —— 只有一颗「知道了」的提示框，0.9.8 起用于「https 连不上」那一类）
  * @param {{sync: Function}} [hooks] - 面板级联动：任一块保存成功后，把最新视图推给另外两块
  * @returns {{node: HTMLElement, fill: Function, fail: Function}} 块节点 + 回填 / 报错入口
  */
 export function createAiConnBlock(host, hooks) {
   const toast = host && host.toast ? host.toast : () => {};
   const ask = host && host.ask ? host.ask : (_o, fn) => fn();
+  // ⭐ 0.9.8：只读提示（就是「https 连不上」那一类）—— 端没注入也**不许静默**：
+  //    退回一条红色 toast，用户至少能看到那句话（`host.notice` 两端都注入了，
+  //    这条兜底只防将来有人少传一个键）
+  const notice = host && host.notice ? host.notice : (t, m) => toast(`${t} —— ${m}`, true);
   const sync = hooks && hooks.sync ? hooks.sync : () => {};
   const root = el('div', 'ai-task');
   root.innerHTML = `
@@ -2512,6 +2521,8 @@ export function createAiConnBlock(host, hooks) {
         <button class="ai-btn ai-btn-mini" type="button" data-ai="iion">打开它</button>
       </div></div>
     <div class="ai-warn" id="ai-cfg-httpwarn" data-ai="httpwarn" hidden>⚠️ 这个地址不是 https:// —— 传输过程是明文，只建议在自家局域网里这样用。</div>
+    <div class="ai-note" data-ai="tlsnote">本地模型（ollama / LM Studio / vLLM）默认只开明文 <b>http://</b> —— 地址写成 https:// 通常连不上，
+      把它改回 http 就能用；本机与内网地址若用的是自签证书，https 也能直连（只对私网地址放行），公网域名的证书必须受信任。</div>
     <div class="ai-f"><label class="ai-f-label" for="ai-cfg-model">模型名</label>
       <input class="ai-input" id="ai-cfg-model" data-ai="model" type="text" maxlength="200"
         placeholder="deepseek-chat" autocomplete="off" spellcheck="false" /></div>
@@ -2609,11 +2620,54 @@ export function createAiConnBlock(host, hooks) {
   }
 
   /**
+   * 功能：这个地址**能不能不填密钥**（本机 / 私网 ⇒ 本地模型）。
+   *
+   * 说明：⭐⭐ 0.9.8（缺陷索引第 33 条 ②）：判据对齐服务端 `isPrivateBaseUrl()`，
+   *      **但刻意不看协议** —— 上一条 `looksLocal()` 把 `http://` 一律算「本地」是为了提示内网开关，
+   *      用它来判断「密钥可留空」会把 `http://api.example.com` 这种公网明文地址也说成不用密钥，
+   *      那是错的。这里只看主机名，与服务端真正放行的那一批一致。
+   *      ⚠️ 仍然只是**提前提示**：真正放不放行由服务端判（`aiOutboundConfig`）。
+   * @param {string} raw - 地址输入框里的原文
+   * @returns {boolean} 这个地址可以不填密钥为 true
+   */
+  function keyCanBeEmpty(raw) {
+    const host = hostOf(raw);
+    if (!host) return false;
+    if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+    if (host === '::1' || host === '0.0.0.0' || host.startsWith('fe80:')) return true;
+    if (/^(127|10|192\.168|169\.254)\./.test(host)) return true;
+    return /^172\.(1[6-9]|2\d|3[01])\./.test(host);
+  }
+
+  /**
+   * 功能：重画密钥这一栏的说明与占位符 —— 跟着地址实时变。
+   *
+   * 说明：⭐ 「本地模型也得瞎填一个密钥」曾经是这个功能最大的劝退点：ollama / LM Studio / vLLM
+   *      本机部署本来就没有密钥，界面上却只有一个空的必填感输入框，没有一个字说「这里可以留空」。
+   *      现在按地址给三种话术，用户敲完地址当场就知道要不要填。
+   * @returns {void}
+   */
+  function paintKeyNote() {
+    const local = keyCanBeEmpty(urlIn.value);
+    keyIn.placeholder = keySet
+      ? '已配置 —— 留空表示不修改'
+      : local
+        ? '本地模型可留空'
+        : '未配置，粘贴你的 API Key';
+    q('keynote').textContent = keySet
+      ? '密钥已保存在这台 NAS 上（密文），不会回显；留空保存 = 不修改。'
+      : local
+        ? '本地 / 内网地址可以留空 —— 本机 ollama、LM Studio、vLLM 一般不校验密钥，不填也能用（填了会照常发出去）。'
+        : '还没有配置密钥。密钥只保存在这台 NAS 上（密文），不会回显。';
+  }
+
+  /**
    * 功能：重画「私网地址就地提示」—— 地址像本机 / 局域网、而内网开关还关着时才出现。
    * @returns {void}
    */
   function paintLocalHint() {
     iiBox.hidden = !(looksLocal(urlIn.value) && !allowPrivate);
+    paintKeyNote(); // 密钥那一栏的「可留空」也跟着地址走（同一批输入事件里刷新，少一次遍历）
   }
 
   /**
@@ -2659,12 +2713,10 @@ export function createAiConnBlock(host, hooks) {
     visionBtn.classList.toggle('on', visionOn);
     visionBtn.setAttribute('aria-pressed', visionOn ? 'true' : 'false');
     visionBtn.setAttribute('data-on', visionOn ? '1' : '0');
-    keyIn.placeholder = v.keySet ? '已配置 —— 留空表示不修改' : '未配置，粘贴你的 API Key';
     keySet = !!v.keySet;
-    q('keynote').textContent = v.keySet
-      ? '密钥已保存在这台 NAS 上（密文），不会回显；留空保存 = 不修改。'
-      : '还没有配置密钥。密钥只保存在这台 NAS 上（密文），不会回显。';
     clearBtn.hidden = !v.keySet;
+    // ⭐ 0.9.8：密钥栏的说明与占位符改由 `paintKeyNote()` 统一画 —— 它要**跟着地址**变
+    //    （本地模型可留空），写死在这里就跟不上用户改地址的动作
     paintLocalHint();
     paintDirty();
   }
@@ -2677,7 +2729,10 @@ export function createAiConnBlock(host, hooks) {
    * @returns {string} 一句短文案
    */
   function summary() {
-    if (!keySet) return '还没配置密钥';
+    // ⭐ 0.9.8：本地 / 内网地址（本地模型）可以没有密钥 —— 这里若照旧报「还没配置密钥」，
+    //    用户会以为自己还差一步，实际已经能用了。判据用**已保存的**地址（`snap.url`），
+    //    不是输入框里的实时值：没保存的改动不该改变「已存下来的配置」的说法。
+    if (!keySet && !keyCanBeEmpty(snap.url)) return '还没配置密钥';
     if (!enabled) return '未启用';
     return `已启用 · ${snap.model || '还没填模型名'}`;
   }
@@ -2769,6 +2824,23 @@ export function createAiConnBlock(host, hooks) {
       toast(e.message, true);
     }
   });
+  /**
+   * 功能：把「这个地址的 https 连不上」**弹出来**（老大 2026-11-11：「https 不行就弹窗说请使用 http 再次尝试」）。
+   *
+   * 说明：⭐ 为什么必须弹，而不是只在结果行写一行小字：那一行很容易被略过，
+   *      于是「连不上」被理解成「产品不支持本地模型」—— 实际只要把协议换个字。
+   *      ⚠️ **只提示、不替用户改输入框**：改地址是用户的决定（他可能正想配一张受信任证书的
+   *      自签反代），我们只把原因和下一步说清；⛔ 不做「静默把 https 换成 http」这种自作主张。
+   *      ⚠️ 标题按 `out.tls` 分两种：`protocol`（打到明文端口）/ `certificate`（证书不通过）——
+   *      两句话要用户做的事不一样，标题就得不一样。
+   * @param {{reason: string, tls?: string}} out - `/api/ai/test` 的失败结果
+   * @returns {void}
+   */
+  function popupTls(out) {
+    const cert = out.tls === 'certificate';
+    notice(cert ? '这个地址的证书没通过校验' : '这个地址的 https 连不上', out.reason || '请使用 http 再次尝试');
+  }
+
   q('test').addEventListener('click', async () => {
     const btn = q('test');
     const r = q('result');
@@ -2783,6 +2855,9 @@ export function createAiConnBlock(host, hooks) {
       const out = await api('POST', '/api/ai/test', {}, { timeout: 45000 });
       r.hidden = false;
       r.textContent = warn + (out.ok ? `✅ 连通正常，用时 ${out.ms} 毫秒` : `❌ ${out.reason}`);
+      // ⭐ 0.9.8：TLS 这一类**同时弹窗** —— 结果行照旧留着（可回看），弹窗负责「别让它被略过」。
+      //    ⚠️ 判据只看 `kind === 'tls'`：网络类错误弹窗会变成噪音。
+      if (!out.ok && out.kind === 'tls') popupTls(out);
     } catch (e) {
       r.hidden = false;
       r.textContent = warn + `❌ ${e.message}`;

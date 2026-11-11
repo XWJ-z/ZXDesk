@@ -563,7 +563,7 @@ export function bindTaskCardActions() {
   // ⭐ 0.7.2：课表「本节备注 → 加到任务」也开这张表单（留白事件 `zx:task-draft`）——
   //    与上面那枚卡片动作同一批注册，宿主不用多调一次。
   //    ⚠️ 手机端这里**不用**补项目清单（电脑端要）：手机端的 `state.projects` 是启动引导
-  //    （`mobile/data.js` 读 `/api/boot`）一次性装好的，会话期内一直都在。
+  //    （`mobile/data.js` 读 `/api/bootstrap`）一次性装好的，会话期内一直都在。
   bindTaskDraft((d) => projectTaskForm(d));
 }
 

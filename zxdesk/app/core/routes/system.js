@@ -20,7 +20,11 @@
 const { APP_VERSION } = require('../storage.js');
 const { registry } = require('../../modules/registry.js');
 const { httpError, json, notFound } = require('../http-util.js');
-const { runtime, store } = require('../context.js');
+const { dataDir, repair, runtime, store } = require('../context.js');
+// ⭐ 数据位置：待重启 / 迁移中的横幅要在**任何页面**都能显示，所以状态搭在 health 上
+const { currentPhase, isFreezing } = require('../data-location.js');
+// ⭐ 数据位置的授权结论（启动时查过一次，之后按网关身份复核）
+const locationAuth = require('../location-auth.js');
 const { nowInfo, todayStr } = require('../time-util.js');
 const { isRealDate } = require('../validate.js');
 // ⭐ 0.9.1：各端最新版本检测（唯一对外联网点，纯 lib，可注入网络实现）
@@ -91,7 +95,7 @@ function handleDashboard({ res, method, uid, url }) {
  * @param {?Object} user - 当前登录账号，未登录为 null
  * @returns {Object} `/api/health` 的响应体
  */
-function healthPayload(i, user) {
+function healthPayload(i, user, auth) {
   const base = {
     ok: true,
     version: APP_VERSION,
@@ -113,6 +117,21 @@ function healthPayload(i, user) {
     usersIndexError: i.usersIndexError,
     // ⚠️ 这是**全库跨账号**的合计值（别人数据的痕迹），只给管理员看
     legacyNullStartDates: user.is_admin ? i.legacyNullStartDates : 0,
+    // ⭐ 0.9.8：三个库各自的健康结论（`{main, ledger, lab}`）—— 「哪个库坏了」必须在这里能看出来。
+    //    ⚠️ 只有 `label` / `ok` / `readOnly` / `journalMode` / `reason`，**不含文件路径**
+    //    （路径仍只经 `/api/admin/storage` 给管理员）。见 `store.info()` 的 `databases`。
+    databases: i.databases || null,
+    // ⭐ 数据位置的两态（移动 / 待重启）：两端外壳层据此挂常驻横幅。
+    //    ⚠️ 只给「是否待重启」与目录**末段**，⛔ 不带完整路径（health 对全部已登录账号开放）。
+    dataLocation: {
+      freezing: isFreezing(),
+      pendingRestart: isFreezing() && currentPhase() === 'pendingRestart',
+      tail: String(dataDir || '').split('/').filter(Boolean).pop() || '',
+      // ⭐ 授权体检结论：`{state: 'ok'|'lost'|'unknown'|'pending', scope, code}`。
+      //    界面据此弹「授权失效或丢失」并指路；⛔ `unknown` 不能当 `lost` 用（那会让所有
+      //    局域网直连的机器一开机就红一片）。
+      auth: auth || locationAuth.snapshot(),
+    },
   };
 }
 
@@ -124,7 +143,19 @@ function healthPayload(i, user) {
  * @returns {void}
  */
 function handleHealth(req, res, user) {
-  return json(res, 200, healthPayload(store.info(), user));
+  // ⭐ 位置不可用（恢复态）：只回「进程活着 ＋ 在等修复」，⛔ 不含任何路径与库信息。
+  //    返回 200 是刻意的 —— 外部探活（含飞牛自己的健康检查）不该把「需要人处理」当成「服务挂了」。
+  if (repair || !store) return json(res, 200, { ok: true, version: APP_VERSION, mode: 'repair', reason: repair ? repair.reason : '' });
+  const i = store.info();
+  // ⚠️ 已登录才顺带复核一次授权：未登录时没有网关身份，问了也判不出来（`ensure` 会原样返回现状）
+  if (!user) return json(res, 200, healthPayload(i, user));
+  // ⭐ `?auth=1` ⇒ 不看缓存、现在就问一次（「数据库授权未完成」那个弹窗里的「重新检查」走它）。
+  //    ⚠️ 默认仍走缓存：health 可能被轮询，每次都打网关会把网关打满。
+  const force = !!(req && req.url && /[?&]auth=1(&|$)/.test(String(req.url)));
+  locationAuth
+    .ensure(req, { force })
+    .then((auth) => json(res, 200, healthPayload(i, user, auth)))
+    .catch(() => json(res, 200, healthPayload(i, user)));
 }
 
 /**
@@ -184,7 +215,7 @@ function handleVersions({ res, method }) {
  * @param {URL} ctx.url - 请求的 URL 对象（取 `dash` / `from` / `to`）
  * @returns {void}
  */
-function handleBootstrap({ res, method, user, uid, url }) {
+function handleBootstrap({ req, res, method, user, uid, url }) {
   if (method !== 'GET') return notFound(res);
   const sp = url.searchParams;
   const dash = ['1', 'true', 'yes'].includes(String(sp.get('dash') || '').toLowerCase());
@@ -194,8 +225,13 @@ function handleBootstrap({ res, method, user, uid, url }) {
   //    而验收第 ② 条要求的正是「**其它模块一切正常**」（数据可以少，但不许 500）。
   //    ⇒ 判据放在这一个出口：方法不在时回空数组（首屏因此少一块项目列表，不是少一整页）。
   const projects = typeof store.listProjects === 'function' ? store.listProjects(uid) : [];
-  return json(res, 200, {
-    health: healthPayload(store.info(), user),
+  /**
+   * 功能：把首屏载荷拼出来（`auth` 是授权体检的结论，可能来自缓存）。
+   * @param {?Object} auth - `locationAuth` 的结论
+   * @returns {Object} 响应体
+   */
+  const payload = (auth) => ({
+    health: healthPayload(store.info(), user, auth),
     me: user,
     // ⭐ 课表 2 期：首屏也带回服务端「现在」（倒计时的时间权威源，⛔ 不新开接口）
     now: nowInfo(),
@@ -226,6 +262,16 @@ function handleBootstrap({ res, method, user, uid, url }) {
     //    （核心的包装 `todayCountsOf()`：模块不在时回 `{ daily: 0, projects: {} }`）。
     todayCounts: store.todayCountsOf(uid, t),
   });
+  // ⭐⭐ 首屏就把「数据位置授权」查一遍（**进入应用即弹窗**靠的就是这个字段）：
+  //    只在已登录时查（要有网关身份）；查不到就按现状回（`unknown` 不吓人）。
+  if (!user) return json(res, 200, payload());
+  // ⚠️⭐ **强制**复核（`force: true`）：这是「进入应用」那一次，用户可能刚在设置里授权完就刷新了 ——
+  //    走 5 分钟缓存的话他会一直看到「数据库授权没有完成」（2026-11-10 真机反馈的正是它）。
+  //    ⚠️ 只有这一处强制：`/api/health` 可能被轮询，那里仍走缓存（见 `ensure()`）。
+  return locationAuth
+    .ensure(req, { force: true })
+    .then((auth) => json(res, 200, payload(auth)))
+    .catch(() => json(res, 200, payload()));
 }
 
 module.exports = {

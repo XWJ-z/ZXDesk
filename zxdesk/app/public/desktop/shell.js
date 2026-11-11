@@ -22,7 +22,7 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.51
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/07-前端-电脑版与手机版.md、13-决策记录.md（决策 76）、
  *      docs/公共/开发方案/35-视图切换与过渡动画.md
  */
@@ -34,13 +34,17 @@ import { api } from '../core/api.js';
 import { clock } from '../core/clock.js';
 import { todayStr } from '../core/date.js';
 import { $, esc } from '../core/dom.js';
+// ⭐ 数据位置的横幅文案与「三行库」共用一份（`core/data-location.js`）
+import { LOC_TEXT, bannerTextOf, mountRestartNotice } from '../core/data-location.js';
+// ⭐ 「授权失效」弹窗里的【点击跳转】要落到设置 → 账号设置（钩子由 settings.js 注册）
+import { gotoAuth } from '../core/grants.js';
 // ⭐ 0.8.15：整屏换屏改走**交叉淡入**（旧屏留到新屏就绪、两层一起淡）——
 //    「撤类 → 强制重排 → 加类」那套与 keyframes 的判据**只此一份**，住 `core/transition.js`。
 import { crossFade } from '../core/transition.js';
 import { applyNavOrder, entryOn, moduleItems } from '../core/modules.js';
 import { NAV_VIEWS, uiOf } from './modules.js';
 import { scopeKey, state } from './state.js';
-import { closeModal, modalOpen, toast } from './ui.js';
+import { closeModal, modalOpen, openModal, setModalSave, toast } from './ui.js';
 import { openBoard, renderBoard } from '../modules/tasks/desktop-board.js';
 // ⭐ 0.3.5 对话：`teamworkLeave` 由本文件的 `showView()` 调用（所有视图切换的唯一出口，
 //    收右键菜单等离开收尾）。⭐ 0.5.2 起它**不再停长连接** —— 通道改为应用级常驻：
@@ -95,9 +99,127 @@ export async function loadHealth() {
  *
  * @returns {void}
  */
+/** 本次页面加载里「数据库授权未完成」的弹窗是否已经弹过（⛔ 不用 sessionStorage：那是**每次进入应用**都要弹一遍） */
+let lostAuthShown = false;
+
+/**
+ * 功能：数据位置**授权未完成**时的提示 —— 进入应用就弹一次，且两端都能看到。
+ *
+ * 说明：⭐⭐ 触发条件是 `health.dataLocation.auth` 里 `enforce === true && state === 'lost'`：
+ *      `enforce` 只在**自定义位置**时为真（默认位置由飞牛的 data-share 安排，不在共享授权清单里，
+ *      拿清单去判它会在每台正常安装的机器上误报）。
+ *      ⚠️ 管理员给【点击跳转】（去 设置 → 账号设置 → 个人授权目录），普通成员只被告知去找管理员 ——
+ *      他没有授权目录的权限，给了按钮只会点了被拒。
+ *      ⚠️ 每次**页面加载**弹一次（`lostAuthShown` 是模块级变量）：刷新一次就再提醒一次，
+ *      但同一页里重复调用 `renderBanner()` 不会叠出多个弹层。
+ * @param {Object} h - `state.health`
+ * @returns {boolean} 已经处理掉横幅位置就返回 true
+ */
+function renderLostAuth(h) {
+  const auth = h && h.dataLocation && h.dataLocation.auth;
+  if (!auth || auth.enforce !== true || auth.state !== 'lost') return false;
+  const b = $('#banner');
+  const isAdmin = !!(state.me && state.me.is_admin);
+  const adminText = '数据库授权没有完成，无法提供使用！！！请前往 设置 - 账号设置 - 授权。';
+  const userText = '数据库授权没有完成，无法提供使用！！！请联系管理员检查授权信息。';
+  if (isAdmin && !lostAuthShown) {
+    lostAuthShown = true;
+    openModal(
+      '数据库授权未完成',
+      `<p class="loc-red" style="margin:0 0 12px">${esc(adminText)}</p>
+       <div class="loc-lostacts">
+         <button id="loc-auth-jump" class="btn btn-primary btn-sm" type="button">【点击跳转】</button>
+         <button id="loc-auth-recheck" class="btn btn-subtle btn-sm" type="button">已重新授权，重新检查</button>
+       </div>`,
+      { mid: true },
+    );
+    setModalSave('稍后处理');
+    const jump = document.getElementById('loc-auth-jump');
+    if (jump) {
+      jump.onclick = () => {
+        closeModal();
+        gotoAuth();
+      };
+    }
+    const recheck = document.getElementById('loc-auth-recheck');
+    if (recheck) {
+      // ⭐⭐ 为什么要有这一颗：授权是在**飞牛的页面里**做的，做完回到这个已经开着的应用时，
+      //    服务端的结论可能还是旧的（`lost`）—— 没有这一颗，用户只能「关掉应用再进一次」，
+      //    而那看起来就是「重新授权没用，还在弹」（2026-11-10 真机反馈）。
+      //    ⚠️ `?auth=1` = 不看缓存、现在问一次（见 `routes/system.js` 的 `handleHealth`）。
+      recheck.onclick = async () => {
+        recheck.disabled = true;
+        recheck.textContent = '正在检查…';
+        try {
+          const r = await api('GET', '/api/health?auth=1');
+          const st = r && r.dataLocation && r.dataLocation.auth;
+          if (st && st.state === 'ok') {
+            // ⚠️ 把新结论写回 `state.health`：不写的话下一次 `renderBanner()` 还按旧的 `lost`
+            //    把红字挂回来（用户会觉得「说好了，怎么又弹」）。
+            if (state.health && state.health.dataLocation) state.health.dataLocation.auth = st;
+            closeModal();
+            b.classList.add('hidden');
+            b.innerHTML = '';
+            toast('授权已恢复，可以正常使用了');
+            return;
+          }
+          toast('还是没查到这个目录的授权 —— 请确认授权的是「数据位置」那个文件夹（或它的上级目录）', true);
+        } catch (e) {
+          toast(e.message || '检查失败，稍后再试', true);
+        }
+        recheck.disabled = false;
+        recheck.textContent = '已重新授权，重新检查';
+      };
+    }
+    return true;
+  }
+  // 非管理员（或本页已弹过）：挂一条常驻红字，一直提醒到授权修好
+  b.className = 'banner';
+  b.innerHTML = `<div class="b-text">${esc(isAdmin ? adminText : userText)}</div>` +
+    `<button class="b-close" type="button">知道了</button>`;
+  b.querySelector('.b-close').addEventListener('click', () => b.classList.add('hidden'));
+  return true;
+}
+
+/** 「请重新启动应用」那张常驻卡是否已经挂过（⛔ 同一页里不挂第二张） */
+let restartNoticeShown = false;
+
+/**
+ * 功能：数据位置**待重启**时挂常驻遮罩 —— 重启之前一直显示，不可关闭。
+ *
+ * 说明：⭐⭐ 迁移完成后应用处于只读状态，而「搬完就完了」的错觉最容易让人以为出了别的问题。
+ *      所以这一步**优先于所有横幅**：遮罩盖住整个界面，只留「去应用中心停止再启动」这条路。
+ *      ⚠️ 为什么刷新后还要挂：完成态不可关闭，但刷新页面遮罩就没了 —— 而那时位置已经改了、
+ *      应用还是只读的。`/api/bootstrap` 会把 `pendingRestart` 带回来，这里据此重挂同一张卡。
+ * @param {Object} h - `state.health`
+ * @returns {boolean} 已挂（调用方就不用再管横幅了）
+ */
+function renderRestartGate(h) {
+  const loc = h && h.dataLocation;
+  if (!loc || !loc.pendingRestart) return false;
+  if (!restartNoticeShown) {
+    restartNoticeShown = true;
+    mountRestartNotice(loc.tail || '');
+  }
+  return true;
+}
+
 export function renderBanner() {
   const h = state.health;
   const b = $('#banner');
+  // ⭐ 待重启优先于一切：它是唯一「必须人去做一步」的状态
+  if (renderRestartGate(h)) return;
+  if (renderLostAuth(h)) return;
+  // ⭐ 数据位置（迁移中 / 待重启）优先：它比降级更「当下」，而且同样是只读状态
+  const locText = h && h.dataLocation ? bannerTextOf(h.dataLocation) : null;
+  if (locText) {
+    b.className = 'banner';
+    b.innerHTML =
+      `<div class="b-text"><b>${esc(locText)}</b> ${esc(LOC_TEXT.BANNER_RESTART_HOW)}</div>` +
+      `<button class="b-close" type="button">知道了</button>`;
+    b.querySelector('.b-close').addEventListener('click', () => b.classList.add('hidden'));
+    return;
+  }
   if (!h || !(h.degraded || h.backupError || h.readOnly)) {
     b.classList.add('hidden');
     b.innerHTML = '';
@@ -861,6 +983,10 @@ export const VIEW_NODES = {
   //    ⚠️ 它必须在 `VIEW_NODES` 里，否则 `showView('assets')` 的 `forEach` 不遍历它 ⇒
   //    `hidden` 永远摘不掉 ⇒ **整屏空白**（0.8.0 记账踩过一次，见 `VIEWS` 的说明）。
   assets: '#assets-view',
+  // ⭐ 0.9.8：zx 实验室（纯屏宿主，决策 143）—— 它**必须**在这张表里，否则
+  //    `showView('lab')` 的 `forEach` 不遍历它 ⇒ 那一段的 `hidden` 永远摘不掉 ⇒ **整屏空白**
+  //    （0.8.0 记账踩过一次，见本文件 `VIEWS` 的说明）。
+  lab: '#lab-view',
   // ⭐ 0.8.10：`ledger`（生活记账）**从这张表里撤掉了** —— 理由与上面 `digital` 同款
   //    （它也没自己的屏了，界面挂进「个人资产管理」的药丸里）。⛔ 别加回来。
   teamwork: '#teamwork-view',

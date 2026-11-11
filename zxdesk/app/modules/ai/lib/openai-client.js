@@ -9,6 +9,12 @@
  *        · `chatStream()`   流式问答（同一路径 + `stream:true`，SSE 逐帧回调 —— 对话页聊天用）；
  *      另导出 `parseLooseJson()`（模型回复的三层兜底 JSON 解析，指挥建任务用）。
  *
+ * ⭐ **https 分档校验证书（0.9.8）**：本机 / 内网地址走 `rejectUnauthorized: false`
+ *      （自签证书与内部 CA 在这些场景是常态，而 Node 只认内置 CA 包、不读系统信任库），
+ *      公网域名仍按 Node 默认严格校验。判据只住 `tlsAllowInsecure()` **一处**；
+ *      「https 打到明文端口」（EPROTO）与「证书类错误」各有一条**直指真因**的话术
+ *      （`TLS_HTTP_HINT` / `TLS_CERT_HINT`）—— ⛔ 别把它们并回「连不上 AI 接口」那一档。
+ *
  * ⭐ **双闸超时**：
  *      · **建连闸**：从发请求到收到上游响应头，超过 `CONNECT_TIMEOUT_MS` 就 `req.destroy()` ——
  *        它抓的是「地址填错 / 对方不在线」这种永远握不上手的情形；
@@ -88,6 +94,47 @@ const PRIVATE_HINT =
   '（例如 http://127.0.0.1:11434 的 ollama），请先打开「允许访问内网地址」开关（就在接口地址下面）';
 
 /**
+ * ⭐ 用户话术：`https://` 打到**只开明文 http** 的服务上（TLS 握手被对方当垃圾数据，报 EPROTO）。
+ *    ⚠️ 这是「本地模型写了 https 就连不上」最常见的那一种，必须直说「把 https 改成 http」——
+ *    兜底的「连不上 AI 接口，请检查地址与网络」指不到真因，用户会以为产品不支持本地模型。
+ *    ⭐ 「**请使用 http 再次尝试**」这七个字是老大 2026-11-11 指定的口径，前后端都靠它判断该弹窗
+ *    （`shared.js` 的 `TLS_RETRY_PHRASE`）—— ⛔ 改这句话要同步改前端那处常量与测试。
+ * @type {string}
+ */
+const TLS_HTTP_HINT =
+  '这个地址的 https 握不上手 —— 多数是模型服务只开了 http://（本机 ollama / LM Studio / vLLM 默认就是这样）。' +
+  '请使用 http 再次尝试：把地址开头的 https 改成 http，例如 http://127.0.0.1:11434/v1';
+
+/**
+ * ⭐ 用户话术：`https://` 的证书没通过校验（自签 / 内网 CA / 过期 / 域名对不上）。
+ *    ⚠️ 本机与内网地址的自签证书已由 `tlsAllowInsecure()` 自动放行，所以走到这句的一定是
+ *    **公网域名**或**证书本身有问题**（过期、域名不匹配）—— 两种都得让用户有下一步动作。
+ * @type {string}
+ */
+const TLS_CERT_HINT =
+  '这个 https 地址的证书没通过校验（自签、内网 CA、已过期或域名对不上）。' +
+  '本机与内网地址的自签证书已自动放行；公网域名要用受信任的证书，或者把地址改成 http://';
+
+/**
+ * 证书类错误代号的全集（`req.on('error')` 的 `e.code`）。
+ * ⚠️ 别把这些并进「连不上」那一档：两句话要用户做的事完全不同（换协议 vs 查网络）。
+ * @type {Set.<string>}
+ */
+const TLS_CERT_CODES = new Set([
+  'DEPTH_ZERO_SELF_SIGNED_CERT',
+  'SELF_SIGNED_CERT_IN_CHAIN',
+  'CERT_UNTRUSTED',
+  'CERT_HAS_EXPIRED',
+  'CERT_NOT_YET_VALID',
+  'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'UNABLE_TO_GET_ISSUER_CERT',
+  'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+  'ERR_TLS_CERT_ALTNAME_INVALID',
+  'ERR_TLS_CERT_SIGNATURE_FAILURE',
+  'HOSTNAME_MISMATCH',
+]);
+
+/**
  * 功能：判断一个接口地址是不是指向**内网 / 本机 / 链路本地**（009 报告 R1）。
  *
  * 说明：⭐ 为什么要有它：接口地址是**成员自己填的**，而错误转译表能把「连不上 / 不存在 / 超时」
@@ -124,6 +171,31 @@ function isPrivateBaseUrl(baseUrl) {
 }
 
 /**
+ * 功能：这一次 https 出网要不要**校验证书** —— 只对「本机 / 内网地址」放行自签。
+ *
+ * 说明：⭐ 为什么需要它（0.9.8 · 缺陷索引第 33 条 ⑥）：本地模型与内网反代的自签证书、
+ *      内部 CA 都是**用户在自己局域网里自己签的**；而 Node 用的是**内置 CA 包**、不读系统
+ *      信任库（`NODE_EXTRA_CA_CERTS` 在界面上无处可配）⇒ 严格校验在这些场景里等于「必失败」，
+ *      且报出来的话术指不到真因。私网地址本来就已经过 `allow_private` 这道显式授权，
+ *      这里再按地址段放行证书，风险面留在「用户自己已经允许访问的那一段内网」里。
+ *      ⚠️ 公网域名**一律严格校验**：那条链是公开可得的，放宽等于给中间人开门。
+ *      ⚠️ 只对 `https:` 有意义；`http:` 返回 false（没有 TLS 可校）。
+ *
+ * @param {string} baseUrl - 用户填的接口地址（也可以是拼好的 URL 串）
+ * @returns {boolean} true = 按 `rejectUnauthorized: false` 发（仅私网 / 本机）
+ */
+function tlsAllowInsecure(baseUrl) {
+  let u;
+  try {
+    u = new URL(String(baseUrl || '').trim());
+  } catch (_e) {
+    return false; // 地址不合法：交给「地址不合法」那条话术，别在这里抢活
+  }
+  if (u.protocol !== 'https:') return false;
+  return isPrivateBaseUrl(u.href);
+}
+
+/**
  * 功能：把用户填的 `base_url` 拼上接口路径 —— **`/v1` 有无都认**。
  *
  * 说明：⚠️ 拼接规则只有这一处：去掉结尾斜杠后直接接路径。
@@ -149,7 +221,7 @@ function joinUrl(baseUrl, path) {
  * 说明：⚠️ `message` 会被接口层**原样**带给前端（SSE error 帧 / `{ok:false, reason}`），
  *      所以它必须是**用户能照着做**的话；⚠️ 绝不把上游错误体、key、消息原文拼进 message。
  *
- * @param {string} kind - 错误类别（auth / rate / server / request / network / timeout / format / abort）
+ * @param {string} kind - 错误类别（auth / rate / server / request / network / tls / timeout / format / abort）
  * @param {string} message - 用户可读的中文说明
  * @returns {Error} 带 `kind` 的错误
  */
@@ -160,9 +232,28 @@ function aiError(kind, message) {
 }
 
 /**
+ * 功能：造一个 `kind:'tls'` 的错误，并标出**该给用户哪种下一步**（`tls` 字段）。
+ *
+ * 说明：⭐ 前端（`shared.js` 的测连通按钮）要据此决定弹窗上给不给「改成 http」那颗动作键：
+ *      · `'protocol'`   —— https 打到只开明文的服务 ⇒ **改 http 就是对的**，可以一键替用户改；
+ *      · `'certificate'` —— 证书不受信任 / 过期 / 域名不符 ⇒ 公网地址换 http 是**降级**，不能替用户改。
+ *      ⚠️ `kind` 仍是 `'tls'`（不新增类别值）：聊天的错误帧、审计、限流口径都不用动。
+ *
+ * @param {'protocol'|'certificate'} tls - 下一步动作的类别
+ * @param {string} message - 用户话术
+ * @returns {Error} 带 `kind` 与 `tls` 的错误
+ */
+function tlsError(tls, message) {
+  const e = aiError('tls', message);
+  e.tls = tls;
+  return e;
+}
+
+/**
  * 功能：把一次上游失败翻成「类别 + 用户话术」—— 错误转译表。
  *
  * 说明：只认这几类，别的都落「接口出错了」兜底；⚠️ 网络错误的原始 message（含地址）**不进**结果。
+ *      ⚠️ 导出**只为让测试钉住话术**（纯函数、无副作用）：业务侧一律走出网函数，别直接用它。
  *
  * @param {number} status - 上游 HTTP 状态码（0 = 没拿到响应，网络层/超时类）
  * @param {string} rawKind - 网络层错误代号（如 ECONNREFUSED / ECONNRESET / 超时自造的 'timeout'）
@@ -171,13 +262,17 @@ function aiError(kind, message) {
 function translate(status, rawKind) {
   if (rawKind === 'timeout') return aiError('timeout', 'AI 接口响应超时了，请稍后再试');
   if (rawKind === 'abort') return aiError('abort', '这次请求已停止');
+  // ⭐ 0.9.8：TLS 那两类必须排在「连不上」前面 —— 它们要用户做的是「换协议 / 换证书」，
+  //    而不是「查网络」，混进 network 那一档等于把真因藏起来（缺陷索引第 33 条 ⑥）
+  if (rawKind === 'EPROTO' || rawKind === 'ERR_SSL_WRONG_VERSION_NUMBER') return tlsError('protocol', TLS_HTTP_HINT);
+  if (TLS_CERT_CODES.has(rawKind)) return tlsError('certificate', TLS_CERT_HINT);
   if (status === 401 || status === 403) return aiError('auth', `API Key 不对或没有权限，请到${CFG_AT}检查密钥`);
   if (status === 429) return aiError('rate', '额度不足或被限流了，请稍后再试');
   if (status >= 500) return aiError('server', 'AI 接口出错了，请稍后再试');
   if (status >= 400) return aiError('request', 'AI 接口拒绝了这次请求，请检查模型名等配置');
   if (rawKind === 'ENOTFOUND' || rawKind === 'EAI_AGAIN')
     return aiError('network', '找不到这个接口地址，请检查是否填对');
-  if (rawKind === 'ECONNREFUSED' || rawKind === 'ECONNRESET' || rawKind === 'EPROTO' || rawKind === 'EHOSTUNREACH') {
+  if (rawKind === 'ECONNREFUSED' || rawKind === 'ECONNRESET' || rawKind === 'EHOSTUNREACH') {
     return aiError('network', '连不上 AI 接口，请检查地址与网络');
   }
   if (rawKind === 'format') return aiError('format', 'AI 接口返回了无法理解的内容，请重试');
@@ -259,11 +354,20 @@ function requestUpstream(opts) {
       return reject(aiError('request', `接口地址不合法，请到${CFG_AT}检查`));
     }
     const mod = url.protocol === 'https:' ? https : http;
-    const headers = { Authorization: `Bearer ${opts.apiKey}` };
+    // ⭐ 0.9.8：**密钥为空就不发 `Authorization` 头** —— 本地模型（ollama / LM Studio / vLLM）
+    //    本来就没有密钥，发一个空的 `Bearer ` 反而会被某些反代判成「凭证不合法」回 401。
+    //    ⚠️ 判据只有这一处：`chatOnce` / `chatStream` / `listModels` 全走本函数。
+    const headers = {};
+    const key = typeof opts.apiKey === 'string' ? opts.apiKey : '';
+    if (key) headers.Authorization = `Bearer ${key}`;
     if (opts.body !== undefined && opts.body !== null) {
       headers['Content-Type'] = 'application/json';
       headers['Content-Length'] = Buffer.byteLength(opts.body);
     }
+    const reqOpts = { method: opts.method, headers };
+    // ⭐ 0.9.8：本机 / 内网的 https 放行自签证书（判据只住 `tlsAllowInsecure()` 一处）；
+    //    公网域名保持 Node 默认的严格校验 —— 这一行是 `https://` 能连上本地模型的唯一开关
+    if (tlsAllowInsecure(url.href)) reqOpts.rejectUnauthorized = false;
     let settled = false;
     let connectTimer = null;
     const done = (fn, arg) => {
@@ -278,7 +382,7 @@ function requestUpstream(opts) {
       aiError('request', `接口配置里有无法发送的字符（一般是密钥没复制完整），请到${CFG_AT}重新粘贴`);
     let req;
     try {
-      req = mod.request(url, { method: opts.method, headers }, (res) => {
+      req = mod.request(url, reqOpts, (res) => {
         // 响应头到了 = 建连成功，建连闸拆掉（总时长闸在守卫里继续管全程）
         if (connectTimer) {
           clearTimeout(connectTimer);
@@ -332,7 +436,7 @@ async function errorFromStatus(res) {
  *
  * @param {Object} opts - 请求参数
  * @param {string} opts.baseUrl - 接口地址（http/https）
- * @param {string} opts.apiKey - API Key 明文（只进 Authorization 头，绝不落日志）
+ * @param {string} opts.apiKey - API Key 明文（只进 Authorization 头，绝不落日志；**空串 = 不发这个头**，本地模型用）
  * @param {string} opts.model - 模型名
  * @param {Array.<{role: string, content: string}>} opts.messages - 消息数组（V1 只有一两条）
  * @param {{connectMs?: number, totalMs?: number, shouldAbort?: Function}} [copts] - 可选：测试用的小超时 / 中止钩子
@@ -1231,7 +1335,11 @@ module.exports = {
   MODELS_PATH,
   CFG_AT,
   PRIVATE_HINT,
+  TLS_HTTP_HINT,
+  TLS_CERT_HINT,
   isPrivateBaseUrl,
+  tlsAllowInsecure,
+  translate,
   joinUrl,
   chatOnce,
   chatStream,

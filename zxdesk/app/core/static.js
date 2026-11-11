@@ -3,8 +3,9 @@
  *
  * 功能：把 `public/` 下的文件发给浏览器 —— 解析并**夹住**路径（防目录穿越）、按
  *      「大小 + mtime」算 `ETag` 并在命中 `If-None-Match` 时回 304、对 ≥1KB 的
- *      html/css/js/svg/json 做 gzip（压好的字节按 ETag 缓存在内存），以及 `PUBLIC_STATIC`
- *      这份免登录白名单的判定。对外导出 `serveStatic` / `PUBLIC_STATIC`。
+ *      html/css/js/svg/json 做 gzip（压好的字节按 ETag 缓存在内存），以及 `allowAnonStatic()`
+ *      这份免登录判定（恢复态下静态资源全放行，其余情况只认 `PUBLIC_STATIC`）。
+ *      对外导出 `serveStatic` / `allowAnonStatic` / `PUBLIC_STATIC`。
  *
  * @author zx
  * @date   2026-09-12
@@ -18,6 +19,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const { currentUser, mustSetupUser } = require('./routes/auth.js');
+// ⭐ 数据位置不可用时页面只有一张恢复引导页：其余页面一律 302 过去（业务接口那边回 503）
+const { repair } = require('./context.js');
 // ⭐ 统一网关的挂载前缀：本文件里「我们自己发出的地址」（302 去登录页、目录补斜杠）都要补上它，
 //    否则网关下未登录会被送去**系统根目录**的 /login.html（那是飞牛自己的地盘，不是我们的页面）。
 const { localUrl } = require('./gateway.js');
@@ -31,7 +34,24 @@ const CORE_DIR = __dirname;
 const PUBLIC_DIR = path.join(CORE_DIR, '..', 'public');
 
 /** 未登录也能访问的静态资源（登录页自身及其样式/脚本） */
-const PUBLIC_STATIC = new Set(['/login.html', '/login.css', '/login.js']);
+// ⭐ 恢复引导页必须在内：位置不可用时是**未登录**状态，没有它连修复入口都打不开
+const PUBLIC_STATIC = new Set(['/login.html', '/login.css', '/login.js', '/location.html', '/location.js']);
+
+/**
+ * 功能：判断一个静态资源在**未登录**状态下能不能放行。
+ *
+ * 说明：⭐ 恢复态（`repair`）下**静态资源一律放行**，只拦页面。
+ *      手工白名单每加一个前端依赖就漏一次（`/location.css` ＋ 五个 ESM 依赖就这么漏过），
+ *      而漏掉的表现不是报错，是「页面渲染了但脚本没跑 / 没有样式」—— 极难自查。
+ *      静态资源本身不含任何数据，页面这一层已经由 `serveStatic` 统一 302 到恢复页。
+ *
+ * @param {string} rel - 已在 `public/` 内的相对路径（带前导斜杠）
+ * @param {boolean} repairMode - 是否处于「数据位置不可用」的恢复态
+ * @returns {boolean} 放行为 true
+ */
+function allowAnonStatic(rel, repairMode) {
+  return !!repairMode || PUBLIC_STATIC.has(rel);
+}
 
 // ---- 静态资源 ----
 const MIME = {
@@ -203,12 +223,12 @@ function sendGzip(res, headers, type, body) {
  *    在它面前整条失效，手机于是落在电脑版（搜索框、7 列日历挤在窄屏里，右边被裁）。
  *    **HTTP 请求头不依赖任何 JS 能力**：JS 被禁、被改、被拦都拦不住这一跳。
  *
- * ⭐⭐ 0.9.7（2026-11-04 老大平板截图）：口径**收窄到只剩三种**，`Android` / `iPad` / 泛 `Mobile` 全部移除。
+ * ⭐⭐ 0.9.7：口径**收窄到只剩三种**，`Android` / `iPad` / 泛 `Mobile` 全部移除。
  *   现场：平板在飞牛桌面里打开应用，永远进手机版（窄卡片居中），前端 0.9.6 / 0.9.7 两次改判定都没效果 ——
  *   就是因为**这一跳先手把它送走了**，`public/index.html` 里的分流脚本根本没机会执行。
  *   平板的 UA 里普遍带 `Android`，不少国产 ROM 与定制 WebView 还带 `Mobile`（TXZ-W20 / Android 16 即如此），
  *   只靠 UA **原理上分不出手机与平板** ⇒ 服务端只处理「一眼就是手机、绝不可能是平板」的三种：
- *   `iPhone` / `iPod` / `Windows Phone`。iPad 明确排除（老大 2026-11-04：平板就该是桌面端）。
+ *   `iPhone` / `iPod` / `Windows Phone`。iPad 明确排除：平板就该是桌面端。
  *   Android（含鸿蒙手机）一律交给前端：它能读到视口，判得比 UA 准。
  *   ⚠️ 前端那条兜底必须能独立站住（窄屏 `innerWidth <= 768` ＋ `Android.+Mobile` UA 兜底），
  *      否则手机会落回电脑版 —— `ttt/test/routing.test.js` 钉着这两条。
@@ -227,6 +247,17 @@ function serveStatic(req, res, urlPath) {
   if (!r.ok) {
     res.writeHead(r.code);
     res.end('Forbidden');
+    return;
+  }
+  /* ⭐ 数据位置不可用：所有**页面**一律送去恢复引导页。
+     ⚠️ 只拦页面（`/`、`/xxx/`、`*.html`），静态资源照常发 —— 否则引导页自己也会变成无样式白底黑字。
+     ⚠️ 用 302 而不是直接改写 `rel`：页面里的资源链接是相对路径，跳到一个固定的 `/location.html`
+        才能让 `./location.js` 算对基准目录。 */
+  const isPage = r.rel === '/' || r.rel.endsWith('/') || r.rel.endsWith('.html');
+  if (repair && isPage && r.rel !== '/location.html') {
+    const q = urlPath.indexOf('?');
+    res.writeHead(302, { Location: localUrl('/location.html') + (q < 0 ? '' : urlPath.slice(q)) });
+    res.end();
     return;
   }
   // ⚠️ 这里用**异步** stat：它是每个静态请求都要过的第一道关口，
@@ -250,9 +281,17 @@ function serveStatic(req, res, urlPath) {
       return;
     }
     const user = currentUser(req);
-    if (!PUBLIC_STATIC.has(r.rel) && !user) {
+    if (!allowAnonStatic(r.rel, repair) && !user) {
       // ⚠️ 302 目标要补网关前缀（见文件头 require 处的说明），局域网直连时前缀为空、地址与从前逐字一致
-      res.writeHead(302, { Location: localUrl('/login.html') });
+      // ⭐ **带 `next`** —— 否则从文件管理器双击 `.zxdesk` 进来的人，
+      //    登录完会落在工作台首页，刚才那个文件还得自己再找一遍（方案 §十一）。
+      //    ⚠️ `next` 是**应用内相对地址**（不含网关前缀；`login.js` 会补 `BASE`），
+      //    并且**连查询串一起带走**：整页跳转丢查询串时，FN Connect 中继下会重新弹访问码
+      //    （与页面里 `carrySearch()` 同一条理由）。
+      const qi = urlPath.indexOf('?');
+      const search = qi < 0 ? '' : urlPath.slice(qi);
+      const next = r.rel + search;
+      res.writeHead(302, { Location: localUrl('/login.html') + '?next=' + encodeURIComponent(next) });
       res.end();
       return;
     }
@@ -289,6 +328,7 @@ module.exports = {
   CORE_DIR,
   PUBLIC_DIR,
   PUBLIC_STATIC,
+  allowAnonStatic,
   MIME,
   resolveStaticPath,
   COMPRESSIBLE,

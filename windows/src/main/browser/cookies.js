@@ -202,7 +202,9 @@ export function pickGatewayCookies(cookieList, now = Math.floor(Date.now() / 100
 export function gatewayCookieSpecs(list, { baseUrl } = {}) {
   const base = String(baseUrl || '').replace(/\/+$/, '');
   if (!base) return [];
-  let host = '';
+  // ⚠️ 不要写成 `let host = ''`：下面 try 里一定赋值、catch 里直接 return，
+  //    初始空串从没被读过（`no-useless-assignment` 会判它，零警告门禁会挡出包）。
+  let host;
   try {
     host = new URL(base).hostname.toLowerCase();
   } catch {

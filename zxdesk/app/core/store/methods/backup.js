@@ -940,6 +940,14 @@ module.exports = {
     const raw = this._bk.rawDump();
     // ⭐ 0.8.12：附件条目（走任务板模块的公开方法，模块不在时为空）。
     const files = typeof this.collabFileBundle === 'function' ? this.collabFileBundle() : [];
+    // ⭐⭐ 加密信息的附件**不进这份包** ——
+    //    但必须在 manifest 里如实给出「未包含 N 个附件、共 X MB」，
+    //    备份页与恢复预览才能把那句话显示出来（⛔ 只说「未包含」不说怎么办，等于把问题丢回去）。
+    //    ⚠️ 计数从刚导出的那份 dump 里算（`secrets_files` 的行**在**备份里，只有 blob 不在）——
+    //    这样不必为「统计」再开一个跨账号的 op。
+    const secretRows = Array.isArray(dump.secrets_files) ? dump.secrets_files : [];
+    const secretFiles = secretRows.length;
+    const secretBytes = secretRows.reduce((sum, r) => sum + (Number(r && r.size) || 0), 0);
     return {
       manifest: {
         app: 'ZXDesk',
@@ -956,6 +964,10 @@ module.exports = {
         raw: raw.map((r) => r.entry),
         // ⭐ 0.8.12：附件条数（老包没有这个键 ⇒ 读侧按 0 / 未带附件处理）。
         files: files.length,
+        // ⭐ 0.9.8：加密信息的附件（**未包含**在包里的那一批：条数 ＋ 明文字节合计）。
+        //    老包没有这两个键 ⇒ 读侧按 0 处理。
+        secretFiles,
+        secretBytes,
         counts: dump.counts,
       },
       raw,
@@ -979,7 +991,8 @@ module.exports = {
    *    `admin` / `admin123` —— 这是刻意保留的兜底（「永不把人锁在门外」），不是漏洞。
    *
    * @param {Object} dump - 整体备份对象（`exportWholeBackup()` 的产物）
-   * @returns {{ backupFile: ?string, counts: Object }} 恢复前快照的文件名与写回的各表条数
+   * @returns {{ backupFile: ?string, counts: Object, skippedDbs: Array.<string> }} 恢复前快照的文件名、
+   *      写回的各表条数、以及**这次没有动过的库**（备份里没有那一份 ⇒ 保持原样，见下）
    * @throws {Error} 备份格式不对（400）、数据层只读（503）、快照或写库失败（原样上抛，写库已回滚）
    */
   restoreWholeBackup(dump) {
@@ -1006,13 +1019,17 @@ module.exports = {
 
     // ⚠️ 顺序不能反：先快照、后覆盖。快照失败必须中止（宁可恢复不了，也不能恢复完没法退回去）
     const backupFile = this._bk.snapshot('restore');
-    this._bk.replaceWhole(tables);
+    // ⭐ 0.9.8：`replaceWhole()` 会回一份「哪些库被跳过」——
+    //    一份**不含实验室**的旧备份不该把现有实验室库清空（失败方向 = 少删），
+    //    而「没动过」这件事必须如实交给界面，⛔ 不许静默。
+    const applied = this._bk.replaceWhole(tables) || {};
+    const skippedDbs = Array.isArray(applied.skipped) ? applied.skipped : [];
 
     const counts = {};
     Object.keys(tables).forEach((t) => {
       counts[t] = countOf(tables, t);
     });
-    return { backupFile, counts };
+    return { backupFile, counts, skippedDbs };
   },
 
   /**
@@ -1942,6 +1959,12 @@ module.exports = {
     //    ⭐ 照N 条」），
     //    ⛔ 绝不静默 —— 导一份带附件的备份时，用户要看得到「附件没进来」这件事。
     counts._skipped += arrayOf(dump, { table: 'project_files', keys: ['project_files'] }).length;
+
+    // ---- ⭐ 0.9.8：加密信息的附件**同样不进个人备份** ----
+    //    理由：附件根本不在这份 JSON 里（导出侧只带 `secrets` 正文），
+    //    而它的文件更不可能被塞进一个 JSON 快照。这里与 `project_files` 逐字同款：
+    //    备份里若真有这些行（手工改过 / 将来版本带上了），**如实计数**，⛔ 不静默吞掉。
+    counts._skipped += arrayOf(dump, { table: 'secrets_files', keys: ['secrets_files'] }).length;
 
     // ---- 对话（0.3.5）：**两种模式都跳过**，并如实计数 ----
     // ⭐ 为什么连「替换」也不搬（与密码库刻意不同）：对话是**跨账号数据** ——

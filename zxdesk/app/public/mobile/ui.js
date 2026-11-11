@@ -41,6 +41,32 @@ export function toast(msg, isErr) {
 
 // ---------- 底部弹层 ----------
 /**
+ * 弹层是不是「锁着的」—— ⭐⭐ 0.9.8 第 3 轮：实验室首次进入的那份知情协议**必须先同意**
+ * 才能关（老大 2026-11-08：「不可关，必须先同意」）。
+ *
+ * ⚠️ 锁的是**关闭通路**（点遮罩、底部那颗关闭键、安卓返回键），不是一个新组件：
+ *    `closeSheet()` 在锁着时直接返回；`app.js` 的返回键那一段见到锁会把历史补回去、不清弹层。
+ * ⚠️ 解锁只有一个出口：`unlockSheet()`（只有「同意」那一支该调它）。
+ * @type {boolean}
+ */
+let sheetLocked = false;
+
+/**
+ * 功能：弹层是否处在「必须先同意」的锁定态。
+ * @returns {boolean} 锁着返回 true
+ */
+export const isSheetLocked = () => sheetLocked;
+
+/**
+ * 功能：解开弹层的锁定态 —— ⚠️ 只有协议弹窗的「同意」那一支该调它，调完紧接着 `closeSheet()`。
+ * @returns {void}
+ */
+export function unlockSheet() {
+  sheetLocked = false;
+  $('#sheet').classList.remove('locked');
+}
+
+/**
  * 功能：打开底部弹层 —— 填入标题 / 正文 HTML / 底部按钮 HTML，并把正文滚回顶部。
  * @param {string} title - 弹层标题
  * @param {string} bodyHtml - 正文 HTML
@@ -49,9 +75,14 @@ export function toast(msg, isErr) {
  * @param {boolean} [opts.fixed] - ⭐⭐ 0.8.24：**定高**（占外壳 80%，见 `app.css` 的 `.sheet.fixed`）
  *      —— 给「管理」那种**多页共用一个弹层**的场景用：三页内容长短差很多，不定高就会
  *      一页一页地变高变矮（切一下标签整个弹层跳一下）。缺省仍按内容自适应高度。
+ * @param {boolean} [opts.locked] - 为真时**锁住关闭通路**（遮罩 / 关闭键 / 返回键都不生效），
+ *      只有 `unlockSheet()` 能放行 —— 给「必须先同意」的协议弹层用。
  * @returns {void}
  */
 export function openSheet(title, bodyHtml, footHtml, opts) {
+  // ⭐⭐ 0.9.8 第 3 轮：协议弹层「必须先同意」—— 锁着时三条关闭通路全部失效。
+  sheetLocked = !!(opts && opts.locked);
+  $('#sheet').classList.toggle('locked', sheetLocked);
   // ⭐⭐ 第七轮（「弹窗这些的返回逻辑不对哦」）：
   //    **弹层必须自己占一条历史记录** —— 否则「在顶级屏（今天）开弹层再按返回」时，
   //    浏览器栈里没有可退的那一条，它**当场开始导航**（= 退出应用），宿主根本来不及接管。
@@ -102,12 +133,37 @@ export function openSheet(title, bodyHtml, footHtml, opts) {
  * @returns {void}
  */
 export function closeSheet(opts) {
+  // ⚠️⚠️ 0.9.8 第 3 轮：锁着的弹层关不掉 —— 点遮罩、底部关闭键、返回键最终都走到这里。
+  //    唯一出口是先勾选、点「同意」（那一支会先 `unlockSheet()`）。
+  //    ⚠️ 这里**只 return，不动任何状态**：`#sheet` 的 class、历史那一条都由「同意」那一趟收尾。
+  if (sheetLocked) return;
   const wasOpen = isSheetOpen();
+  sheetLocked = false;
+  $('#sheet').classList.remove('locked');
   $('#scrim').classList.remove('on');
   $('#sheet').classList.remove('on');  // ⭐⭐ 0.8.24：定高版同款还原 —— 不还原的话下一个弹层也会顶着 80% 高（一个短确认层
   // 被撑成半屏空白）；与电脑端 `closeModal()` 里那几句是同一条纪律。
   $('#sheet').classList.remove('fixed');
   state.sheetSave = null;
+  // ⭐⭐ 0.9.8：关掉就把正文拆掉 —— 理由与电脑端 `closeModal()` 同一条：
+  //    只收 class 的话，弹层里的 `<video>` 仍在文档里、可能继续缓冲，下次打开又从头拉一遍。
+  const sbody = $('#sheet-body');
+  if (sbody) {
+    sbody.querySelectorAll('video, audio').forEach((el) => {
+      try {
+        el.pause();
+      } catch (_e) {
+        /* 没在播 */
+      }
+      el.removeAttribute('src');
+      try {
+        el.load();
+      } catch (_e) {
+        /* 某些内核上 load() 会抛，忽略即可 */
+      }
+    });
+    sbody.innerHTML = '';
+  }
   const r = state.confirmResolve;
   state.confirmResolve = null;
   if (r) r(false);
@@ -205,6 +261,26 @@ export function askConfirm(opts) {
        )}</button>`,
     );
   });
+}
+
+/**
+ * 功能：弹一个**只有「知道了」一颗键**的提示层（只读信息，没有第二种选择）。
+ *
+ * 说明：⭐ 0.9.8（老大：「https 不行就弹窗说请使用 http 再次尝试」）：
+ *      `askConfirm` 会摆两颗键（取消 ＋ 确定）—— 纯提示摆两颗，等于让用户犹豫「我点哪个才不会丢东西」。
+ *      这里用 `sheet-close`（`mobile/app.js` 的 ACTIONS 表里已有）当唯一出口，点完就关。
+ *      ⚠️ 正文转义后插入，与 `askConfirm` 同一口径；`white-space:pre-wrap` 让话术里的换行原样保留。
+ *
+ * @param {string} title - 标题
+ * @param {string} text - 正文（纯文本）
+ * @returns {void}
+ */
+export function openNoticeSheet(title, text) {
+  openSheet(
+    title || '提示',
+    `<p style="font-size:14px;line-height:1.65;color:var(--ink-2);white-space:pre-wrap">${esc(text)}</p>`,
+    '<button class="btn primary" type="button" data-act="sheet-close" style="flex:1">知道了</button>',
+  );
 }
 
 /**

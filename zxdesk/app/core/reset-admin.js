@@ -34,9 +34,10 @@
  * ⚠️ 走 `Store` 而不是直接写 SQL：SQLite 与 JSON 两种后端自动都支持，也不必在 bash 里解析库文件。
  * ⚠️ 本脚本**不做版本/环境判断之外的任何写入**，除了目标账号的 `password_hash` 与 `session_epoch`。
  *
- * ⭐ 0.8.1（记账 2 期）：数据层同时开着两个库（主库 + 记账库），所以本工具要认得**四个**数据
- *    文件名（`zxdesk.db` / `zxdesk.json` / `zxdesk-ledger.db` / `zxdesk-ledger.json`）。
- *    ⚠️ 记账库打不开**不拦**本脚本：它只写账号行（住在主库），把人挡在门外解决不了任何问题 ——
+ * ⭐ 0.8.1（记账 2 期）＋ 0.9.8（zx 实验室）：数据层同时开着**三个**库（主库 + 记账库 + 实验室库），
+ *    所以本工具要认得**六个**数据文件名（`zxdesk.db` / `zxdesk.json` / `zxdesk-ledger.db` /
+ *    `zxdesk-ledger.json` / `zxdesk-lab.db` / `zxdesk-lab.json`）。
+ *    ⚠️ 分库打不开**不拦**本脚本：它只写账号行（住在主库），把人挡在门外解决不了任何问题 ——
  *    但会**如实告警一行**，免得「记账功能整天 503」被当成另一件事去查。
  *
  * 环境变量：
@@ -56,6 +57,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { Store, dbStatusOf } = require('./storage.js');
+// ⭐ 数据位置索引：搬过家之后 `DATA_DIR`（安装位置）里已经没有库，得跟着索引走到真实位置
+const dl = require('./data-location.js');
 const { hashPassword, hashUsable, MIN_PASSWORD_LENGTH } = require('./auth.js');
 
 /**
@@ -68,7 +71,7 @@ function die(msg) {
   process.exit(1);
 }
 
-const dataDir = String(process.env.DATA_DIR || '').trim();
+let dataDir = String(process.env.DATA_DIR || '').trim();
 const wanted = String(process.argv[2] || '').trim();
 
 if (!dataDir) {
@@ -80,21 +83,53 @@ if (!dataDir) {
 }
 
 if (!fs.existsSync(dataDir)) {
-  die(`数据目录不存在：${dataDir}\n     请用 DATA_DIR=<数据目录> 指定（位置每台机器不同）。`);
+  die(
+    `数据目录不存在：${dataDir}\n` +
+      '     请用 DATA_DIR=<数据目录> 指定（位置每台机器不同）；若搬过数据位置，也可以指向安装位置，' +
+      '本工具会按那里的索引跟过去。',
+  );
+}
+
+// ⭐ 跟随索引：`DATA_DIR` 是**安装位置**，而数据可能已经被搬到别处（设置 →「修改位置」）。
+//    判据刻意是「这里没有主库才跟」—— 显式给了一个真有库的目录时以它为准，不去覆盖人的指定。
+//    ⚠️ 索引指向的位置不可用时**报错退出**，⛔ 不回默认目录去改（那会在错的地方建库）。
+if (!dl.hasMainDb(dataDir)) {
+  // ⚠️ 只读 `DATA_DIR` 这一处索引，⛔ 不拿 `TRIM_PKGVAR` 兜底 —— 在飞牛 Web 终端里它指向
+  //    当前那个终端应用自己的目录，兜过去等于拿别人的目录当数据目录。
+  const idx = dl.readIndex(dataDir, dataDir).index;
+  if (idx && path.resolve(idx.current) !== path.resolve(dataDir)) {
+    if (!dl.hasMainDb(idx.current)) {
+      die(
+        `索引里记的数据位置（${idx.current}）里没有主库，不能在那里重置密码。\n` +
+          '     请先修好数据位置（应用里的恢复引导页，或 cmd/data-location-reset）。',
+      );
+    }
+    console.log(`（数据位置在 ${idx.current}，已按索引跟随过去）`);
+    dataDir = idx.current;
+  }
 }
 // 先确认这里真的是数据目录 —— `new Store()` 会 mkdir，指错了地方就会**凭空造一个空库**，
 // 然后告诉你「没有账号」，用户还以为数据丢了。宁可在这里停下。
-// ⭐ 0.8.1：数据层现在是**两个库**（主库 + 记账库）⇒ 认得的数据文件有四个，不是两个。
-//    ⚠️ 但判据不是「有任意一个就算」：只认到**记账库**那两个文件时必须停下 ——
+// ⭐ 0.8.1 / 0.9.8：数据层现在是**三个库**（主库 + 记账库 + 实验室库）⇒ 认得的数据文件有**六个**。
+//    ⚠️ 但判据不是「有任意一个就算」：只认到**分库**那几个文件时必须停下 ——
 //    那种情况下主库文件是真的不见了，而放行会让 `new Store()` 凭空建一个空的主库，
 //    接着 `--list` 告诉你「还没有任何账号」，把一个「主库丢了」的事故说成「你还没注册」
 //    （本脚本最容易骗人的一种失败）。所以这里把两件事分开说清楚。
-const DATA_FILES = ['zxdesk.db', 'zxdesk.json', 'zxdesk-ledger.db', 'zxdesk-ledger.json'];
+const DATA_FILES = [
+  'zxdesk.db',
+  'zxdesk.json',
+  'zxdesk-ledger.db',
+  'zxdesk-ledger.json',
+  // ⭐ 0.9.8：第三个库（`database: "lab"` 的模块的表）
+  'zxdesk-lab.db',
+  'zxdesk-lab.json',
+];
 const foundFiles = DATA_FILES.filter((f) => fs.existsSync(path.join(dataDir, f)));
 const hasMain = foundFiles.includes('zxdesk.db') || foundFiles.includes('zxdesk.json');
 if (!foundFiles.length) {
   die(
-    `在 ${dataDir} 里既没有 zxdesk.db 也没有 zxdesk.json（也没有记账库的 zxdesk-ledger.db / zxdesk-ledger.json），` +
+    `在 ${dataDir} 里既没有 zxdesk.db 也没有 zxdesk.json（也没有记账库的 zxdesk-ledger.db / zxdesk-ledger.json，` +
+      '也没有实验室库的 zxdesk-lab.db / zxdesk-lab.json），' +
       '这看起来不是 ZXDesk 的数据目录。\n' +
       '     请从 飞牛「应用中心 → ZXDesk → 应用设置」里抄出「数据目录」（每台机器的位置都不一样，\n' +
       '     所以这里不写死），然后带上它运行：\n' +
@@ -103,7 +138,7 @@ if (!foundFiles.length) {
 }
 if (!hasMain) {
   die(
-    `在 ${dataDir} 里只找到记账库（${foundFiles.join('、')}），主库的 zxdesk.db / zxdesk.json 都不在。\n` +
+    `在 ${dataDir} 里只找到分库（${foundFiles.join('、')}），主库的 zxdesk.db / zxdesk.json 都不在。\n` +
       '     这不是「还没注册账号」，而是主库文件不见了 —— 现在继续会凭空建一个空的主库，\n' +
       '     然后告诉你「没有账号」，很容易被当成数据全丢。\n' +
       '     请先从备份里把主库文件放回这个目录（整体备份压缩包里的 zxdesk.db / zxdesk.json），再重试。',

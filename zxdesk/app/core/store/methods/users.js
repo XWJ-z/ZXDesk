@@ -17,7 +17,7 @@
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.21
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md
  */
 const { nowStamp, sanitizeUser } = require('../helpers.js');
@@ -223,6 +223,49 @@ module.exports = {
     this._assertWritable();
     const stamp = nowStamp();
     return this._bk.setHideAi(uid, !!hide, stamp);
+  },
+
+  /**
+   * 功能：设置「这个账号不显示 zx 实验室」这条**个人偏好**，并返回是否真的更新到了一行。
+   *
+   * 说明：⭐ 与 `setHideIdea` 等**同一条决策的第十三个实例**：
+   *      存在 `users` 行上（`schema/core.js` 的 `hide_lab`）、删账号随行消失、**不动 `session_epoch`**。
+   *      ⚠️ 关掉的是**入口**，不是数据：实验室库（`zxdesk-lab.db`）里的实验数据一条不动，
+   *      重新打开立刻回来。⭐ 这一条对实验室尤其要紧 —— 「可能变、可能撤」的承诺里，
+   *      「撤掉/关掉时你的内容都一条不删」正是靠它成立的。
+   *      ⚠️ 它关的是**整个沙箱的入口**：里面的实验功能**没有各自的开关**（V1 的取舍）——
+   *      ⛔ 别照「一个实验一颗开关」的直觉往 `users` 上加列。
+   *
+   * @param {number} uid - 账号 id
+   * @param {boolean} hide - true 表示该账号界面不再出现 zx 实验室入口
+   * @returns {boolean} 是否真的更新到了一行（账号不存在时为 false）
+   * @throws {Error} 数据层只读时抛出（由 HTTP 层收口成 503）
+   */
+  setHideLab(uid, hide) {
+    this._assertWritable();
+    const stamp = nowStamp();
+    return this._bk.setHideLab(uid, !!hide, stamp);
+  },
+
+  /**
+   * 功能：记下「这个账号已同意 zx 实验室使用须知」，并返回是否真的更新到了一行。
+   *
+   * 说明：⭐ 首次进实验室要弹知情协议、勾选才能点同意，且**按账号记在服务端**
+   *      ⇒ 一个账号只问一次，换设备 / 换浏览器 / 重装都不再问。
+   *      与 `setHideLab` 同一条规矩：只改 `users.lab_agreed` 这一列、不碰 `session_epoch`、
+   *      删账号随行消失。
+   *      ⚠️ 它**不是开关**：没有「取消同意」的界面（要重读点顶部那颗「知情协议」即可），
+   *      但接口仍接受 `false` —— 留一条可回退的路，比写死单向更安全。
+   *
+   * @param {number} uid - 账号 id
+   * @param {boolean} agreed - true 表示已同意
+   * @returns {boolean} 是否真的更新到了一行（账号不存在时为 false）
+   * @throws {Error} 数据层只读时抛出（由 HTTP 层收口成 503）
+   */
+  setLabAgreed(uid, agreed) {
+    this._assertWritable();
+    const stamp = nowStamp();
+    return this._bk.setLabAgreed(uid, !!agreed, stamp);
   },
 
   /**
@@ -536,6 +579,8 @@ module.exports = {
       delete v.hide_calendar; // ⭐ 0.7.5：日历同款
       delete v.hide_ledger; // ⭐ 0.8.0：记账同款
       delete v.hide_trip; // ⭐ 0.8.6：行程同款
+      delete v.hide_lab; // ⭐ 0.9.8：zx 实验室同款（同一条红线：用不到的偏好就不给）
+      delete v.lab_agreed; // ⭐ 0.9.8 第 3 轮：是否同意过实验室须知（同一条红线 —— 「这个人进过实验室」也是偏好）
       delete v.hide_ledger_amount; // ⭐ 0.8.21：记账的眼睛初值同款（「这个人把金额藏起来了」也是偏好）
       // ⭐ 0.8.5 导航排序两列同款：它们是**账号本人的界面偏好**，管理员用不到，
       //    而「管理员看不到成员的数据」是需求红线 —— 用不到的字段就不给

@@ -1150,12 +1150,25 @@ function kindChanged(t, kf) {
  * @returns {Promise.<void>}
  */
 async function saveCard(root, st, tid) {
-  if (st.busy) return;
+  // ⚠️⭐ 0.9.8 第 18 轮（「手机端点确定无反应」）：这三处原来都是**纯静默 return** ——
+  //    点了「确定」，弹层既不关也不提示，看起来就是按钮坏了。现在每一处都要说话。
+  if (st.busy) {
+    toast('正在保存，请稍候');
+    return;
+  }
   const t = findCard(st.board, tid);
-  if (!t) return;
+  if (!t) {
+    toast('这条任务已经不在看板里了，请关掉重开', true);
+    st.cardFor = 0;
+    paint(root, st);
+    return;
+  }
   // ⭐ 0.8.54：弹层本体已经是宿主 `#sheet.body`（不再是自绘的 `.collab-modal`）
   const card = document.getElementById('sheet-body');
-  if (!card) return;
+  if (!card) {
+    toast('弹层已经不在了，请重新点开这条任务', true);
+    return;
+  }
   /** 取弹层里某一格的值（取不到回空串） */
   const val = (role) => {
     const el = card.querySelector('[data-role="' + role + '"]');
@@ -1217,11 +1230,21 @@ async function saveCard(root, st, tid) {
   // ⚠️ 负责人选「未认领」时**不发**（服务端把空值当「回落所有者」，那会静默改库）
   if (aEl && aEl.value !== aEl.dataset.init && aEl.value !== '') body.assignee_id = Number(aEl.value);
   if (!Object.keys(body).length) {
+    // ⚠️⭐ 0.9.8 第 18 轮：什么都没改就点「确定」时也要有个交代 —— 从前是「悄无声息地关掉」，
+    //    与「点了没反应」在屏幕上一模一样（尤其是网络慢、弹层还在做关闭动画的时候）。
+    toast('没有改动');
     st.cardFor = 0;
     paint(root, st);
     return;
   }
   st.busy = true;
+  // ⭐ 0.9.8 第 18 轮：**按下到返回之间要有可见的状态** —— 从前这一整段界面毫无变化，
+  //    请求慢一点用户只能反复点（而连点会被 `st.busy` 挡掉，看着更像「坏了」）。
+  const saveBtn = card.querySelector('[data-act="collab-card-save"]');
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = '保存中…';
+  }
   try {
     await api('PUT', '/api/collab/projects/' + st.pid + '/tasks/' + Number(tid), body);
     toast('已更新');
@@ -1231,6 +1254,11 @@ async function saveCard(root, st, tid) {
     toast(msgOf(e), true);
   } finally {
     st.busy = false;
+    // 保存成功时弹层已经被重画 / 关掉，那颗按钮不在文档里了（`isConnected` 为假）⇒ 不必还原
+    if (saveBtn && saveBtn.isConnected) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = '确定';
+    }
   }
 }
 
@@ -3351,7 +3379,7 @@ function paint(root, st) {
   // ⭐⭐ 0.8.54（「弹窗弹不出来，统一改为走宿主的 opensheet」）：**弹层不再画进看板**，
   //    改由 `syncSheet()` 交给宿主底部弹层（见那个函数的说明）。⚠️ 顺序：先把看板画完再同步弹层 ——
   //    反过来的话，打开弹层那一拍还在老的 DOM 上算滚动位置。
-  syncSheet(st);
+  syncSheet(st, root);
   if (scrollTop) scroller.scrollTop = scrollTop;
   // ---- 时间轴横向滚动（0.8.53）：首帧把**今天**滑到屏幕中间；之后只还原用户自己滑到的位置
   const gt2 = root.querySelector('[data-role="gt-scroll"]');
@@ -3436,10 +3464,13 @@ function currentSheet(st) {
  *      那里会把 `st` 上的标记一起清掉，所以下一次重画不会把弹层又弹回来。
  *      ⚠️ 反复重画时**只换 innerHTML**：内容里的输入框会重建（与从前自绘遮罩的行为一致，
  *      值由 `paint()` 里那段 keep/restore 还原）—— 这是既有取舍，⛔ 不是本轮引入的。
+ *      ⭐ 0.9.8 第 18 轮：**每次灌完内容都要重新直绑一次**（`bindSheetActions()`）—— 节点是新的，
+ *      旧绑定随旧节点一起消失。漏掉一处的表现就是「弹层能开，但按钮点了没反应」。
  * @param {Object} st - 状态
+ * @param {?HTMLElement} root - 本片段的根节点（直绑与 `paint()` 都要它）
  * @returns {void}
  */
-function syncSheet(st) {
+function syncSheet(st, root) {
   const want = currentSheet(st);
   if (!want) {
     if (isSheetOpen()) closeSheet();
@@ -3450,15 +3481,49 @@ function syncSheet(st) {
     // 我们以为开着、宿主其实关着（理论上由 zx:sheet-closed 兜住，这里是第二道保险）
     sheetKey = want.key;
     openSheet(want.title, '<div class="collab-sheet">' + want.body + '</div>', '');
+    bindSheetActions(root, st);
     return;
   }
   if (sheetKey !== want.key) {
     sheetKey = want.key;
     openSheet(want.title, '<div class="collab-sheet">' + want.body + '</div>', '');
+    bindSheetActions(root, st);
     return;
   }
   const box = document.getElementById('sheet-body');
   if (box) box.innerHTML = '<div class="collab-sheet">' + want.body + '</div>';
+  bindSheetActions(root, st);
+}
+
+/**
+ * 功能：给弹层里带 `collab-` 前缀的动作**直接**绑一次点击 —— `bindSheetActs()` 那道文档级委托之外的**第二道**。
+ *
+ * 说明：⭐⭐ 0.9.8 第 18 轮（「团队协作项目中手机端点击确定无反应」）：
+ *      弹层住宿主的 `#sheet`，不在本片段 `root` 里，所以它的点击只能靠文档级委托接住
+ *      （见 `bindSheetActs()` 的说明）。那条委托**看不见任何失败** —— 前缀对不上、
+ *      `#sheet-body` 的选择器没命中、监听器被别处抢了，全都表现为「按下去什么都不发生」，
+ *      既不报错也没有 toast，用户只能反复点。
+ *      ⇒ 每灌一次弹层内容就**把动作直接绑在按钮上**：这条路不经过任何选择器与委托判据。
+ *      ⚠️ 直绑之后要 `stopPropagation()`：否则同一次点击会被文档委托**再执行一遍**（重复提交）。
+ *      ⚠️ 只绑 `collab-` 前缀 —— 宿主的 `sheet-close`、别的模块的动作一律留给宿主。
+ *      ⚠️ 每次 `syncSheet()` 都要重绑（节点是新建的，旧监听随旧节点消失）；
+ *      这里**不记**「绑过没有」，因为记了反而会在「内容没变但节点换过」时漏绑。
+ * @param {?HTMLElement} root - 本片段的根节点（`paint()` 要用）
+ * @param {?Object} st - 状态
+ * @returns {void}
+ */
+function bindSheetActions(root, st) {
+  const box = document.getElementById('sheet-body');
+  if (!box || !root || !st) return;
+  for (const el of box.querySelectorAll('[data-act]')) {
+    const act = String(el.dataset.act || '');
+    if (act.indexOf('collab-') !== 0) continue;
+    el.addEventListener('click', (e) => {
+      // 这一下已经有人处理了 —— 别让文档委托再跑一遍（例：连发两条评论 / 保存两次）
+      e.stopPropagation();
+      runAct(root, st, act, el);
+    });
+  }
 }
 
 /**

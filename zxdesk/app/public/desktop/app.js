@@ -121,6 +121,8 @@ import {
 //    这一屏的入口、四个 pane 的显隐与屏内委托全在 `home-desktop.js`。
 //    ⚠️ 三个接口前缀一个字没改（`/api/{timetable,pomodoro,trip}`），AI 的授权键也没动。
 import { bindTimeEvents, openTime } from '../modules/time/home-desktop.js';
+// ⭐⭐ 0.9.8 第 7 轮：密码库自动锁定的**唯一计时者**（锁上时向全页派 `zx:vault-locked`）
+import { startVaultWatch } from '../core/vault-watch.js';
 
 /** 课表页头的两个下拉：`[按钮 id, 菜单 id]` —— 派发只认菜单条目上的 `data-tt-new` / `data-tt-set` */
 const TT_MENUS = [
@@ -155,6 +157,11 @@ const OPEN_MODULE = {
   //    所以 `ledger` / `digital` **不在这张表里**（它们没有侧栏入口）。
   assets: () => openAssets(),
   teamwork: openTeamwork,
+  // ⭐ 0.9.8：zx 实验室 —— **纯屏宿主**，值同样必须走动态 import（见下面 `openLab()`：
+  //    删掉 `public/modules/lab/` 时宿主页要照常起来）。
+  //    ⚠️ 必须把 `opts` 传下去：`?goto=lab:secrets`（从阅读器回来）要**直接落到那个实验**，
+  //    只调 `openLab()` 会退回卡片首页 —— 用户看到的就是「回来又不在原来的地方」。
+  lab: (opts) => openLab(opts),
   // ⭐ 0.8.9：`ai` **从这里撤掉了** —— 撤了 `nav` 之后它没有独立屏可开。
   //    ⚠️ `module-ui.test.js` 有一条断言钉着「`OPEN_MODULE` 的键 == 接线表里带 `nav` 的模块」，
   //    所以这两处**必须同进同出**（只改一处 = 那一条当场红）。
@@ -179,6 +186,26 @@ async function openWebpass(opts) {
     await m.openWebpass(opts);
   } catch (e) {
     toast('网址/密码夹打不开：' + e.message, true);
+  }
+}
+
+/**
+ * 功能：打开「zx 实验室」那一屏（0.9.8）—— ⛔ **必须动态 import**（与 `webpass` / `assets` 同一条纪律）。
+ *
+ * 说明：⚠️⭐ 静态 import 的后果是「删掉 `public/modules/lab/`」连累**宿主页起不来**
+ *      （模块求值即抛），而「删目录验收」要的正是「删掉它，宿主页照旧」。
+ *      ⚠️ 动态 import 的路径必须是**字面量**：`ttt/test/frontend-modules.test.js` 的孤岛检查
+ *      用正则扫 `import('…')`，写成变量它看不见 ⇒ 那个文件会被误判成「生了但从不执行」。
+ *
+ * @param {{slot?: string}} [opts] - `slot` = 这次要落到哪个实验（模块名）
+ * @returns {Promise.<void>}
+ */
+async function openLab(opts) {
+  try {
+    const m = await import('../modules/lab/desktop.js');
+    await m.openLab(opts);
+  } catch (e) {
+    toast('zx实验室打不开：' + e.message, true);
   }
 }
 
@@ -844,6 +871,8 @@ export async function init() {
   applySideCollapsed();
   bindEvents();
   bindQuickAddDefaults();
+  // ⭐ 0.9.8 第 7 轮：起全局锁库计时（幂等；各屏只当听众，⛔ 别再各写一个 setInterval）
+  startVaultWatch();
   state.view = 'home'; // 落点就是首页看板：先别渲染任务板，避免闪一下空板子
   state.weekStart = mondayOf(todayStr());
   state.selectedDate = todayStr();
@@ -856,6 +885,41 @@ export async function init() {
   showView('home');
   // ⚠️ `fresh: true`：看板数据是刚取回来的 ⇒ 若默认视图是日历，它也要取一次自己的数据
   renderHome({ fresh: true });
+  // ⭐ 从阅读器 / 外部链接回来时带的那一跳（见 `applyGotoParam()`）
+  applyGotoParam();
+}
+
+/**
+ * 功能：处理入口上的 `?goto=<模块>[:<slot>]` —— 打开工作台之后**直接落到那一屏**。
+ *
+ * 说明：⭐ 存在的唯一理由：阅读器是整页跳转，关掉时只能回到「应用首页的 URL」；
+ *      没有这一条，从阅读器回来的人会落在首页，而不是他刚才在看的加密信息。
+ *      ⚠️ 落点走**既有**的 `zx:open-module` 通道（模块之间零 import 的那一条），
+ *      ⛔ 不在这里硬 `import` 具体模块 —— `lab` 之类的目录是可以整块删掉的。
+ *      ⚠️ 用 `replaceState` 把参数清掉：否则刷新一次又跳一次。
+ * @returns {void}
+ */
+function applyGotoParam() {
+  let sp;
+  try {
+    sp = new URLSearchParams(location.search);
+  } catch (_e) {
+    return;
+  }
+  const goto = String(sp.get('goto') || '');
+  if (!goto) return;
+  const cut = goto.indexOf(':');
+  const mod = cut < 0 ? goto : goto.slice(0, cut);
+  const slot = cut < 0 ? '' : goto.slice(cut + 1);
+  sp.delete('goto');
+  const qs = sp.toString();
+  try {
+    history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : '') + location.hash);
+  } catch (_e) {
+    /* 沙箱 / file:// 下可能不允许：跳不跳得成不靠它 */
+  }
+  if (!mod) return;
+  document.dispatchEvent(new CustomEvent('zx:open-module', { detail: { mod, slot } }));
 }
 
 // ---------- 事件绑定 ----------

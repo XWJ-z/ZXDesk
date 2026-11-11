@@ -51,7 +51,17 @@ const { fail, json, notFound } = require('./http-util.js');
 const { handleBootstrap, handleDashboard, handleHealth, handleVersions } = require('./routes/system.js');
 const { handleExportOrg, handleImportUser, handleRestoreOrg } = require('./routes/backup.js');
 const { handleMigrateLedger } = require('./routes/migrate.js');
-const { logLine, runtime, store } = require('./context.js');
+// ⭐ 个人授权目录（跨模块的「我授权过哪些目录」汇总，挂核心不挂模块）
+const { handleGrants } = require('./routes/grants.js');
+const { STARTUP, dataDir, logLine, repair, runtime, store } = require('./context.js');
+// ⭐ 0.9.8 数据位置：未登录恢复引导的五个动作（必须在 401 闸门之前分派）与写冻结闸门
+const { handleLocation, rejectUnavailable } = require('./routes/data-location.js');
+const { isFreezing } = require('./data-location.js');
+// ⭐ 数据位置的**授权体检**：每次启动查一次（官方口径：重启后要重新同步授权状态）
+const locationAuth = require('./location-auth.js');
+// ⚠️ 只有「自定义位置」才强制校验：默认位置由飞牛的 data-share 安排，不在共享授权清单里，
+//    拿那份清单去判它会在每台正常安装的机器上误报「未授权」（见 location-auth 的 `enforce`）。
+locationAuth.init({ dataDir, enforce: STARTUP.mode === 'custom', log: logLine });
 const { registry, routeTable } = require('../modules/registry.js');
 const { serveStatic } = require('./static.js');
 
@@ -164,6 +174,10 @@ const LEGACY_API_ROUTES = {
   //    `handleAdmin`（成员管理 / 数据位置）—— 两处同时登记会**启动即抛**，塞进那条前缀则会让
   //    账号路由同时管两件毫不相干的事。口径与 `routes/backup.js` 头部写的那段逐字一致。
   'migrate-ledger': handleMigrateLedger,
+  // ⭐ **个人授权目录**（设置页汇总 ＋ 加密信息选目录）。
+  //    ⚠️ 它不属任何模块 —— 那正是它存在的理由：以后每个要目录的功能都往这里登记，
+  //    界面上只有一张清单（见 `store/methods/grants.js` 的文件头）。
+  grants: handleGrants,
   // ⚠️ 0.3.5 对话（好友 / 会话 / 消息）的两条「不一样」仍然成立，只是它现在**住在模块目录里**
   //    （`modules/teamwork/`，0.5.0）：① 它是**跨账号**数据 —— 判权看 `teamwork_members`
   //    （谁在这个会话里）而不是 `user_id`；② 它还有一个**长连接端点** `GET /api/teamwork/stream`，
@@ -203,11 +217,20 @@ function handleApi(req, res, urlPath) {
   const parts = url.pathname.split('/').filter(Boolean); // ['api', ...]
   const method = req.method;
   const user = currentUser(req);
+  // ⭐ 给慢请求日志留个账号名（`res` 是这次请求独有的对象，不会串号）
+  if (user) res.zxUser = user.username;
 
-  // ---- 闸门之前：只允许「不看到任何人的数据」的两个入口 ----
+  // ---- 闸门之前：只允许「不看到任何人的数据」的几个入口 ----
   // ⚠️ 顺序是安全关键：这两条一旦挪到闸门之后，未登录就看不到登录页/健康检查；
   //    反过来说，**别的任何 `parts[1]` 都不许**在闸门之前分派（那就是漏鉴权）。
   if (method === 'GET' && parts[1] === 'health') return handleHealth(req, res, user);
+  // ⭐ 数据位置恢复引导（未登录可用）：**必须在闸门之前**，否则位置不可用时连修复入口都打不开。
+  //    ⚠️ 它自带「只认统一网关」的来源检查（见 `routes/data-location.js` 的 `isGatewayRequest`）。
+  if (parts[1] === 'location') return handleLocation({ req, res, parts, url, method });
+
+  // ⭐ 位置不可信（MISSING / MARKER / NO_DB / UNREADABLE …）：除健康检查与恢复引导之外一律 503。
+  //    ⛔ 这里绝不「先凑合开个空库」——那会让用户以为数据还在，随后写进去的东西全部落在一个新库里。
+  if (repair) return rejectUnavailable(res, repair.reason);
   // /api/auth/*（免登录入口，必须在闸门之前）
   if (parts[1] === 'auth') {
     // ⭐ 009 报告 S3：**登出时把该账号已建立的 SSE 长连接一并断开** ——
@@ -216,6 +239,11 @@ function handleApi(req, res, urlPath) {
     //    ⚠️ 走 `teamworkStream` **可选钩子**（与下面那条长连接分派同一个对象）：模块被删掉时它是 null，
     //    这里什么都不做、登出照常成功。改密 / 被重置走的是另一条路（`session_epoch` 复核，见 `stream.js`）。
     if (user && method === 'POST' && parts[2] === 'logout' && teamworkStream) teamworkStream.dropUser(user.id);
+    // ⚠️ 冻结期间**改密码 / 改登录名一律拒绝**：这两件事不能丢，而迁移期间写不进库；
+    //    登录 / 登出仍放行（只写 `last_login_at`，丢了不影响数据正确性，且不放行会把用户锁在门外）。
+    if (isFreezing() && ((method === 'POST' && parts[2] === 'password') || (method === 'PUT' && parts[2] === 'username'))) {
+      return json(res, 503, { error: 'maintenance', message: '应用正在切换数据位置，重启后再改' });
+    }
     return handleAuth(req, res, parts, user);
   }
 
@@ -228,6 +256,9 @@ function handleApi(req, res, urlPath) {
   //    ⚠️ 前端拿到 `must_setup` 会跳 `/setup.html`；静态页那一侧还有一道 302（见 `static.js`），
   //    两道缺一都能被绕过（只拦接口 ⇒ 能看见界面壳子；只拦页面 ⇒ 能直接打接口）。
   if (mustSetupUser(user)) return json(res, 403, { error: 'must_setup' });
+
+  // ⭐ 写冻结（迁移中 / 待重启）：只放行读请求，避免新旧两份数据分叉。
+  if (isFreezing() && method !== 'GET') return json(res, 503, { error: 'maintenance' });
 
   // ⭐ 0.3.5 对话的 **SSE 长连接** —— 必须在查 `API_ROUTES` 表**之前**分派。
   //    原因与 `/api/health` 同类：长连接不能走「处理完就 `res.end()`」的常规路径。
@@ -281,7 +312,7 @@ function handleApi(req, res, urlPath) {
  *    真机表现是**桌面版 DOM 渲染了但分流脚本没跑**（平板停在电脑版、`#app` 高度塌陷）。
  *    ⚠️⭐ **0.9.7 又一次**：平板在飞牛桌面里是**自由窗口**（1080×706 这种），老判据把它判成手机，
  *    于是加了「短边 ≥ 600 一律电脑版」的闸门 —— 哈希变成 `nmM493Cj…`。
- *    ⚠️⭐ **0.9.7 当天再补一次**（老大「还是这样」）：真正拦住平板的是**服务端** `static.js` 的 `isPhoneUA`
+ *    ⚠️⭐ **0.9.7 又补一次**：真正拦住平板的是**服务端** `static.js` 的 `isPhoneUA`
  *    （含 `Android` ⇒ 请求阶段就 302 去 /mobile/，本文件的内联脚本压根没执行）。服务端收窄成
  *    iPhone / iPod / Windows Phone 三种之后，内联脚本才真正跑起来 —— 哈希变成 `0FRBIaz8…`。
  *    ⛔ 以后动内联脚本，跑一遍 `security-headers.test.js` 拿新哈希再贴回来。
@@ -300,8 +331,20 @@ const CSP_DIRECTIVES = [
   `object-src 'none'`,
 ];
 
+/** 慢请求阈值（毫秒）：超过就记一行 —— 「用户说卡」时先看日志里有没有它，比猜快得多 */
+const SLOW_REQUEST_MS = 1000;
+
 function handleRequest(req, res) {
+  const startedAt = Date.now();
   const urlPath = req.url || '/';
+  // ⭐ 慢请求日志（可观测）：只记方法 / 路径 / 毫秒 / 账号名 ——
+  //    ⛔ 不记查询串与请求体：正文与文件名都可能是秘密，日志是明文落盘的。
+  res.on('finish', () => {
+    const ms = Date.now() - startedAt;
+    if (ms < SLOW_REQUEST_MS) return;
+    const p = String(urlPath).split('?')[0];
+    logLine('warn', `慢请求 ${req.method} ${p} ${ms}ms${res.zxUser ? `（账号「${res.zxUser}」）` : ''}`);
+  });
   // ⭐ 安全响应头加在**这一层**：`handleRequest` 是两个 server（TCP 8990 + 网关 Socket）唯一的共同
   //    入口，连 302 / 404 / SSE 都覆盖，且不用改任何前端文件、也不碰静态托管的那几个出口分支。
   res.setHeader('Content-Security-Policy', CSP_DIRECTIVES.join('; '));
@@ -389,6 +432,13 @@ function listen(port, remaining) {
   server.listen(port, () => {
     server.removeListener('error', onError);
     runtime.port = port; // 回填真实端口，供 /api/health 上报（见 context.js 的 runtime 说明）
+    // ⭐ 启动即体检一次授权（异步、失败不影响服务起来）。⚠️ 必须在 `store` 打开之后：
+    //    它要问的是「当前数据目录还在不在授权列表里」，而目录由索引决定。
+    if (store) {
+      locationAuth
+        .checkAtStartup()
+        .catch((e) => logLine('warn', `数据位置授权体检未完成: ${(e && e.message) || e}`));
+    }
     logLine('info', `ZXDesk 服务已启动: http://0.0.0.0:${port}（版本 ${APP_VERSION}）`);
     listenGatewaySocket(); // 端口起来了再挂网关通道（两条通道互不阻塞）
   });

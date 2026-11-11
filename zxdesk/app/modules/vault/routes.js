@@ -30,7 +30,7 @@
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.8.18
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/16-密码库.md、docs/公共/开发方案/05-密码库-1期.md
  */
 'use strict';
@@ -46,6 +46,8 @@ const {
   checkVaultTagCreate,
   checkVaultTagRename,
   checkVaultTagRemove,
+  // ⭐ 0.9.8：「空密码」的唯一判据（`' '` / 全角空格 / 零宽空格 / BOM 全部算空）
+  isBlankPassword,
 } = require('../../core/validate.js');
 
 /**
@@ -58,6 +60,24 @@ const {
  * @param {number} uid - 账号 id
  * @returns {string} 节流键
  */
+/**
+ * 功能：从请求体里取主密码 —— **同时接受 `masterPassword` 与 `password` 两个键**。
+ *
+ * 说明：⭐⭐ 全站解锁 / 初始化用的都是 `masterPassword`（那是 `checkMasterPassword()` 的口径），
+ *      而钥匙导出 / 导入这两条新接口在**方案与前端**里写的是 `password`。
+ *      两个键都认，是为了「一端升级、另一端还没升级」的那段窗口不出现
+ *      「功能突然要你重输一次、还提示请输入主密码」—— 那种 bug 在真机上极难复现。
+ *      ⚠️ 判据仍然只有一处：`checkMasterPassword()`（长度 / 空白由它管，这里只做搬键）。
+ * @param {*} b - 请求体
+ * @returns {string} 校验通过的主密码明文
+ * @throws {Error} 没带 / 太短（400，话术由 `checkMasterPassword()` 给）
+ */
+function checkPw(b) {
+  const src = b && typeof b === 'object' ? b : {};
+  if (src.masterPassword !== undefined && src.masterPassword !== null) return checkMasterPassword(src);
+  return checkMasterPassword({ masterPassword: src.password });
+}
+
 function throttleKey(uid) {
   return `vault:${Number(uid)}`;
 }
@@ -190,6 +210,123 @@ function handleVault({ req, res, parts, method, uid, user }) {
     }
   }
 
+  // ---- 钥匙文件（.zxkey）：导出 / 导入 / 列表 / 删除（0.9.8 第 6 轮）----
+  // ⚠️ 必须排在下面「单条」那一段**之前**：`key` / `keys` 都不是 id，
+  //    走到 `idParam('key')` 就变成 404 了（与 `/generate`、`/tags` 同一个原因）。
+  //    ⛔ 响应体里绝不出现任何密钥材料（`kid` 是指纹，可以回）。
+  if (parts[2] === 'key' && parts.length === 4) {
+    if (method !== 'POST') return notFound(res);
+    if (parts[3] === 'export') {
+      return readBody(req, res, (b) => {
+        if (!b) throw httpError(400, 'bad body');
+        const key = throttleKey(uid);
+        const limited = loginThrottle.check(key);
+        if (limited) return json(res, 429, { error: limited });
+        const pw = checkPw(b);
+        let out;
+        try {
+          out = store.keyExport(uid, pw);
+        } catch (e) {
+          // ⚠️ 只有「主密码不正确」才计入节流（与解锁同一条口径）
+          if (e && e.status === 403) loginThrottle.fail(key);
+          throw e;
+        }
+        loginThrottle.reset(key);
+        const buf = Buffer.from(JSON.stringify(out, null, 2), 'utf8');
+        const day = String(out.created_at || '').slice(0, 10).replace(/-/g, '') || 'key';
+        // ⚠️ 文件名里有账号名（那是用户自己的信息），但 ⛔ 不含任何密钥材料
+        const name = `zxdesk-key-${String(user.username || 'vault')}-${day}.zxkey`;
+        // ⚠️ 日志里只有「谁导出了钥匙」——⛔ 不记文件名（文件名带账号名）
+        logLine('warn', `账号「${user.username}」导出了钥匙文件（这是全部加密数据的总钥匙）`);
+        res.writeHead(200, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+          'Content-Length': String(buf.length),
+          'Cache-Control': 'no-store',
+          'X-Content-Type-Options': 'nosniff',
+        });
+        res.end(buf);
+      });
+    }
+    if (parts[3] === 'inspect') {
+      // ⭐⭐ 0.9.8 第 7 轮（方案 §14.6.1.3）：阅读器「选文件 → 识别 → 输密码」的第 2 步。
+      //    ⚠️ **不验密码、不落库**：只回答「这是谁的钥匙、编号多少、以前导过没有」。
+      //    ⚠️ 节流与 import 共用同一个键 —— 否则「大量试文件」可以绕开 import 的限速。
+      return readBody(req, res, (b) => {
+        if (!b) throw httpError(400, 'bad body');
+        const tkey = `reader:import:${Number(uid)}`;
+        const limited = loginThrottle.check(tkey);
+        if (limited) return json(res, 429, { error: limited });
+        // ⭐ 与 import 同样允许两种形态（对象 / 原始文本）
+        let file = b.file;
+        if (typeof file === 'string') {
+          if (Buffer.byteLength(file, 'utf8') > 64 * 1024) {
+            throw httpError(400, '这不是一个有效的钥匙文件');
+          }
+          try {
+            file = JSON.parse(file);
+          } catch (_e) {
+            throw httpError(400, '这不是一个有效的钥匙文件');
+          }
+        }
+        const r = store.keyInspect(uid, file);
+        // ⚠️ 日志只说「谁识别了一把钥匙」——⛔ 不记编号、不记来源账号（那两样进日志没有排查价值）
+        logLine('info', `账号「${user.username}」识别了一把钥匙文件`);
+        return json(res, 200, r);
+      });
+    }
+    if (parts[3] === 'import') {
+      return readBody(req, res, (b) => {
+        if (!b) throw httpError(400, 'bad body');
+        const tkey = `reader:import:${Number(uid)}`;
+        const limited = loginThrottle.check(tkey);
+        if (limited) return json(res, 429, { error: limited });
+        const pw = checkPw(b);
+        // ⭐ 允许两种形态：直接给对象（前端 `JSON.parse` 过），或给原始文本（用户粘贴进来的）
+        let file = b.file;
+        if (typeof file === 'string') {
+          if (Buffer.byteLength(file, 'utf8') > 64 * 1024) {
+            throw httpError(400, '这不是一个有效的钥匙文件');
+          }
+          try {
+            file = JSON.parse(file);
+          } catch (_e) {
+            throw httpError(400, '这不是一个有效的钥匙文件');
+          }
+        }
+        let r;
+        try {
+          r = store.keyImport(uid, file, pw);
+        } catch (e) {
+          if (e && e.status === 403) loginThrottle.fail(tkey);
+          throw e;
+        }
+        loginThrottle.reset(tkey);
+        logLine(
+          'warn',
+          `账号「${user.username}」导入了一把钥匙${r.already ? '（本来就在）' : ''}（来自账号「${r.owner_name || r.owner_uid || '未知'}」）`,
+        );
+        return json(res, r.already ? 200 : 201, Object.assign({ ok: true }, r));
+      });
+    }
+    return notFound(res);
+  }
+  if (parts[2] === 'keys' && parts.length <= 4) {
+    if (parts.length === 3 && method === 'GET') {
+      return json(res, 200, { keys: store.listImportedKeys(uid) });
+    }
+    if (parts.length === 4 && method === 'DELETE') {
+      const kid = String(parts[3] || '');
+      // ⚠️ `kid` 是 16 位十六进制（`sha256` 前缀）—— 形状不对直接 404，别把它当自由文本塞进 SQL
+      if (!/^[0-9a-f]{16}$/.test(kid)) return notFound(res);
+      const r = store.removeImportedKey(uid, kid);
+      if (!r.removed) return notFound(res);
+      logLine('info', `账号「${user.username}」删掉了一把导入的钥匙`);
+      return json(res, 200, { ok: true });
+    }
+    return notFound(res);
+  }
+
   // ---- 自动锁定偏好（要解锁）----
   if (method === 'PUT' && parts.length === 3 && parts[2] === 'settings') {
     return readBody(req, res, (b) => {
@@ -214,8 +351,14 @@ function handleVault({ req, res, parts, method, uid, user }) {
         const fields = checkVaultItem(b);
         // ⚠️ 密码是新增时唯一的必填项，且**在这里**查（校验层只管「带了就校验」，
         //    这样编辑时「只改标题」不会被要求重发密码）—— 与收藏夹的 url、硬件的 name 同一手法
-        if (!fields.password)
-          throw httpError(400, '密码不能为空（密码库不存「空密码」条目，只存用户名请填在用户名里）');
+        // ⭐⭐ 0.9.8（方案 42 §一·1）：判据从 `!fields.password` 换成 `isBlankPassword()` ——
+        //    前者是**真假值**判据，而 `' '` 是真值 ⇒ 「只敲一个空格」照样 201（实测过）。
+        //    ⚠️ 只换判据、**不动落库值**：`" a b "` 仍然原样存（见 `isBlankPassword` 的说明）。
+        if (isBlankPassword(fields.password))
+          throw httpError(
+            400,
+            '密码不能为空（密码库不存「空密码」条目，只存用户名请填在用户名里）—— 只输空格不算密码',
+          );
         const r = store.createVaultEntry(uid, fields);
         return json(res, 201, r);
       });
@@ -240,8 +383,11 @@ function handleVault({ req, res, parts, method, uid, user }) {
       const fields = checkVaultItem(b);
       // ⚠️ 密码**带了就不许清空**：这条记录的意义就是「存着一个密码」，
       //    清空它等于把条目变成一条没有内容的空行（要删就删整条，那个动作是明确的）
-      if (Object.prototype.hasOwnProperty.call(fields, 'password') && !fields.password) {
-        throw httpError(400, '密码不能为空（要清掉这条记录请直接删除它）');
+      // ⭐⭐ 0.9.8：同样的真假值漏洞（`' '` 是真值）—— 换 `isBlankPassword()`。
+      //    ⚠️ 判据仍然只在「带了 `password` 键」时才跑：不带这个键的编辑（只改标题 / 标签）
+      //    必须照旧 200，⛔ 别把上面那句 `hasOwnProperty` 去掉。
+      if (Object.prototype.hasOwnProperty.call(fields, 'password') && isBlankPassword(fields.password)) {
+        throw httpError(400, '密码不能为空（要清掉这条记录请直接删除它）—— 只输空格不算密码');
       }
       store.updateVaultEntry(uid, id, fields);
       return json(res, 200, { ok: true });

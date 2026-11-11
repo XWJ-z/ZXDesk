@@ -392,6 +392,34 @@
         </section>
 
 
+        <!-- ⭐⭐ 0.9.8 zx 实验室（方案 41 / 决策 143）：**纯屏宿主**，分两层 ——
+             ① 首页是**卡片**（一个实验一张卡，项与说明由 `slotDefs()` 从两端接线表算出来，⛔ 一个都不写死）；
+             ② 点卡片进去才是那个实验的界面，**动态挂**进 `#lab-body`（`core/slots.js` 的 `mountModuleSlot()`）。
+             ⚠️ 药丸（`#lab-tabs`）只在**实验视图**里出现、且 ≥2 个实验时才画：首页用卡片，不需要它。
+             它住**屏头静态槽**（⊂ `.home-title`），⛔ 不许放进 `#lab-body`
+             —— 后者每画一次就被整块换掉，而「切换控件在两个视图下都在」只有视图中立区做得到。
+             ⭐⭐ **`#lab-bar`（返回 ＋ 实验名 ＋ 设计说明）也住这里**，理由同上：它必须与右侧
+             三入口同一条基线（`.home-head` 是 `flex` ＋ `align-items:center`），而且切实验时不能跟着
+             `#lab-body` 整块重画。首页 / 0 个实验时清空（`#lab-bar:empty` 不占位）。
+             ⚠️ 这一屏**必须**进 `desktop/shell.js` 的 `VIEW_NODES`，否则 `showView('lab')`
+             会把全屏都藏掉、什么都不显示（0.8.0 记账踩过一次）。
+             ⚠️ 0 个实验时 `#lab-body` 里由 JS 画一句空状态（「这里将来放实验功能」），⛔ 不许空白屏。 -->
+        <section id="lab-view" class="view hidden">
+          <div class="home-head">
+            <div class="home-title">
+              <span id="lab-bar"></span>
+              <span id="lab-tabs"></span>
+            </div>
+            <!-- ⭐⭐ 0.9.8 第 3 轮（方案 §8.3）：**顶部三入口** —— 知情协议 / 反馈调研 / 交流群，
+                 各开一个弹窗；不带图标（老大 2026-11-08 拍板「只留文字」）。
+                 ⚠️⚠️ 它必须住 `#lab-body` **外面**：`#lab-body` 每次切实验都整块重画，
+                 放里面会跟着消失。所以挂在这一层（`.home-head` 是 `space-between`，天然靠右）。
+                 内容由 `modules/lab/desktop.js` 的 `openLab()` 画**一次**（⛔ 别放进 `paint()`）。 -->
+            <div class="lab-tools" id="lab-tools"></div>
+          </div>
+          <div id="lab-body" class="lab-body"></div>
+        </section>
+
         <!-- ⭐ 0.8.7 网址/密码夹（方案 27）：**纯屏模块** —— 屏顶一颗药丸 `网址 ｜ 密码`，
              按选择把 `bookmarks` / `vault` 的界面**动态挂**进 `#webpass-body`
              （`core/slots.js` 的 `mountModuleSlot()`，决策 77 / 91）。
@@ -922,6 +950,14 @@
          ⚠️ 这份清单必须与实际 import 图完全一致 —— `ttt/test/frontend-modules.test.js`
             会拿它和真实的模块图核对，加了新模块却忘了登记会**直接测试失败**。
          ⚠️ 不要在这里写 `login.js`：它是经典脚本（未登录就要跑），不是模块。 -->
+    <!-- ⭐ 数据位置（三行库 / 红字 / 修改位置）：电脑端设置页与外壳横幅都静态 import 它。
+         ⚠️ 修改位置只从**已授权目录**里挑，不再用宿主选择器 ⇒ `core/host-pick.js` 不在本页的
+         preload 清单里（它只被恢复引导页与加密信息模块用，那两处各自按需加载）。 -->
+    <link rel="modulepreload" href="core/data-location.js" />
+    <!-- ⭐ 原生日期 / 时间控件的「点任意处都开选择器」（记账两端都静态 import 它） -->
+    <link rel="modulepreload" href="core/native-picker.js" />
+    <!-- ⭐ 已授权目录的逐层浏览（设置页里「修改数据位置」静态 import 它） -->
+    <link rel="modulepreload" href="core/dir-tree.js" />
     <link rel="modulepreload" href="desktop/modules.js" />
     <link rel="modulepreload" href="desktop/shell.js" />
     <link rel="modulepreload" href="desktop/state.js" />
@@ -931,6 +967,10 @@
     <link rel="modulepreload" href="desktop/views/home.js" />
     <link rel="modulepreload" href="desktop/views/search.js" />
     <link rel="modulepreload" href="desktop/views/settings.js" />
+    <!-- ⭐ 0.9.8 第 11 轮：设置页的「个人授权目录」用的公用件（core/grants.js）。
+         ⚠️ 它被 `desktop/views/settings.js` **静态** import ⇒ 必须在这里登记
+         （`frontend-modules.test.js` 钉着「modulepreload ⟷ 入口静态 import 图」的双向等式）。 -->
+    <link rel="modulepreload" href="core/grants.js" />
     <!-- ⭐ 模块自己的前端（0.5.0 模块化重构）：一个模块一个目录，前后端模块名对齐 -->
     <!-- ⭐ 0.8.7（方案 27）：网址收藏夹与密码库**不再有自己的屏**（并进 `webpass` 那一屏，界面由视图片段动态挂载）
          ⇒ 它们的静态 import 已从 `desktop/app.js` 摘掉 ⇒ 这三行必须跟着删（`frontend-modules.test.js` 钉着
@@ -999,6 +1039,7 @@
     <link rel="modulepreload" href="modules/time/pomodoro-shared.js" />
     <link rel="modulepreload" href="core/about.js" />
     <link rel="modulepreload" href="core/api.js" />
+    <link rel="modulepreload" href="core/vault-watch.js" />
     <link rel="modulepreload" href="core/backup.js" />
     <link rel="modulepreload" href="core/cache.js" />
     <link rel="modulepreload" href="core/bookmarks.js" />

@@ -138,6 +138,8 @@
 //    ⇒ 额外 import `backToLogin` 与 `BASE`（本文件只在一处 `postRaw()` 里用，⛔ 不散到调用点）。
 import { api, backToLogin, BASE } from '../../core/api.js';
 import { $, esc } from '../../core/dom.js';
+// ⭐ 原生日期 / 时间控件：点任意处都开系统选择器（判据与顺序在那一处，两端共用）
+import { bindNativePickerOnce, openNativePicker } from '../../core/native-picker.js';
 import { state } from '../../mobile/state.js';
 import { askConfirm, closeSheet, openSheet, paintChrome, toast } from '../../mobile/ui.js';
 import {
@@ -251,6 +253,11 @@ import {
   toneStyle,
   matchNote,
   pickDefaultAccount,
+  // ⭐ 0.9.8（2026-11-10「选择不了月份」）：与电脑端**同一份判据**
+  //    —— 月恒 12 项（`MONTHS_ALL`）、年取连续区间（`pickerYears`）、账户详情每月铺满 12 项。
+  MONTHS_ALL,
+  pickerYears,
+  monthOptionsAll,
 } from './entry-calc.js';
 
 /** 余额与名称的长度/形状上限由**服务端**判（`modules/ledger/routes.js`），这里只给输入框加 `maxlength` 提示 */
@@ -684,19 +691,14 @@ function entryMonthOptions() {
 /** 功能：详情屏月份下拉的选项（同上）。 @returns {Array.<string>} 月份键（倒序） @since 0.8.0 */
 function chgMonthOptions() {
   const todayMonth = monthOf((state.lg && state.lg.today) || '');
-  const set = new Set(monthOptions(state.lgChg || [], todayMonth));
   // ⭐⭐ 0.8.21（「这个月份选择根本选择不了，只有本月」）：**主来源是服务端的
   //    `/api/ledger/periods`**（`state.lgPeriods.months`：有数据的月，含**三方导入**的月）。
-  //    ⚠️⚠️ 光靠上面那两行推不出来：`state.lgChg` 是**这一页明细**（接口一次只给一个月的 30 条）⇒
+  //    ⚠️⚠️ 光靠 `state.lgChg` 推不出来：它是**这一页明细**（接口一次只给一个月的 30 条）⇒
   //    `monthOptions()` 从它身上只能收回"当前那一个月"，下拉永远只有一项、点不动。
-  //    ⚠️ 与电脑端逐字同一条修法，也与本文件 `loadPeriods()` 的既有用法同源。
-  for (const m of (state.lgPeriods && state.lgPeriods.months) || []) set.add(String(m));
-  for (const m of state.lgMonths) set.add(m);
-  set.add(chgMonthKey());
-  return [...set]
-    .filter((k) => /^\d{4}-\d{2}$/.test(k))
-    .sort()
-    .reverse();
+  const rows = [].concat(state.lgChg || [], (state.lgPeriods && state.lgPeriods.months) || [], state.lgMonths, [chgMonthKey()]);
+  // ⭐⭐ 0.9.8（2026-11-10「没有数据的月份也要能选」）：`monthOptionsAll()` —— 那些年
+  //    **每一年铺满 12 个月**。与电脑端逐字同一条修法。
+  return monthOptionsAll(rows, todayMonth);
 }
 
 /**
@@ -2153,6 +2155,8 @@ async function commitOrder(kind, siblings, from, to) {
  */
 export function bindLedgerOnce() {
   const box = $('#view-ledger');
+  // ⭐ 日期 / 时间控件：点任意处都开系统选择器（只挂一次，见 `core/native-picker.js`）
+  bindNativePickerOnce();
   if (!box || box === ledgerViewNode) return;
   ledgerViewNode = box;
   box.addEventListener('change', (e) => {
@@ -4129,20 +4133,12 @@ function expToOf() {
  * @returns {void}
  * @since 0.8.2
  */
-export function lgExpDateOpen(_act, n) {
+export function lgExpDateOpen(_act, n, ev) {
   const row = n && n.closest ? n.closest('.lg-expdate') : null;
   const inp = row ? row.querySelector('input[type="date"]') : null;
-  if (!inp || inp.disabled) return;
-  // ⚠️ `showPicker()` 在"选择器已经开着"时会抛 InvalidStateError ⇒ 接住、不当成出错
-  if (typeof inp.showPicker === 'function') {
-    try {
-      inp.showPicker();
-      return;
-    } catch (_e) {
-      /* 已经开着 / 这个环境不让程序开 ⇒ 落下去 focus */
-    }
-  }
-  inp.focus();
+  // ⚠️ 判据与顺序全在 `core/native-picker.js` 那一处（两端共用）：
+  //    「先开、成功才拦默认动作，开不了就原样交回原生」—— 这里 ⛔ 别再自己写一遍。
+  openNativePicker(inp, ev);
 }
 
 /**
@@ -5107,17 +5103,24 @@ function rangeBarHtml() {
 }
 
 /**
- * 功能：年度下拉 —— 选项**来自服务端**（`overview.years`：当前年 ∪ 有过快照的年）。
+ * 功能：年度下拉 —— **连续区间**（`pickerYears()`：已知年 ∪ 今天，前后各补 5 / 1 年），降序。
  *
- * 说明：⚠️⭐ 选项**必须来自真实数据**：写死「今年 ± N 年」会让用户选到一整年空白的走势图，
- *      而他没法知道那不是 bug。
+ * 说明：⚠️⭐ 0.9.8（2026-11-10「一起改成连续的」）：原先只列 `overview.years`（有快照的年）——
+ *      某一年一整年没记账，那一年就选不到；而同一条投诉里「选择月份」已经放开，两处口径必须一致。
+ *      为什么不用「今年 ± N 年」一刀切：三方导入的老账（2023 / 2024）会落在区间外 ⇒
+ *      那样"导入进来的反而选不到"。取「已知年 ∪ 今天」的 min / max 再各向外补，中间**不留缺口**。
+ *      ⚠️ 正在看的那一年（`state.lgYear`）**必须并进已知年** —— 否则它会落在区间外，
+ *      下拉显示的是 `years[0]`、实际取的还是它，两者对不上（而且不报错）。
  *      ⚠️ 用**原生 `<select>`**（⛔ 不自画下拉）。
  *
  * @param {Object} d - `state.lg`
  * @returns {string} 这一格的 HTML
  */
 function yearSelectHtml(d) {
-  const years = (Array.isArray(d && d.years) ? d.years : []).map((y) => Number(y)).filter((y) => y > 0);
+  const known = (Array.isArray(d && d.years) ? d.years : []).map((y) => String(y));
+  // ⚠️ 正在看的那一年并进来（见上面那句：落在区间外会让「显示的」与「取数的」对不上）
+  if (state.lgYear) known.push(String(state.lgYear));
+  const years = pickerYears(known, todayOf()).sort((a, b) => b - a);
   const want = Number(state.lgYear) || 0;
   const cur = years.indexOf(want) >= 0 ? want : years[0] || 0;
   const opts = years.map((y) => `<option value="${y}"${y === cur ? ' selected' : ''}>${y}年</option>`).join('');
@@ -6265,55 +6268,45 @@ let mpYear = 0;
 let mpMonth = 0;
 
 /**
- * 功能：选月弹层里「年」那一列有哪些年 —— **服务端给的年 ∪ 已知的年 ∪ 今天那一年**（升序）。
+ * 功能：选月弹层里「年」那一列有哪些年 —— **连续区间**（已知年 ∪ 今天，前后各补 5 / 1 年）。
  *
- * 说明：⭐⭐ 0.8.4 修：**主来源是服务端的 `/api/ledger/periods`**（`state.lgPeriods.years`）——
- *      它由 `statRowsOf()` 算出来（含**三方导入**的行）⇒ 从鲨鱼记账导进来的 2024 / 2025 年
- *      才选得到。⛔ 光靠 `entryMonthOptions()` **不行**：那份清单是从「手上这一页流水」推的，
- *      而流水一次只加载一个月 ⇒ 选择器里永远只有当前那一个月（报的
- *      「记账中的月份无法切换」就是这个）。⚠️ 服务端那份也**不是**「今年 ± N 年」——
- *      它只列**真有记录的**期（方案 §7.3.1：⛔ 不凭空铺空月份给用户挑，挑到空白页他不知道那不是 bug）。
- * @returns {Array.<number>} 年份（升序）
+ * 说明：⭐⭐ 0.8.4：主来源是服务端的 `/api/ledger/periods`（`state.lgPeriods.years`，含**三方导入**的行）
+ *      ⇒ 导入进来的 2024 / 2025 年才选得到。⛔ 光靠 `entryMonthOptions()` 不行：那份清单是从
+ *      「手上这一页流水」推的，而流水一次只加载一个月。
+ *      ⭐⭐ 0.9.8（2026-11-10「选择不了月份」）：**只列有记录的年也不对** —— 用户想翻到「去年这个月」
+ *      而去年没记账就翻不过去，所以改成与电脑端同一份 `pickerYears()`：区间**连续**、
+ *      既有导入的老账，也有"没记账的那几年"。⚠️ 这条推翻了方案 §7.3.1 那句
+ *      「⛔ 不凭空铺空月份」（见回单 §二·补9）。
+ * @returns {Array.<number>} 年份（升序、连续）
  * @since 0.8.2
  */
 function mpYears() {
-  const set = new Set();
-  for (const y of (state.lgPeriods && state.lgPeriods.years) || []) {
-    const n = Number(y);
-    if (n > 0) set.add(n);
-  }
-  for (const k of entryMonthOptions()) set.add(Number(String(k).slice(0, 4)));
-  const y = Number(todayOf().slice(0, 4));
-  if (y) set.add(y);
-  return [...set].filter((v) => v > 0).sort((a, b) => a - b);
+  const known = [];
+  for (const y of (state.lgPeriods && state.lgPeriods.years) || []) known.push(String(y));
+  // ⚠️ 再并上「手上这一页流水」推出来的年当兜底（期间清单取不到时不能只剩今天那一年）
+  for (const k of entryMonthOptions()) known.push(String(k).slice(0, 4));
+  // ⭐⭐ 0.9.8：**连续区间**（已知年 ∪ 今天，前后各补 5 / 1 年）—— 与电脑端同一口径。
+  return pickerYears(known, todayOf());
 }
 
 /**
- * 功能：选月弹层里「月」那一列（选了哪一年，就列**那一年的**有记录的月 ∪ 今年那个月）。
+ * 功能：选月弹层里「月」那一列 —— **恒为 12 项**（`MONTHS_ALL`）。
  *
- * 说明：⭐⭐ 同 `mpYears()`：主来源是服务端的 `state.lgPeriods.months`（含三方导入的月）。
- * @param {number} year - 已选中的年
+ * 说明：⭐⭐ 0.9.8（2026-11-10「选择不了月份」）：以前这里只列**那一年的有记录的月**，于是一个月
+ *      只记过一次账的人，滚轮里就只有一个 `11`，别的月根本点不到（而且不报错）。
+ *      现在与「年」解耦：**月永远是 1~12**，挑到没记账的月看到的是明细屏的空态那句话。
  * @returns {Array.<number>} 月份（`1~12`，升序）
  * @since 0.8.2
  */
-function mpMonthsOf(year) {
-  const set = new Set();
-  for (const m of (state.lgPeriods && state.lgPeriods.months) || []) {
-    if (Number(String(m).slice(0, 4)) === Number(year)) set.add(Number(String(m).slice(5, 7)));
-  }
-  for (const k of entryMonthOptions()) {
-    if (Number(String(k).slice(0, 4)) === Number(year)) set.add(Number(String(k).slice(5, 7)));
-  }
-  const today = todayOf();
-  if (Number(today.slice(0, 4)) === Number(year)) set.add(Number(today.slice(5, 7)));
-  return [...set].filter((v) => v >= 1 && v <= 12).sort((a, b) => a - b);
+function mpMonths() {
+  return MONTHS_ALL;
 }
 
 /** 功能：选月弹层里那一列（年 / 月）的整体 HTML。 @param {string} kind - `'year'` | `'month'` @returns {string} @since 0.8.2 */
 function mpColHtml(kind) {
   const year = kind === 'year';
   const cur = year ? mpYear : mpMonth;
-  const vals = year ? mpYears() : mpMonthsOf(mpYear);
+  const vals = year ? mpYears() : mpMonths();
   const body = vals
     .map((v) => {
       const label = year ? String(v) : String(v).padStart(2, '0');
@@ -6339,15 +6332,15 @@ function mpColHtml(kind) {
  */
 export async function lgMonthPick() {
   // ⭐⭐ 0.8.4 修：**先把「有记录的期间」取到手再开弹层** —— 那两列的候选就住它里面
-  //    （`mpYears()` / `mpMonthsOf()`）。不先取的话，弹层里只有「手上这一页流水」那一个月，
+  //    （`mpYears()` 的已知年）。不先取的话，弹层里只剩「今年」那一年，
   //    用户点了也切不动（而它**不报错**）。已经取过就是一次空跑（`loadPeriods()` 自己挡）。
   await loadPeriods();
   const cur = monthKey();
   mpYear = Number(cur.slice(0, 4)) || Number(todayOf().slice(0, 4)) || 0;
   mpMonth = Number(cur.slice(5, 7)) || Number(todayOf().slice(5, 7)) || 1;
-  // ⚠️ 当前那年 / 那月在列里（数据是"已知的月"）—— 万一不在（比如从没取过），补进月份列：
-  //    否则选择器里一个 `.on` 都没有（用户看到的是一份"没选中"的滚轮，而它不报错）。
-  const months = mpMonthsOf(mpYear);
+  // ⚠️ 当前那个月在列里 —— 0.9.8 起月列恒 12 项，落不到外面；这一步只兜"mpMonth 是 0"
+  //    （从没取过 today / monthKey）这种情况，否则滚轮里一个 `.on` 都没有（而它不报错）。
+  const months = mpMonths();
   if (!months.includes(mpMonth)) mpMonth = months[0] || mpMonth;
   openSheet(
     '选择月份',
@@ -6361,8 +6354,8 @@ export async function lgMonthPick() {
  * 功能：选月弹层里点了某一列的一项（⚠️ 只改选择、**不换数据、不关弹层**）。
  *
  * 说明：⚠️⭐ 只做两件小事：① 记住选中的年 / 月；② 就地改那两列的 `.on`（⛔ 不重画整个弹层 ——
- *      重画会把两列的滚动位置一起弹回顶部）。⚠️ 换**年**时月份列要跟着重画（那一年有哪些月
- *      是跟着年走的），并且**保证选中的月仍在新列里**（否则确定出来是一个不存在的月）。
+ *      重画会把两列的滚动位置一起弹回顶部）。⚠️ 0.9.8 起月列**恒 12 项**、与年解耦 ⇒
+ *      换年不必重画月列，只校正选中态。
  * @param {string} _act - 动作名（未用）
  * @param {HTMLElement} n - 点中的那一项（`data-kind` = `year`/`month`，`data-v` = 值）
  * @returns {void}
@@ -6374,10 +6367,8 @@ export function lgMonthSel(_act, n) {
   if (kind === 'year') {
     if (!v || v === mpYear) return;
     mpYear = v;
-    const months = mpMonthsOf(mpYear);
-    if (!months.includes(mpMonth)) mpMonth = months[0] || mpMonth;
-    const box = $('#lg-mp-months');
-    if (box) box.innerHTML = mpColHtml('month');
+    // ⭐ 0.9.8：月列恒 12 项 ⇒ 换年**不再重画月列**（重画会把月列的滚动位置弹回顶部，
+    //    而候选根本没变）。下面统一那段 `.on` 校正会把选中态标对。
   } else if (v >= 1 && v <= 12) {
     mpMonth = v;
   }
@@ -6436,24 +6427,17 @@ function billTabOf() {
  * @since 0.8.2
  */
 function billYears() {
-  const set = new Set();
-  // ⭐⭐ 0.8.4 修：主来源换成服务端的 `/api/ledger/periods`（`state.lgPeriods.years`）——
+  const known = [];
+  // ⭐⭐ 0.8.4：主来源换成服务端的 `/api/ledger/periods`（`state.lgPeriods.years`）——
   //    它含**三方导入**的行 ⇒ 从鲨鱼记账导进来的 2024 / 2025 年在这儿才选得到
   //    （`state.lg.years` 只从**快照**推，导入的年进不去 ——
   //    「月账单也选择不了其它年份」就是这条）。
-  for (const y of (state.lgPeriods && state.lgPeriods.years) || []) {
-    const n = Number(y);
-    if (n > 0) set.add(n);
-  }
-  for (const y of (state.lg && state.lg.years) || []) {
-    const n = Number(y);
-    if (n > 0) set.add(n);
-  }
-  const t = Number(todayOf().slice(0, 4));
-  if (t) set.add(t);
-  const cur = Number(String(state.lgBillKey || '').slice(0, 4));
-  if (cur) set.add(cur);
-  return [...set].sort((a, b) => b - a);
+  for (const y of (state.lgPeriods && state.lgPeriods.years) || []) known.push(String(y));
+  for (const y of (state.lg && state.lg.years) || []) known.push(String(y));
+  known.push(String(state.lgBillKey || '').slice(0, 4));
+  // ⭐⭐ 0.9.8：与「选择月份」同一口径 —— **连续区间**（已知年 ∪ 今天，前后各补 5 / 1 年）。
+  //    只列"有记账的年"时，一整年没记账的年份选不到（与电脑端同一条）。
+  return pickerYears(known, todayOf()).sort((a, b) => b - a);
 }
 
 /**
@@ -6536,10 +6520,12 @@ export async function lgBillShift(_act, n) {
   const cur = String(billPeriodKey()).slice(0, 7) || String(todayOf()).slice(0, 7);
   const next = shiftMonth(cur, delta);
   if (!/^\d{4}-\d{2}$/.test(next) || next === cur) return undefined;
-  const list = (state.lgPeriods && state.lgPeriods.months) || [];
-  if (list.length) {
-    const lo = String(list[0]);
-    const hi = String(list[list.length - 1]);
+  // ⚠️ 0.9.8：夹的是**年份区间**（与「选择月份」同一口径），⛔ 不再是「有数据的月」区间 ——
+  //    以前夹在有数据的月里，隔壁那个月没记账就翻不过去（2026-11-10 反馈）。
+  const yrs = pickerYears((state.lgPeriods && state.lgPeriods.years) || [], todayOf());
+  if (yrs.length) {
+    const lo = `${yrs[0]}-01`;
+    const hi = `${yrs[yrs.length - 1]}-12`;
     if (next < lo || next > hi) return undefined;
   }
   state.lgBillKey = `${next}-01`;

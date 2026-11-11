@@ -47,7 +47,7 @@
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.8.51
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/16-密码库.md、docs/公共/开发方案/05-密码库-1期.md、35-视图切换与过渡动画.md
  */
 
@@ -57,7 +57,16 @@ import { whenText } from '../../core/date.js';
 import { swapIn } from '../../core/transition.js';
 import { state } from '../../desktop/state.js';
 import { closeModal, openConfirmModal, openModal, setModalSave, toast } from '../../desktop/ui.js';
-import { buildVaultLinkMap, formatLeft, vaultEffUrl, vaultFiltering, vaultLinksOf, vaultTagStats, vaultVisibleItems } from './shared.js';
+import {
+  buildVaultLinkMap,
+  formatLeft,
+  isBlankPassword,
+  vaultEffUrl,
+  vaultFiltering,
+  vaultLinksOf,
+  vaultTagStats,
+  vaultVisibleItems,
+} from './shared.js';
 
 /** 锁前多少秒开始提示（方案 §七：「锁前 30 秒给提示」） */
 const WARN_SECONDS = 30;
@@ -73,6 +82,26 @@ const WARN_SECONDS = 30;
  *    也会被调到，放那儿会让**正是要播的**「列表 → 已锁定」不播。
  */
 let lastVaultPhase = null;
+
+/**
+ * 「还没设过主密码」那一支走到第几步：`1` = 知情页，`2` = 设密码页。
+ *
+ * ⭐⭐ 0.9.8 第 3 轮（`docs/公共/开发方案/2026-11-08-0.9.8-第3轮修改.md` §三）：
+ *    这一支原来是「一屏两张卡」—— 上面一张米黄警示卡（四条），下面一张表单卡（两输入 ＋
+ *    提示 ＋ 勾选 ＋ 按钮）。一屏塞不下、重点不清，而且 `.vault-body.gate` 的
+ *    `justify-content:center` 叠在 `overflow:hidden` 上，内容一高**上下都被裁掉且滚不到**
+ *    （截图里主按钮只剩一条边）。⇒ 拆成**一屏两步**：知情 → 设置。
+ *
+ * ⚠️⚠️ **两步之间的状态只存内存，⛔ 不许持久化**（同文件 §3.3 的硬要求）：
+ *    ① 这个步号、② `vaultInitAck`（用户点过「我已阅读并理解上述内容」）。
+ *    它们只活在本次会话的这一屏里 —— 能跨刷新保留就等于「可以跳过知情页」，
+ *    而那一步正是「忘记即永久丢失」这条安全边界的载体（`16-密码库.md` §一 第 1 行）。
+ *    ⛔ 别写 `localStorage` / `sessionStorage` / cookie / URL，也别塞进 `state` 的持久化分支。
+ */
+let vaultInitStep = 1;
+
+/** 第一步那颗勾选框的确认态（同上：**只存内存**，`vaultReset()` 里清） */
+let vaultInitAck = false;
 
 /**
  * 功能：三态之间换了就给 `#vault-body` 播一次淡入（同态内不动），并记住这一次画的是哪一态。
@@ -117,6 +146,10 @@ export function vaultReset() {
   state.vault = null;
   state.vaultQuery = '';
   state.vaultTag = null;
+  // ⭐⭐ 0.9.8 第 3 轮：知情页的步号与确认态也一起清 —— 「离开这一屏 / 锁定 / 超时之后
+  //    再回来」必须**回到第一步**（确认态只存内存，这是它的全部意义，见上面 `vaultInitStep` 那段）。
+  vaultInitStep = 1;
+  vaultInitAck = false;
   const q = $('#vault-q');
   if (q) q.value = '';
 }
@@ -164,10 +197,7 @@ function tickVault() {
   state.vaultLeft -= 1;
   const hint = $('#vault-lock-btn');
   if (state.vaultLeft <= 0) {
-    vaultReset();
-    state.vault = { initialized: true, unlocked: false, lockAfterSeconds: 600, lockMinutes: 10 };
-    renderVault();
-    toast('密码库已自动锁定', true);
+    lockNow();
     return;
   }
   if (hint) {
@@ -178,6 +208,43 @@ function tickVault() {
     hint.classList.toggle('warn', state.vaultLeft <= WARN_SECONDS);
   }
 }
+
+/**
+ * 功能：判定「已经锁上了」并收拾现场 —— 清明文、**关掉可能开着的编辑弹层**、画回锁屏。
+ *
+ * 说明：⭐⭐ 0.9.8 第 7 轮（老大 2026-11-09）：以前到点只重画列表，**弹层不关** ——
+ *      一条密码正在编辑框里躺着，锁屏之后它还在屏幕上。现在两条触发路径共用这一个函数：
+ *      · 本屏的本地倒计时走到 0（`tickVault()`）；
+ *      · 全局计时者派来的 `zx:vault-locked`（人可能停在加密信息那一屏）。
+ *      ⚠️ 防重复 toast 的判据是 `state.vault.unlocked`：本地已经处理过时它是 false，
+ *      事件再来一次就直接返回（⛔ 不弹两遍「已自动锁定」）。
+ * @returns {void}
+ */
+function lockNow() {
+  const prev = state.vault;
+  vaultReset();
+  state.vault = {
+    initialized: true,
+    unlocked: false,
+    lockAfterSeconds: (prev && prev.lockAfterSeconds) || 600,
+    lockMinutes: (prev && prev.lockMinutes) || 10,
+  };
+  closeModal();
+  renderVault();
+  toast('密码库已自动锁定', true);
+}
+
+/**
+ * 功能：听全局锁库事件（`core/vault-watch.js` 派的）—— 本屏不在前台时也要被锁上。
+ *
+ * 说明：⚠️ 只在「本屏仍认为解锁着」时才动手：本地倒计时已经处理过的情况下再走一遍，
+ *      会把刚画好的锁屏再画一次、并弹第二遍提示。
+ * @returns {void}
+ */
+document.addEventListener('zx:vault-locked', () => {
+  if (!state.vault || !state.vault.unlocked) return;
+  lockNow();
+});
 
 /**
  * 功能：渲染标签筛选栏 —— 「全部 N」+ 每个标签（带计数）+ 「未分类 N」+ 选中标签后的「⚙ 管理」。
@@ -530,44 +597,72 @@ export function renderVaultRows() {
 }
 
 /**
- * 功能：渲染「设置主密码」页 —— ⚠️ 强提示 + 二次确认（方案 §1.2 第 1 项，不能省）。
+ * 功能：渲染「设置主密码」这一支 —— ⭐⭐ **一屏两步**（0.9.8 第 3 轮，方案 §三）。
  *
- * 说明：那句「忘记主密码 = 数据永久丢失」**必须**在页面上、并且在提交前还要勾一个确认框：
- *      这不是啰嗦，它是本功能与「重置密码」之间唯一的区别。少一个人读懂这句话，
- *      就会多一个把密码库当网盘用、然后在换设备时丢光密码的人。
+ * 说明：⚠️ 强提示 ＋ 二次确认这条安全边界**一点没放宽**（`16-密码库.md` §一 第 1 行、
+ *      `05-密码库-1期.md` §一 第 1 行）：它换了个载体 ——
+ *      ① **独立一屏**读四条（比原来挤在一屏里更显眼）→ ② **勾选** → ③ **下一步** → ④ 再输两遍。
+ *      勾选 ＋ 下一步就是「二次确认」的等价物，⛔ 别被后人当成「放宽了」。
+ *      ⚠️ 两条文案是**定稿**（老大 2026-11-08 拍板）：⛔ 不许再压缩、不许补解释性从句 ——
+ *      上一版每条都挂一句「为什么」，四条一起铺开就读成了一段连续的解释文。
  *
  * @returns {string} 该状态的 HTML 片段
  */
 function vaultInitHtml() {
+  return vaultInitStep === 2 ? vaultInitStep2Html() : vaultInitStep1Html();
+}
+
+/**
+ * 功能：第一步 —— **知情页**（标题 ＋ 四条 ＋ 勾选 ＋ 下一步）。
+ *
+ * 说明：⚠️ 标题与四条**逐字定稿**（`§3.1`），回单要 `grep` 对；勾选文案同样逐字定稿。
+ *      ⚠️ 第 2 条（忘记就找不回）用 `<b>` 加重 —— 它是四条里唯一的「损失警告」。
+ * @returns {string} HTML
+ */
+function vaultInitStep1Html() {
   return `
-    <div class="vault-gate">
-      <div class="vault-card warn-card">
-        <div class="vault-card-head">⚠️ 先读这一段，再设主密码</div>
-        <ul class="vault-terms">
-          <li><b>主密码是打开这个密码库的唯一钥匙。</b>它与你的登录密码<b>不是一回事</b> ——
-              登录成功也不会自动打开密码库，每次进来都要再输一次。</li>
-          <li><b>忘记主密码 = 这里面所有密码永久打不开。</b>本应用<b>没有</b>找回通道、没有后门、
-              管理员也帮不了你 —— 这是设计选择，不是缺陷。</li>
-          <li>库里的内容以<b>密文</b>存在你自己的 NAS 上。就算数据库文件或备份被别人拿走，
-              <b>没有主密码也读不出任何一条</b>。</li>
-          <li>⚠️ 换设备 / 重装浏览器不影响你的密码库（数据在 NAS 上），但请把主密码记在一个
-              <b>你自己不会丢的地方</b>（例如纸质记录或另一套密码管理器）。</li>
-        </ul>
+    <div class="vault-gate vault-init">
+      <div class="vault-card vault-init-card vault-init-warn">
+        <div class="vault-card-head">⚠️ 请先阅读以下文本，以确保您知情并了解本设计</div>
+        <ol class="vault-terms">
+          <li>主密码是打开这个密码库的唯一凭证，它独立于登录密码，用于生成你的加密密钥。</li>
+          <li><b>忘记主密码将无法找回您的加密内容，本应用没有任何找回通道。</b></li>
+          <li>内容以密文存在你自己的 NAS 上。</li>
+          <li>请把主密码记在一个你自己不会丢的地方（例如纸质记录或另一套密码管理器）。</li>
+        </ol>
+        <label class="vault-confirm vault-init-ack">
+          <input id="vault-init-ack" type="checkbox"${vaultInitAck ? ' checked' : ''} />
+          我已阅读并理解上述内容
+        </label>
+        <div class="vault-actions">
+          <button id="vault-init-next" class="btn btn-primary" type="button"${vaultInitAck ? '' : ' disabled'}>下一步</button>
+        </div>
       </div>
-      <div class="vault-card">
+    </div>`;
+}
+
+/**
+ * 功能：第二步 —— **设置页**（主密码 ＋ 再输一次 ＋ 一句提示 ＋ 主按钮 ＋ 返回）。
+ *
+ * 说明：⚠️ 这一步**刻意不再放勾选框**（同一句话不说两遍）：确认态在内存里（`vaultInitAck`），
+ *      提交前照样校验一次，没确认就提示并退回第一步。
+ *      ⚠️ 提示语是定稿、**与旧版相反**：旧版推荐「长短语」，老大 2026-11-08 改为推荐
+ *      「大小写 ＋ 数字 ＋ 符号」的组合密码。
+ * @returns {string} HTML
+ */
+function vaultInitStep2Html() {
+  return `
+    <div class="vault-gate vault-init">
+      <div class="vault-card vault-init-card">
         <div class="tt-field"><label for="vault-master">主密码（至少 8 位，建议 12 位以上）</label>
           <input id="vault-master" type="password" autocomplete="new-password" /></div>
         <div class="tt-field"><label for="vault-master2">再输一次</label>
           <input id="vault-master2" type="password" autocomplete="new-password" /></div>
-        <div class="vault-note">💡 用一句你记得住的<b>长短语</b>比用「大小写 + 数字 + 符号」的短密码更安全，
-          也更好记（例如「蓝色水杯放窗台-2026」）。中间的空格会原样保留。</div>
-        <label class="vault-confirm">
-          <input id="vault-ack" type="checkbox" />
-          我明白：<b>忘记主密码就永久打不开</b>，本应用没有找回手段。
-        </label>
+        <div class="vault-note">建议使用「大小写 + 数字 + 符号」组合密码，并牢记</div>
         <div class="vault-actions">
           <button id="vault-init-go" class="btn btn-primary" type="button">设置主密码并打开</button>
         </div>
+        <button id="vault-init-back" class="vault-init-back" type="button">返回上一步</button>
       </div>
     </div>`;
 }
@@ -657,6 +752,10 @@ function vaultRowHtml(it) {
       </div>`;
   }
   const title = it.title || '（无标题）';
+  // ⭐⭐ 0.9.8（方案 42 §一·4）：老库里已经存进去的**空白密码**条目——不自动删、不自动改（R-002），
+  //    只在列表里标一句「这条没设密码」，让用户自己补或删。判据是服务端算出来的
+  //    `blank_password`（不进表、不加列），⛔ 别在前端拿摘要去猜（摘要里没有密码）。
+  const blank = it.blank_password === true;
   const tags = (Array.isArray(it.tags) ? it.tags : []).map((n) => `<span class="vault-tag">${esc(n)}</span>`).join('');
   // ⭐⭐ 0.8.18 任务八：「在记录条上有一键复制网址的按键」。
   //    ⭐⭐ 同日第二轮（他截图批注：「**没有网址的 要有【点击绑定】**」）：这颗键**恒在**，
@@ -672,6 +771,11 @@ function vaultRowHtml(it) {
       <span class="vault-ico">🔑</span>
       <span class="vault-main"><b>${esc(title)}</b>
         <small>${esc(it.username || '（没有用户名）')}${it.url ? ' · ' + esc(it.url) : ''}</small>
+        ${
+          blank
+            ? '<span class="vault-tagline"><span class="vault-tag warn">这条没设密码</span></span>'
+            : ''
+        }
         ${tags ? `<span class="vault-tagline">${tags}</span>` : ''}</span>
       <span class="vault-acts">
         <button class="btn btn-subtle btn-sm" type="button" data-vault-copy="${esc(String(it.id))}"
@@ -919,7 +1023,10 @@ export function openVaultEntryForm(item) {
           .filter(Boolean),
       ),
     };
-    if (!fields.password) return toast('密码不能为空', true);
+    // ⭐⭐ 0.9.8（方案 42 §一·1）：`!fields.password` 是**真假值**判据，而 `' '` 是真值
+    //    ⇒ 只敲一个空格也能提交（服务端那时同样放行，两边同一条错）。
+    //    ⚠️ 只换判据、**不改写提交值**：`" a b "` 原样提交（trim 会让人在别处登不上）。
+    if (isBlankPassword(fields.password)) return toast('密码不能为空（只输空格不算密码）', true);
     try {
       if (isEdit) await api('PUT', `/api/vault/${item.id}`, fields);
       else await api('POST', '/api/vault', fields);
@@ -1077,9 +1184,17 @@ export async function openVaultDetail(id) {
   const tags = (Array.isArray(item.tags) ? item.tags : [])
     .map((n) => `<span class="vault-tag">${esc(n)}</span>`)
     .join('');
+  // ⭐ 0.9.8：空白密码的老条目 —— 详情里必须直说「它现在是空的」，并给出两条出路。
+  //    ⚠️ 判据用完整条目的 `password` 现算（`GET /api/vault/:id` 回的就是明文），
+  //    比列表里那个 `blank_password` 更可信（用户可能刚在别处补上了）。
+  const blankNote = isBlankPassword(item.password)
+    ? `<div class="vault-broken">⚠️ 这条记录<b>没有设密码</b>（保存时只有空格或空）。
+         点右下角「编辑」补一个，或者直接删掉它 —— 留着它只会在复制时给你一个空串。</div>`
+    : '';
   openModal(
     '密码详情',
     `<div class="bm-detail">
+       ${blankNote}
        <div class="bm-detail-title">${esc(item.title || '（无标题）')}</div>
        <dl class="bm-fields">
          <dt>用户名</dt>
@@ -1312,11 +1427,18 @@ async function submitVaultInit() {
   const b = $('#vault-master2').value;
   if (a.trim().length < 8) return toast('主密码至少 8 位', true);
   if (a !== b) return toast('两次输入的主密码不一致', true);
-  if (!$('#vault-ack').checked) return toast('请先勾选「我明白忘记主密码就永久打不开」', true);
+  // ⚠️ 第二步没有勾选框（同一句话不说两遍）⇒ 校验的是**内存里**那个确认态。
+  //    没确认就退回第一步，让用户自己重新读一遍再勾 —— ⛔ 不许「顺手帮他确认」。
+  if (!vaultInitAck) {
+    vaultInitStep = 1;
+    renderVault();
+    return toast('请先勾选「我已阅读并理解上述内容」', true);
+  }
   try {
     await api('POST', '/api/vault/init', { masterPassword: a });
-    $('#vault-master').value = '';
-    $('#vault-master2').value = '';
+    // ⭐ 成功之后这一支就结束了 ⇒ 把两步的状态清干净（下次进「未初始化」要从头读）
+    vaultInitStep = 1;
+    vaultInitAck = false;
     state.vault = await api('GET', '/api/vault/status');
     await loadVaultList();
     toast('主密码已设置，密码库已打开（请把主密码记牢）');
@@ -1372,8 +1494,27 @@ export function bindVaultEvents(root) {
     renderVaultRows();
   });
 
+  // ⭐⭐ 0.9.8 第 3 轮：知情页那颗勾选框 —— 勾了才放开「下一步」（没勾时按钮 `disabled`）。
+  //    ⚠️ 确认态写在**内存**里（`vaultInitAck`），不读 DOM：第二步没有勾选框，
+  //    提交前那次校验读的就是这份变量（⛔ 别改成「回头找 #vault-init-ack」——那时它已经不在文档里）。
+  root.addEventListener('change', (e) => {
+    if (!e.target || e.target.id !== 'vault-init-ack') return;
+    vaultInitAck = !!e.target.checked;
+    const next = $('#vault-init-next');
+    if (next) next.disabled = !vaultInitAck;
+  });
+
   root.addEventListener('click', (e) => {
     const t = e.target;
+    // ⭐ 一屏两步（方案 §3.1 / §3.2）：下一步 → 设置页；返回上一步 → 知情页（勾选态保留）
+    if (t.closest('#vault-init-next')) {
+      vaultInitStep = 2;
+      return void renderVault();
+    }
+    if (t.closest('#vault-init-back')) {
+      vaultInitStep = 1;
+      return void renderVault();
+    }
     if (t.closest('#vault-init-go')) return void submitVaultInit();
     if (t.closest('#vault-unlock-go')) return void submitVaultUnlock();
 

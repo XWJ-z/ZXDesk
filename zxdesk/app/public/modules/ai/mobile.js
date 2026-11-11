@@ -33,7 +33,7 @@
  */
 
 import { $ } from '../../core/dom.js';
-import { askConfirm, CHEV, openSheet, toast } from '../../mobile/ui.js';
+import { askConfirm, CHEV, openNoticeSheet, openSheet, toast } from '../../mobile/ui.js';
 
 /** 六个区（`createAiSections()` 的产物）—— ⚠️ 只建一次，见文件头说明 @type {?Object} */
 let built = null;
@@ -122,6 +122,9 @@ async function buildHome(box) {
     ask: async (opts, fn) => {
       if (await askConfirm(opts)) await fn();
     },
+    // ⭐ 0.9.8：只读提示（https 连不上那一类）—— 与电脑端 `host.notice` 同一个契约，
+    //    手机端落到 `openNoticeSheet`（只有一颗「知道了」）
+    notice: (title, text) => openNoticeSheet(title, text),
     // ⭐ 弹层里任一保存成功 ⇒ 把入口行的摘要一起重画（否则「改完了、退回屏上还是旧状态」）
     onSaved: () => {
       refreshAll().catch(() => {});

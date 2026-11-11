@@ -36,6 +36,8 @@ const {
   verifyPassword,
 } = require('../auth.js');
 const { httpError, idParam, json, readBody } = require('../http-util.js');
+// ⭐ 数据位置（设置页「修改位置」）：动作与判据都在那一处，这里只做分派
+const { handleAdminLocation } = require('./data-location.js');
 
 /**
  * 功能：从 Cookie 携带的会话令牌解析出当前登录账号；任何一项校验不过都返回 null（即未登录）。
@@ -48,6 +50,8 @@ const { httpError, idParam, json, readBody } = require('../http-util.js');
  * @returns {?Object} 已登录时返回当前账号的公开元信息，未登录返回 null
  */
 function currentUser(req) {
+  // 数据位置不可用时进程里没有库：任何会话都视为无效（恢复页在未登录状态下工作）
+  if (!store) return null;
   const s = readSession(AUTH_SECRET, req.headers.cookie, Date.now());
   if (!s) return null;
   const epoch = store.sessionEpoch(s.uid);
@@ -404,7 +408,9 @@ function handleAuth(req, res, parts, user) {
   if (method === 'GET' && parts[2] === 'me') return json(res, 200, user);
 
   // PUT /api/auth/prefs —— 改**自己**的个人偏好（0.2.1，0.3.0 加收藏夹，0.3.1 加硬件管理，0.3.2 加密码库，0.3.5 加对话，0.6.0 加 AI 辅助任务，0.7.1 加灵感库，0.7.5 加番茄钟与日历，0.8.0 加记账，0.8.6 加行程）
-  //   现有十一项：`hideTimetable`（不显示课表）、`hideBookmarks`（不显示网址收藏夹）、
+  //   ⭐ 0.9.8 起**多一项**：`hideLab`（不显示 zx 实验室）—— 它同样来自某个 `module.json`
+  //   的 `switchField`，但关掉的是**整个沙箱的入口**（里面的实验功能没有各自的开关）。
+  //   现有十二项：`hideTimetable`（不显示课表）、`hideBookmarks`（不显示网址收藏夹）、
   //   `hideIdea`（不显示灵感库）、`hideHardware`（不显示 NAS硬件管理）、`hidePomodoro`（不显示番茄钟）、
   //   `hideCalendar`（不显示日历）、`hideLedger`（不显示记账）、`hideTrip`（不显示行程）、`hideVault`（不显示密码库）、
   //   `hideTeamwork`（不显示对话）、`hideAi`（不显示 AI 辅助任务）、`hideDigital`（不显示数码管理，0.8.10）。
@@ -447,11 +453,21 @@ function handleAuth(req, res, parts, user) {
         'hideVault',
         'hideTeamwork',
         'hideAi',
+        // ⭐ zx 实验室在清单里的 `order` 是 **95**（默认排最底），
+        //    所以这个键也**跟着挪到最后一位**。
+        //    ⚠️ 顺序不是随便排的：下面那条断言要求「这个数组与清单按 order 排出来的顺序逐项一致」。
+        'hideLab',
         // ⭐ 0.8.21（「隐藏要具有记忆功能…并且手机端和电脑端同步」）：**记账里那颗
         //    眼睛的初值**（`true` = 进记账就把金额糊成圆点）。⚠️ 它不是「关掉某个功能」那十一个
         //    模块开关之一（不来自任何 `module.json` 的 `switchField`）⇒ 放在**末尾**：
         //    `module-ui.test.js` 只要求「**共有键的顺序**一致」，排在末尾不扰动那个顺序。
         'hideLedgerAmount',
+        // ⭐⭐ **「已同意 zx 实验室使用须知」**（首次进入要弹知情协议、勾选过才能点同意，
+        //    且按账号记在服务端）。
+        //    ⚠️ 与 `hideLedgerAmount` 同一种「非模块开关的偏好」⇒ 同样放在**末尾**，
+        //    不扰动上面那串「清单 order 顺序」（`module-ui.test.js` 的逐项比对不受影响）。
+        //    ⚠️ 它是**单向**的实质：界面只发 `true`；接口仍收 `false`（留一条可回退的路）。
+        'labAgreed',
       ].filter(has);
       if (!keys.length) throw httpError(400, 'bad body');
       for (const k of keys) if (typeof b[k] !== 'boolean') throw httpError(400, 'bad body');
@@ -507,10 +523,22 @@ function handleAuth(req, res, parts, user) {
         store.setHideTrip(user.id, b.hideTrip);
         said.push(`${b.hideTrip ? '关闭' : '打开'}了行程显示`);
       }
+      // ⭐ zx 实验室：关掉的是**整个沙箱的入口**，
+      //    实验室库里的数据一条不动（这一点写进 `setHideLab` 的说明里了）。
+      if (has('hideLab')) {
+        store.setHideLab(user.id, b.hideLab);
+        said.push(`${b.hideLab ? '关闭' : '打开'}了 zx 实验室显示`);
+      }
       // ⭐ 0.8.21：记账里那颗眼睛的初值（不是「关掉某个功能」，见上面 `keys` 那一段）。
       if (has('hideLedgerAmount')) {
         store.setHideLedgerAmount(user.id, b.hideLedgerAmount);
         said.push(`${b.hideLedgerAmount ? '打开' : '关闭'}了记账的金额隐藏`);
+      }
+      // ⭐⭐ 同意了「zx 实验室使用须知」（进实验室之前那道勾选）。
+      //    ⚠️ 只记「同意过」这一件事 —— 撤销同意没有界面，但接口收 `false`（可回退）。
+      if (has('labAgreed')) {
+        store.setLabAgreed(user.id, b.labAgreed);
+        said.push(`${b.labAgreed ? '同意' : '撤回'}了 zx 实验室使用须知`);
       }
       logLine('info', `账号「${user.username}」${said.join('，')}`);
       return json(res, 200, { ok: true, user: store.getUser(user.id) });
@@ -721,6 +749,12 @@ function handleAdmin(req, res, parts, user) {
         return json(res, 200, updated);
       });
     }
+  }
+
+  // ⭐ /api/admin/data-location/* —— 数据位置的预检 / 搬迁 / 进度 / 取消（动作名在 `parts[3]`）。
+  //    ⚠️ 预检与搬迁要求**网关身份**（授权列表只认网关注入的 uid），判定在 `handleAdminLocation` 里。
+  if (parts[2] === 'data-location' && parts.length >= 4) {
+    return handleAdminLocation(req, res, parts, user);
   }
 
   // /api/admin/storage —— 「数据位置」面板（v5）。

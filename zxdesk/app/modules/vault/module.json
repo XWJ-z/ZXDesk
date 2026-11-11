@@ -6,7 +6,7 @@
   "defaultEnabled": true,
   "switchField": "hide_vault",
   "apiPrefix": "vault",
-  "tables": ["vault_meta", "vault_items"],
+  "tables": ["vault_meta", "vault_items", "vault_imported_keys"],
   "depends": [],
   "archDoc": "16-密码库.md",
   "test": "vault.test.js"

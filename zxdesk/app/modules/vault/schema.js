@@ -53,7 +53,7 @@
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.8.18
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/16-密码库.md、docs/公共/开发方案/05-密码库-1期.md
  */
 module.exports = {
@@ -143,6 +143,47 @@ module.exports = {
         created_at TEXT,
         updated_at TEXT
       );`,
+
+    /**
+     * 功能：生成 `vault_imported_keys` 表的建表语句 —— **别人（或过去的自己）的钥匙文件**导入后落在这里。
+     *
+     * 说明：⭐⭐ 0.9.8 第 6 轮（方案 2026-11-08-0.9.8-第6轮修改 §八~§九）：钥匙文件（`.zxkey`）
+     *      的作用是「换机器 / 账号已删也打得开」，按老大拍板**导入后存进数据库**。
+     *      ⚠️ **这一行里没有任何明文密钥**：全是「被主密码封装过的材料」（`dek_cipher` / `verifier_*`）
+     *      ＋ 派生参数（`kdf` / `kdf_params` / `salt`）—— 与 `vault_meta` 同一种东西。
+     *      用的时候仍要现输那把锁的主密码，所以「入库」只省掉「每次重新选文件」，
+     *      门槛一点没降（方案 §8.5）。
+     *      ⚠️ **列名是 `user_id`、语义是「谁导入的」**（方案里写的 `imported_by`）：这样它能自动进
+     *      `userScoped` —— 删账号时由存储层的通用清空一并带走，⛔ 不需要在 `deleteUser()` 里
+     *      再开一个特例（那种特例迟早会漏）。语义差别只体现在注释与业务方法名上。
+     *      ⚠️ `owner_uid` 是**原件所属账号**，可能是本机早就删掉的账号 id —— 所以它**不是**外键，
+     *      也不参与任何归属判断（归属永远看 `user_id`）。
+     *      ⚠️ 这张表**不参与** `_vaultDek()` / `vaultIsUnlocked()`：它是「可以拿去试的钥匙」，
+     *      不是「本账号已经解锁」。
+     *
+     * @param {string} n - 表名（重建时是临时名）
+     * @param {boolean} ine - 是否在语句里加 `IF NOT EXISTS`
+     * @returns {string} 该表的 `CREATE TABLE` 语句
+     */
+    vault_imported_keys: (n, ine) => `
+      CREATE TABLE ${ine ? 'IF NOT EXISTS ' : ''}${n} (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        kid             TEXT    NOT NULL,   -- 钥匙编号 = sha256('zxdesk-key-v1'+DEK) 前 16 hex（指纹，不是密钥）
+        user_id         INTEGER NOT NULL,   -- ⭐ 谁导入的（方案里的 imported_by）；删账号随行清空
+        owner_uid       INTEGER,            -- 原件所属的 ZXDesk 账号 id（可能已被删，故不加外键）
+        owner_name      TEXT,               -- 原件账号名（只用于显示）
+        kdf             TEXT    NOT NULL,   -- 'scrypt'
+        kdf_params      TEXT    NOT NULL,   -- JSON：{"N":…,"r":…,"p":…,"keylen":…}
+        salt            TEXT    NOT NULL,   -- base64，16 B
+        dek_iv          TEXT    NOT NULL,   -- 被 KEK 封装的 DEK（三个一组）
+        dek_cipher      TEXT    NOT NULL,
+        dek_tag         TEXT    NOT NULL,
+        verifier_iv     TEXT    NOT NULL,   -- 验证块（三个一组）
+        verifier_cipher TEXT    NOT NULL,
+        verifier_tag    TEXT    NOT NULL,
+        created_at      TEXT,               -- 导入时间
+        last_used_at    TEXT                -- 最近一次用它打开文件的时间
+      );`,
   },
 
   /**
@@ -218,7 +259,7 @@ module.exports = {
    *
    * @type {Array.<string>}
    */
-  userScoped: ['vault_meta', 'vault_items'],
+  userScoped: ['vault_meta', 'vault_items', 'vault_imported_keys'],
 
   /**
    * 功能：已废弃的索引名，启动时幂等 `DROP`；本模块是新增的，没有历史索引。
@@ -236,5 +277,9 @@ module.exports = {
    *
    * @type {Array.<string>}
    */
-  indexes: ['CREATE INDEX IF NOT EXISTS idx_vault_items_user ON vault_items(user_id, sort_order, id)'],
+  indexes: [
+    'CREATE INDEX IF NOT EXISTS idx_vault_items_user ON vault_items(user_id, sort_order, id)',
+    // ⭐ 0.9.8 第 6 轮：同一把钥匙（同一个导入人）只能有一行 —— 重复导入是幂等的
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_vault_imported_keys_owner ON vault_imported_keys(user_id, kid)',
+  ],
 };

@@ -1,0 +1,153 @@
+/*
+ * location.css —— 数据位置恢复引导页的样式
+ *
+ * ⚠️ 只用 `core/tokens.css` 里的令牌（颜色 / 字体 / 圆角），⛔ 不写死色值：
+ *    这个页面出现在「数据位置坏了」的时候，最不能出问题的就是它自己。
+ */
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+  background: var(--zx-bg);
+  color: var(--zx-ink);
+  font-family: var(--zx-font);
+}
+
+.loc-card {
+  width: 100%;
+  max-width: 620px;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(31, 36, 48, 0.08);
+  padding: 26px 26px 20px;
+}
+
+.loc-title {
+  margin: 0 0 10px;
+  font-size: 19px;
+  font-weight: 650;
+}
+
+.loc-why {
+  margin: 0 0 16px;
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--zx-ink-2);
+}
+
+.loc-acts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.loc-btn {
+  appearance: none;
+  border: 1px solid rgba(79, 70, 229, 0.24);
+  background: #fff;
+  color: var(--zx-brand);
+  border-radius: 10px;
+  padding: 11px 14px;
+  font-size: 13.5px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--zx-dur-2) var(--zx-ease);
+}
+
+.loc-btn:hover:not(:disabled) {
+  background: rgba(79, 70, 229, 0.06);
+}
+
+.loc-btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.loc-note {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--zx-warn-soft);
+  border: 1px solid var(--zx-warn-line);
+  color: var(--zx-warn-ink);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.loc-tip {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--zx-ok-soft);
+  border: 1px solid rgba(16, 185, 129, 0.28);
+  color: var(--zx-ok-ink);
+  font-size: 12.5px;
+  line-height: 1.7;
+  word-break: break-all;
+}
+
+.loc-tip.is-bad {
+  background: var(--zx-danger-soft);
+  border-color: var(--zx-danger-line);
+  color: var(--zx-danger-ink);
+}
+
+.loc-meta {
+  margin: 0 0 14px;
+  display: grid;
+  grid-template-columns: 108px 1fr;
+  gap: 6px 10px;
+  font-size: 12.5px;
+  color: var(--zx-ink-2);
+  word-break: break-all;
+}
+
+.loc-meta dt {
+  color: var(--zx-ink-2);
+}
+
+.loc-meta dd {
+  margin: 0;
+  color: var(--zx-ink);
+}
+
+.loc-restart {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--zx-warn-soft);
+  border: 1px solid var(--zx-warn-line);
+  color: var(--zx-warn-ink);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.loc-foot {
+  margin: 0;
+  font-size: 12px;
+  color: var(--zx-ink-2);
+  line-height: 1.7;
+}
+
+@media (max-width: 520px) {
+  body {
+    padding: 12px;
+    align-items: flex-start;
+  }
+
+  .loc-card {
+    padding: 20px 18px 16px;
+    border-radius: 12px;
+  }
+
+  .loc-meta {
+    grid-template-columns: 1fr;
+  }
+}

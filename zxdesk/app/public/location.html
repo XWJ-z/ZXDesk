@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>数据位置不可用 · ZXDesk</title>
+    <link rel="stylesheet" href="./core/tokens.css" />
+    <link rel="stylesheet" href="./location.css" />
+  </head>
+  <body>
+    <!-- 恢复引导页：**位置不可用**时唯一能打开的页面（未登录也要能看）。
+         ⚠️ 全部内容由 location.js 画出来：页面里没有内联脚本，CSP 的 script-src 不需要额外哈希。 -->
+    <main class="loc-card" id="loc-app">
+      <h1 class="loc-title">数据位置不可用</h1>
+      <p class="loc-why" id="loc-why">正在读取…</p>
+      <div class="loc-acts" id="loc-acts" hidden></div>
+      <dl class="loc-meta" id="loc-meta" hidden></dl>
+      <p class="loc-restart" id="loc-restart" hidden>
+        修复后需要到 飞牛「应用中心 → ZXDesk」<b>停止再启动</b> 才会生效。
+      </p>
+      <p class="loc-foot">为了不覆盖数据，应用没有启动数据库，也没有新建任何文件。</p>
+    </main>
+    <script type="module" src="./location.js"></script>
+  </body>
+</html>

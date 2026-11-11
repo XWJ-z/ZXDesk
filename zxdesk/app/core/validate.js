@@ -30,6 +30,10 @@
 const ti = require('./timetable-import.js');
 const { badDateRange, httpError, idParam } = require('./http-util.js');
 const { store } = require('./context.js');
+// ⭐ 0.9.8：「空密码」判据的**函数体**住在 `core/store/helpers.js`（零 require 的叶子），
+//    本文件只是转出它（`module.exports` 里有）。⚠️ 别把函数体搬回来：`modules/vault/store.js`
+//    也要用同一个判据，而它 require 本文件会绕成环（详见 helpers.js 里 `isBlankPassword` 的说明）。
+const { isBlankPassword } = require('./store/helpers.js');
 
 // ---- 项目 / 任务的入参校验（0.1.3，审查报告 C2）----
 /**
@@ -908,6 +912,31 @@ const VAULT_GEN_CHARSETS = ['letters', 'alnum', 'all'];
 /** 一条密码记录最多能打几个标签（0.4.4 起）—— 防「一次贴进来一串」，不是给人定规矩 @type {number} */
 const MAX_VAULT_TAGS = 20;
 
+// ---- 加密信息（实验室第一格）----
+/** 加密信息的「标题」上限（100）：它只是个目录名，比密码库的 512 窄得多 @type {number} */
+const MAX_SECRET_TITLE = 100;
+
+/** 加密信息的「正文」上限（8000）：证件号 / 密钥 / 许可证这类长文本的余量 @type {number} */
+const MAX_SECRET_BODY = 8000;
+
+/**
+ * 功能：判断一个值是不是**「去空白后为空」** —— 密码库 / 加密信息的「空判据」唯一实现。
+ *
+ * 说明：⭐⭐ 0.9.8 修的就是这条缝：从前三处写的都是 `!fields.password`，而 `' '` 是**真值**
+ *      ⇒ 「只敲一个空格」能一路存进密码库，列表里看着是一条正常记录，用的时候复制出一个空串
+ *      （实测：`{"password":" "}` → 201）。
+ *      ⚠️⭐ **命中范围刻意包含三种「看不见的字符」**：全角空格（`\u3000`，中文输入法最容易带进来）、
+ *      零宽空格（`\u200B`，从网页 / Word 复制过来常见）、BOM（`\uFEFF`）。
+ *      它们肉眼与空串没有区别，而 `String.trim()` **只去 `\u3000` 那一档**（`\s` 含全角空格，
+ *      但**不含** `\u200B` / `\uFEFF`）—— 所以不能用 `!v.trim()` 代替本函数。
+ *      ⚠️⚠️ **它只判「空不空」，不负责改写要落库的值**：`" a b "` 必须**原样**存下去。
+ *      密码里的前后空格可能就是账号的一部分，trim 掉会让人在别处登录不上（方案 §一·3）。
+ *      ⇒ 调用方在**判据**上用本函数、在**落库**上用原值，两件事不许合并。
+ *
+ * @param {*} v - 待判的值（null / undefined / 数字都安全）
+ * @returns {boolean} 去空白后为空则 true
+ */
+
 /**
  * 功能：校验主密码 —— 去首尾空白后必须落在 `[8, 512]`。
  *
@@ -1005,6 +1034,36 @@ function readVaultTags(src, out) {
     names.push(name);
   }
   out.tags = [...new Set(names)];
+}
+
+/**
+ * 功能：校验「加密信息」的入参 —— 标题 / 正文。
+ *
+ * 说明：⭐ 与 `checkVaultItem` **同款**：只校验请求里真的带了的字段（编辑时「只改标题」
+ *      不会被要求重发正文）、未知键原样透传、超长一律 **400 且不静默截断**。
+ *      ⚠️ 两个上限比密码库窄得多（标题 100 / 正文 8000）—— 它的标题只是目录名，
+ *      而密码库的标题上限 512 是历史值；⛔ 别把两者「顺手统一」成一个数（那会改掉密码库的行为）。
+ *      ⚠️ 正文**允许为空**（一条只有标题的记录是合法的：用户可能先占个位）；
+ *      但**标题与正文同时为空**的记录没有意义 —— 那条判据在路由层查（与密码单独查同一手法），
+ *      因为「编辑时只改正文」这一趟请求里根本不会带标题。
+ *
+ * @param {Object} b - 请求体对象
+ * @returns {{title?: string, body?: string}} 归一化后的字段（只含请求里带了的键）
+ * @throws {Error} 任一字段超长时抛出 400
+ */
+function checkSecretItem(b) {
+  const src = b && typeof b === 'object' ? b : {};
+  const out = {};
+  for (const [key, label, max] of [
+    ['title', '标题', MAX_SECRET_TITLE],
+    ['body', '正文', MAX_SECRET_BODY],
+  ]) {
+    if (!hasKey(src, key) || src[key] === undefined) continue;
+    const v = String(src[key] == null ? '' : src[key]);
+    if (v.length > max) throw httpError(400, `${label}过长（最多 ${max} 字）`);
+    out[key] = v;
+  }
+  return out;
 }
 
 /**
@@ -2282,6 +2341,11 @@ module.exports = {
   MAX_VAULT_PASSWORD,
   MAX_VAULT_NOTE,
   MAX_VAULT_TAGS,
+  // ⭐ 0.9.8：加密信息（实验室第一格）与「空密码」判据
+  MAX_SECRET_TITLE,
+  MAX_SECRET_BODY,
+  isBlankPassword,
+  checkSecretItem,
   VAULT_GEN_MIN,
   VAULT_GEN_MAX,
   VAULT_GEN_CHARSETS,

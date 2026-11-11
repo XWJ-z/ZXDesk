@@ -34,7 +34,7 @@
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.8.13
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/03-数据安全.md
  */
 'use strict';
@@ -201,6 +201,8 @@ function handleExportOrg({ res, method, user }) {
   const bundle = store.exportOrgBundle();
   // ⭐ 0.8.1：原始库文件是**一组**（主库 `zxdesk.db` + 记账库 `zxdesk-ledger.db`，
   //    顺序由原语给出、这里不重排）—— **两库一起装**，压缩包里少一个就是少一份退路。
+  // ⭐ 0.9.8：**第三个成员** `zxdesk-lab.db` 由 `rawDump()` 一并给出（这里仍然不重排、不枚举）——
+  //    所以这一行**一个字都不用改**，它自动跟着三库走。⛔ 别在这里写「哪几个库」的清单。
   // ⭐⭐ 0.8.12：附件作为 `files/**` 追加在末尾（成员名全是 ASCII：
   //    只有 id 分片与 `<id><扩展名>`，⛔ 不含用户给的文件名 ⇒ 绕开 zip 的非 ASCII 名字坑）。
   const zip = buildZip([
@@ -277,6 +279,9 @@ function handleRestoreOrg({ req, res, method, user }) {
         reloginRequired: true,
         backupFile: r.backupFile,
         counts: r.counts,
+        // ⭐ 0.9.8：这次**没有动过**的库（`['lab']` = 备份里不含实验室那一份 ⇒ 现有实验室库保持原样）。
+        //    界面必须把这件事说出来（「少删」是刻意的，但**不许静默**）。
+        skippedDbs: r.skippedDbs || [],
         files: restoredFiles,
         exportedAt: dump.exportedAt || null,
       });

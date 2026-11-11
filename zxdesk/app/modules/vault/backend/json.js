@@ -15,7 +15,7 @@
  *
  * @author zx
  * @date   2026-09-14
- * @since 0.5.3
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md、docs/公共/开发方案/09-模块化重构.md
  */
 
@@ -185,6 +185,82 @@ const ops = {
       .filter((r) => uidOf(r) === Number(uid))
       .sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.id - b.id);
     return { vaultMeta, vaultItems };
+  },
+
+  // ---- 导入的钥匙文件（0.9.8 第 6 轮）----
+  /**
+   * 功能：写入一行「别人（或过去的自己）的钥匙」；返回带回填 `id` 的那一行。
+   *
+   * 说明：⚠️ 与 SQLite 侧同名同参、逐字同义（`assertOpsContract()` 会在加载时比对）。
+   *      ⚠️ 唯一性在 SQLite 那边由索引兜住，JSON 这边没有约束 ⇒
+   *      「重复导入」的幂等判定必须由业务层显式查一次（与 `getVaultMeta()` 同一做法）。
+   * @param {(number|string)} uid - 导入者账号 id
+   * @param {Object} row - 钥匙材料行（不含 `user_id`，由本函数补）
+   * @returns {Object} 写入的行（已带 `id`）
+   */
+  insertImportedKey(uid, row) {
+    const full = Object.assign({}, row, { user_id: Number(uid), id: this.data._seq++ });
+    if (!Array.isArray(this.data.vault_imported_keys)) this.data.vault_imported_keys = [];
+    this.data.vault_imported_keys.push(full);
+    this._saveJson();
+    return full;
+  },
+
+  /**
+   * 功能：列出某个账号导入过的全部钥匙（新的在前）。
+   * @param {(number|string)} uid - 导入者账号 id
+   * @returns {Array.<Object>} 行数组（深拷贝）
+   */
+  listImportedKeys(uid) {
+    return (this.data.vault_imported_keys || [])
+      .filter((v) => uidOf(v) === Number(uid))
+      .sort((a, b) => b.id - a.id)
+      .map((v) => JSON.parse(JSON.stringify(v)));
+  },
+
+  /**
+   * 功能：按账号 ＋ 钥匙编号取一行导入记录；没有返回 null。
+   * @param {(number|string)} uid - 导入者账号 id
+   * @param {string} kid - 钥匙编号
+   * @returns {?Object} 行副本；未命中为 null
+   */
+  getImportedKey(uid, kid) {
+    const row = (this.data.vault_imported_keys || []).find(
+      (v) => uidOf(v) === Number(uid) && String(v.kid) === String(kid),
+    );
+    return row ? JSON.parse(JSON.stringify(row)) : null;
+  },
+
+  /**
+   * 功能：删掉一条导入记录（只删这一行，不碰文件、不影响别人）。
+   * @param {(number|string)} uid - 导入者账号 id
+   * @param {string} kid - 钥匙编号
+   * @returns {boolean} 删到行则为 true
+   */
+  deleteImportedKey(uid, kid) {
+    const before = (this.data.vault_imported_keys || []).length;
+    this.data.vault_imported_keys = (this.data.vault_imported_keys || []).filter(
+      (v) => !(uidOf(v) === Number(uid) && String(v.kid) === String(kid)),
+    );
+    this._saveJson();
+    return this.data.vault_imported_keys.length < before;
+  },
+
+  /**
+   * 功能：把「最近一次用它打开文件」的时间写到这一行上。
+   * @param {(number|string)} uid - 导入者账号 id
+   * @param {string} kid - 钥匙编号
+   * @param {string} stamp - 时间戳
+   * @returns {boolean} 更新到行则为 true
+   */
+  touchImportedKey(uid, kid, stamp) {
+    const i = (this.data.vault_imported_keys || []).findIndex(
+      (v) => uidOf(v) === Number(uid) && String(v.kid) === String(kid),
+    );
+    if (i < 0) return false;
+    this.data.vault_imported_keys[i].last_used_at = stamp;
+    this._saveJson();
+    return true;
   },
 };
 

@@ -32,6 +32,10 @@ import { mountOfflineBanner } from '../core/cache.js';
 import { aboutBodyHtml, contactBodyHtml } from '../core/about.js';
 import { addDays, fmtLong, mondayOf, todayStr, weekName } from '../core/date.js';
 import { $, copyText, esc } from '../core/dom.js';
+// ⭐ 数据位置的横幅文案与「三行库」共用一份（`core/data-location.js`）
+import { LOC_TEXT, bannerTextOf, mountRestartNotice } from '../core/data-location.js';
+// ⭐ 「没有对应的目录 → 跳转授权」的钩子（模块不能反向 import 本文件，所以由这里注册）
+import { setGotoAuthHandler } from '../core/grants.js';
 import { entryOn, moduleItems, navTabItems } from '../core/modules.js';
 // ⭐ 0.7.5 番茄钟：`clock` 只在 `switchTab()` 里用一次 —— 见那里的一段说明。
 //    它进本文件的**唯一**理由就是「所有标签切换的唯一出口在这里」：番茄钟的 1 秒心跳
@@ -57,6 +61,7 @@ import {
   askConfirm,
   closeSheet,
   consumeSheetPop,
+  isSheetLocked,
   isSheetOpen,
   openSheet,
   runBackHandler,
@@ -329,11 +334,14 @@ import {
   memberResetForm,
   migrateGo,
   migrateLedgerFlow,
+  moveDataFlow,
+  moveDataPick,
   navTabToggle,
   orgRestoreFlow,
   renderMore,
   renderSettings,
   restoreCommit,
+  revealGrantSection,
   setNavChangedHandler,
   toggleSec,
 } from './views/more.js';
@@ -374,6 +382,8 @@ import { handleTtEditAct } from '../modules/time/timetable-mobile-edit.js';
 //    这一屏的调度（四个 pane 的显隐 / 首页三颗按钮 / 三个子屏的「‹ 日程表」）全在 `home-mobile.js`。
 //    ⚠️ 三个接口前缀一个字没改（`/api/{timetable,pomodoro,trip}`），AI 的授权键也没动。
 import { bindTimeEvents, renderTime, timePick } from '../modules/time/home-mobile.js';
+// ⭐⭐ 0.9.8 第 7 轮：密码库自动锁定的**唯一计时者**（与电脑端同一份实现 —— R-114）
+import { startVaultWatch } from '../core/vault-watch.js';
 import {
   applyDashViewDefault,
   dashGoToday,
@@ -764,6 +774,17 @@ export function bindEvents() {
     //    所以这一趟 `popstate` 就是把那条记录弹掉的回执 —— 关的时候要带 `fromPop: true`，
     //    ⛔ 否则 `closeSheet()` 会再退一条，把用户真正的那一层历史也吃掉（连按两次才退一屏）。
     if (isSheetOpen()) {
+      // ⚠️⚠️ 0.9.8 第 3 轮：弹层锁着（实验室知情协议，必须先同意）⇒ **不吃这次返回**，
+      //    而是把刚被弹掉的那条记录补回去，弹层留在原地。不补的话栈里少一条，
+      //    用户再按返回会直接退屏 → 协议还挂在那儿、底下已经换了屏。
+      if (isSheetLocked()) {
+        try {
+          history.pushState({ zxSheet: 1 }, '', location.href);
+        } catch (_e) {
+          /* 宿主 webview 限制 history API 时忽略 —— 退化成「这一下没反应」，不会更糟 */
+        }
+        return;
+      }
       closeSheet({ fromPop: true });
       return;
     }
@@ -818,10 +839,28 @@ export function bindEvents() {
     else dailyForm();
   });
   // 软键盘弹出时把聚焦的输入框滚到可见区域（底部弹层里这一点尤其重要）
+  // ⭐⭐ 0.9.8 第 18 轮（「团队协作里点确定没反应」）：这一跳**必须能被下一次按下取消**。
+  //    原来的写法是「聚焦后 280ms 平滑滚到中间」，而用户改完字**紧接着**点「确定」时那一跳正好开始 ——
+  //    手指落下的位置是按钮，事件却落在已经滚走的空白上（`.sheet-body` 里滚的是内容，
+  //    按钮跟着内容走）⇒ 点了完全没反应，也不报错。表现与「按钮坏了」一模一样。
+  //    ⇒ 把这次滚动做成**可取消的一次**：用户一按下（pointerdown / touchstart）就作废。
+  //    ⚠️ 只取消「还没开始」的那一次；已经在滚的交给浏览器（中途掐断更晃眼）。
+  let focusScrollTimer = null;
+  const cancelFocusScroll = () => {
+    if (focusScrollTimer) {
+      clearTimeout(focusScrollTimer);
+      focusScrollTimer = null;
+    }
+  };
+  $('#sheet').addEventListener('pointerdown', cancelFocusScroll, true);
+  $('#sheet').addEventListener('touchstart', cancelFocusScroll, true);
   $('#sheet').addEventListener('focusin', (e) => {
     if (!e.target.matches('input, textarea, select')) return;
-    setTimeout(() => {
-      e.target.scrollIntoView({ block: 'center', behavior: RM ? 'auto' : 'smooth' });
+    cancelFocusScroll();
+    const target = e.target;
+    focusScrollTimer = setTimeout(() => {
+      focusScrollTimer = null;
+      target.scrollIntoView({ block: 'center', behavior: RM ? 'auto' : 'smooth' });
     }, 280);
   });
   window.addEventListener('keydown', (e) => {
@@ -940,6 +979,81 @@ const ASSETS_ACT = (act, n) => {
     .then((m) => m.assetsAction(act, n))
     .catch((e) => toast(e.message, true));
 };
+
+/**
+ * 功能：把**当前这一屏**滚到某个节点 —— 只写这一屏 `.view` 的 `scrollTop`。
+ *
+ * 说明：⭐⭐ 0.9.8 第 15 轮（老大 2026-11-11 真机报「点【跳转授权】过后，界面整体上移、
+ *      底部露白」，加密信息与数据位置两处入口都能复现）。原来用的是
+ *      `el.scrollIntoView({ block: 'start' })`，两个问题都落在它身上：
+ *      ① `block: 'start'` 是把目标**顶到视口最上面**。授权卡本来就在这一屏靠下的位置，
+ *         顶到最上面就等于把这一块之上的内容全推出屏幕 —— 看着就是「整屏被顶起来」；
+ *      ② 那时 `.view` 已经滚到极限，下面露出它的 `padding-bottom`
+ *         （安全区 ＋ 底栏 ＋ 96px 呼吸位）—— 就是屏幕底部那片空白。
+ *      另外 `scrollIntoView` 会把**沿途每一个可滚祖先**都走一遍，滚多少不由我们决定；
+ *      这里只写 `.view` 的 `scrollTop`，位置与上方留白都由调用方定。
+ *      ⚠️ 别改回 `scrollIntoView`：它的语义是「让元素可见」，不是「停在这一屏的某个位置」。
+ * @param {?HTMLElement} el - 目标节点
+ * @param {number} [pad] - 目标上方留出的空隙（px），缺省 12
+ * @returns {boolean} 真的把位移写进去了才是 true
+ */
+function scrollViewTo(el, pad) {
+  if (!el || typeof el.getBoundingClientRect !== 'function') return false;
+  const view = el.closest ? el.closest('.view') : null;
+  if (!view || !view.clientHeight) return false; // 这一屏还没显示（量到的都是 0）—— 交给调用方重试
+  const box = el.getBoundingClientRect();
+  // ⭐⭐ 0.9.8 第 17 轮（老大：「加密信息 → 附件位置 →【点击跳转授权】，落到的是数据存放那一块」）：
+  //    目标自己被收着 / 被筛掉时高度是 **0**，这时「滚过去」等于滚到它上面那个邻居
+  //    （设置页屏首正是「版本数据」里的数据存放）。量不到就如实回报 false，⛔ 不许假装滚好了。
+  if (!box.height) return false;
+  const top = box.top - view.getBoundingClientRect().top + view.scrollTop - (pad === undefined ? 12 : pad);
+  view.scrollTop = Math.max(0, top);
+  return true;
+}
+
+/**
+ * 功能：跳到「设置 → 账号设置 → 个人授权目录」并滚到那一块。
+ *
+ * 说明：⚠️ 手机端的设置是**一屏到底**（不分左右栏），所以只有切屏 ＋ 滚动两件事。
+ *      滚动延时是因为设置页是刚画出来的，立刻量位置会量到 0 高。
+ * @returns {void}
+ */
+function gotoGrantPane() {
+  switchTab('settings');
+  /**
+   * 功能：先让「账号设置」那一块**露出来**，再滚到它的开头。
+   *
+   * 说明：⭐⭐ 「跳转位置不对」的真因就在这里：手机端设置页的分块**默认收起**
+   *      （`isFolded('acct')` 缺省收起，见 `views/more.js`），收起时 `.sec.folded` 只留标题行
+   *      ⇒ 授权卡的高度是 **0**，滚过去就停在那一条线上，
+   *      看到的是一屏不相干的内容（而且不报错）。
+   *      ⭐ 0.9.8 第 17 轮又补上第二个「藏起来」的来源：设置页顶部的**筛选框**留着上次的词时，
+   *      `applySetFilter()` 会把不命中的卡打上 `hidden` —— 一样是 0 高、一样只能滚到屏首
+   *      （屏首正是「版本数据」里的数据存放，老大看到的就是它）。清筛选与展开都收在
+   *      `views/more.js` 的 `revealGrantSection()` 里，本函数只管「露出来 → 滚 → 滚不成就等」。
+   * @param {number} retry - 还剩几次重试（设置页是刚画出来的，前几次可能量不到节点 / 量到 0 高）
+   * @returns {void}
+   */
+  const step = (retry) => {
+    const el = revealGrantSection();
+    if (!el) {
+      if (retry > 0) setTimeout(() => step(retry - 1), 260);
+      return;
+    }
+    // ⭐⭐ 0.9.8 第 15 轮：滚到**「账号设置」这一块的开头**，⛔ 不是把授权卡顶到屏幕最上面。
+    //    顶到最上面的两个后果（老大真机报的就是这两条）：① 这一块之上的内容全被推出视口，
+    //    看着像「整屏被顶起」；② 它本来就在这一屏靠下，滚到它顶对齐时 `.view` 已经到底，
+    //    下面露出 `padding-bottom` 那片空白。滚到分块开头，授权目录就在下方一屏内，上下文也还在。
+    //    ⚠️⭐ 第 17 轮：**滚成功才算完**。从前这里不看返回值就 `return`，这一屏还没布局时
+    //    静默放弃 ⇒ 界面停在屏首，用户看到的就是「跳到了数据存放」。
+    if (scrollViewTo(el, 12)) return;
+    if (retry > 0) setTimeout(() => step(retry - 1), 160);
+  };
+  setTimeout(() => step(8), 120);
+}
+
+// ⭐ 加密信息面板里的「没有对应的目录」也走这里
+setGotoAuthHandler(gotoGrantPane);
 
 const ACTIONS = {
   // ---- ⭐ 0.8.5：首页那颗 ＋ 的三选一----
@@ -2084,6 +2198,14 @@ const ACTIONS = {
   'member-add': (_act, _n, _id) => {
     memberAddForm();
   },
+  // ⭐ 数据位置：手机端与电脑端同一套接口与文案（流程在 `views/more.js` 里）
+  'move-data': () => {
+    moveDataFlow();
+  },
+  // 选定某个已授权目录之后的另一半（预检 → 确认 → 搬迁）
+  'move-data-pick': (_act, n) => {
+    moveDataPick((n.dataset && n.dataset.path) || '');
+  },
   'copy-path': (_act, _n, _id) => {
     const p = (state.storage && state.storage.dataDir) || '';
     copyText(p).then((ok) =>
@@ -2473,6 +2595,9 @@ export function switchTab(tab, opts) {
     //    ⚠️ 那两屏的节点已经不在 `mobile/index.html` 里了，⛔ 留着名字 ⇒ 切过去整块内容不动、
     //    顶栏标题变字面量 `undefined`（而它**不报错**）。
     'assets',
+    // ⭐ 0.9.8：zx 实验室（纯屏宿主）也有一屏；⛔ 漏了它 ⇒ 切过去整块内容不动、顶栏标题变字面量
+    //    `undefined`，而且**不报错**。
+    'lab',
     'teamwork',
     // ⭐ 0.8.9：`ai` **从这份名单里撤了** —— AI 不再有自己的屏
     //    （配置并入设置页的「AI 设置」一栏，与电脑版同一步）。⛔ 留着它 ⇒ `$('#view-ai')` 回 null
@@ -2521,8 +2646,9 @@ export function switchTab(tab, opts) {
   //    （等它就等于又变回串行），与下面 `render()` 的取数**并行**（从前是串行：片段到货 →
   //    片段自己再取数，两趟网络叠在一起 = 白窗的主因）。⛔ 只预热片段 JS，**绝不预热数据**。
   //    ⚠️ 槽名与 `modules/webpass/mobile.js` / `modules/tasks/mobile-board.js` 里那个**逐字一致**。
-  if (tab === 'board' || tab === 'webpass') {
-    warmSlots('mobile', tab === 'board' ? 'board-pane' : 'webpass-pane', {
+  //    ⭐ 0.9.8：`lab` 也进这一支 —— 它同样要按药丸的项动态挂片段（0 个实验时这一趟什么都不拉）。
+  if (tab === 'board' || tab === 'webpass' || tab === 'lab') {
+    warmSlots('mobile', tab === 'board' ? 'board-pane' : tab === 'lab' ? 'lab-pane' : 'webpass-pane', {
       modules: state.modules,
       uiOf,
       me: state.me,
@@ -2624,6 +2750,9 @@ const NAV_PARENT = {
   //    ⛔ 留着不会崩，但那两行是**永远命不中的死分支**（`state.tab` 再也不会是那两个名字）。
   assets: 'more',
   ai: 'more',
+  // ⭐ 0.9.8：zx 实验室同样从「更多」进去 ⇒ 上一级是「更多」。
+  //    ⚠️ 漏了这一行的后果：那一屏的返回被当成「已在顶级」⇒ 直接交给浏览器（＝离开应用）。
+  lab: 'more',
 };
 
 /**
@@ -2896,6 +3025,8 @@ export function init() {
   //    而重画它的函数（`applyPrefsVisibility`）住在**本文件**里 —— 那个视图不能反向 import 本文件
   //    （会成静态环，见 `views/more.js` 里 `onNavChanged` 的说明），所以由这里注进去。
   setNavChangedHandler(applyPrefsVisibility);
+  // ⭐ 0.9.8 第 7 轮：起全局锁库计时（幂等）
+  startVaultWatch();
   bindEvents();
   // ⭐ 0.8.13：`time` 那一屏的屏内委托与三个子屏的返回行挂一次
   //    （挂在 `#view-time` 与各 pane 的 body 上 —— 都是静态节点）。
@@ -2912,6 +3043,8 @@ export function init() {
   //    深链进「收藏夹」会被算成「从更多进的」（多退出一层「更多」，用户没去过那一层）。
   syncHistoryChain(start);
   refresh();
+  // ⭐ 从阅读器回来时带的那一跳（见 `applyGotoParam()`）
+  applyGotoParam();
   // 跨天后自动重载，避免停在昨天
   setInterval(() => {
     if (todayStr() !== state.day) location.reload();
@@ -2922,6 +3055,39 @@ export function init() {
 //    （配置并入设置页的「AI 设置」一栏，与电脑版同一步）。它的界面现在由设置分栏片段
 //    `modules/ai/mobile-settings-pane.js` 动态挂载，那条路自己负责懒加载与失败提示。
 //    ⛔ 别把这份「屏加载器」加回来：屏都没有了，它取回来也没地方挂。
+
+/**
+ * 功能：处理入口上的 `?goto=<模块>[:<slot>]` —— 打开后**直接落到那一屏**。
+ *
+ * 说明：⭐ 阅读器是整页跳转，关掉时只能回到「应用首页的 URL」；没有这一条，
+ *      从阅读器回来的人会落在「今天」，而不是他刚才在看的加密信息。
+ *      ⚠️ 参数收完就用 `replaceState` 清掉，免得刷新一次又跳一次。
+ * @returns {void}
+ */
+function applyGotoParam() {
+  let sp;
+  try {
+    sp = new URLSearchParams(location.search);
+  } catch (_e) {
+    return;
+  }
+  const goto = String(sp.get('goto') || '');
+  if (!goto) return;
+  const cut = goto.indexOf(':');
+  const mod = cut < 0 ? goto : goto.slice(0, cut);
+  const slot = cut < 0 ? '' : goto.slice(cut + 1);
+  sp.delete('goto');
+  const qs = sp.toString();
+  try {
+    history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : '') + location.hash);
+  } catch (_e) {
+    /* 不允许就算了，不影响下面那一跳 */
+  }
+  if (mod === 'lab') {
+    pendingLabSlot = slot;
+    switchTab('lab', { replace: true });
+  }
+}
 
 /**
  * 功能：按当前标签页重绘对应视图（今天 / 任务板 / 课表 / 书签 / 灵感库 / 硬件 / 番茄钟 /
@@ -2956,6 +3122,31 @@ function openWebpassView() {
   return import('../modules/webpass/mobile.js')
     .then((m) => m.openWebpass({ slot: want }))
     .catch((e) => toast('网址/密码夹打不开：' + e.message, true));
+}
+
+/**
+ * 功能：把「zx 实验室」那一屏画出来（0.9.8）—— ⛔ **必须动态 import**
+ *      （与 `openWebpassView()` / `openAssetsView()` 同一条纪律）。
+ *
+ * 说明：⚠️⭐ 静态 import 会让「删掉 `public/modules/lab/`」连累**宿主页起不来**，
+ *      与「删目录验收」的口径冲突。⚠️ 路径必须是**字面量**：孤岛检查用正则扫 `import('…')`，
+ *      写成变量它看不见 ⇒ 那个文件会被误判成「生了但从不执行」。
+ *
+ * @returns {Promise.<void>} 这一屏画完（片段挂载完）之后 resolve —— `switchTab()` 要靠它
+ *      决定「什么时候让旧屏淡出」。
+ */
+/** 这一次进实验室要直接落到哪个实验（模块名）；用掉即清空 —— 由 `?goto=lab:<slot>` 带进来 */
+let pendingLabSlot = '';
+
+/**
+ * 功能：把「zx 实验室」那一屏画出来。
+ * @param {string} [slot] - 要直接进的实验（模块名）；不传就落卡片首页
+ * @returns {Promise.<void>} 这一屏画完（片段挂载完）之后 resolve
+ */
+function openLabView(slot) {
+  return import('../modules/lab/mobile.js')
+    .then((m) => m.openLab(slot ? { slot } : undefined))
+    .catch((e) => toast('zx实验室打不开：' + e.message, true));
 }
 
 /**
@@ -3064,7 +3255,9 @@ function gotoModule(name) {
       ? document.querySelector('#view-settings [data-slot-pane="' + paneId + '"]')
       : null;
     const sec = box && box.closest ? box.closest('.sec') : null;
-    if (sec && typeof sec.scrollIntoView === 'function') sec.scrollIntoView({ block: 'start' });
+    // ⚠️ 与「跳转授权」同一支（见 `scrollViewTo()` 的说明）：⛔ 不用 `scrollIntoView`，
+    //    否则外壳跟着被滚，整屏上移、底部露白
+    if (sec) scrollViewTo(sec, 0);
   }
 }
 
@@ -3108,6 +3301,13 @@ export function render(opts) {
   //    重画由各自的视图片段在切格时重挂（`mountModuleSlot()` 每次都重建根节点再渲染）。
   // ⭐ 0.8.10：个人资产管理（分组树 ＋ 通用条目 ＋ 借住进来的模块界面）—— 动态 import，见上面
   else if (state.tab === 'assets') painted = openAssetsView();
+  // ⭐ 0.9.8：zx 实验室（纯屏宿主）—— 动态 import，见下面 `openLabView()`
+  else if (state.tab === 'lab') {
+    // ⚠️ 先取值再清空：`openLabView()` 是异步的，等它回来时这个变量已经被下一屏改掉了
+    const want = pendingLabSlot;
+    pendingLabSlot = '';
+    painted = openLabView(want);
+  }
   // ⭐ 0.8.6 行程（取数在起的 `openTrip()` 里，这里只负责重画）
   else if (state.tab === 'teamwork') renderTeamwork();
   // ⭐ 0.8.9：`state.tab === 'ai'` 那一支**已撤**（AI 不再有自己的屏）。
@@ -3340,7 +3540,14 @@ export function updateChrome() {
       //    `state.tab === 'assets'` 覆盖（同一屏）⇒ 原来那句 `state.tab === 'ledger'` 删掉。
       //    ⚠️ 这条正是 `11-踩坑与说明.md` 里「漏登记 `ledger`」的同族 —— 当年就是在这里
       //    少写了一句判据；现在换成整屏判据，**按格补登记**这条路已经不需要了。
-      state.tab === 'teamwork',
+      state.tab === 'teamwork' ||
+      // ⭐⭐ 0.9.8 第 7 轮（老大真机报「点 ＋ 弹出的是任务」）：实验室这一屏里，
+      //    加密信息片段**自己带一颗圆形 ＋**（`#secrets-new`，`z-index: 5`），
+      //    而全局这颗是 `z-index: 45` ⇒ 正好压在上面。用户点的是「右边那颗 ＋」，
+      //    命中的却是全局 ＋（语义是「新建任务」），于是弹出了任务表单。
+      //    ⚠️ 与 `webpass` 同一条理由：屏内自带动作，全局 ＋ 会盖住它。
+      //    ⚠️ 只加判据 —— ⛔ 不动片段那颗 ＋ 的位置与 z-index（全局收起来之后就没有遮挡）。
+      state.tab === 'lab',
   );
   // ⭐ 0.8.15 真机修订：随手记那一档这颗 ＋ 是「记一条」⇒ 无障碍标签也得跟着换
   //    （否则读屏念的和按下去的做的是两件事）。判据与上面 `$('#fab')` 的 click 分支**同一条**。
@@ -3355,10 +3562,115 @@ export function updateChrome() {
  *    它是「数据写进了另一份文件」这一种更安静的降级，与电脑版读的是**同一个**服务端字段。
  * @returns {void}
  */
+/** 本次页面加载里「数据库授权未完成」的弹层是否已经弹过（每次进入应用都要弹一遍） */
+let lostAuthShown = false;
+
+/**
+ * 功能：数据位置**授权未完成**时的提示（与电脑端同一套口径，R-114）。
+ *
+ * 说明：⭐ `enforce === true`（自定义位置）且 `state === 'lost'` 才提示；
+ *      管理员弹一次抽屉（可跳到 设置 → 账号设置 → 个人授权目录），普通成员挂常驻红字。
+ * @param {Object} h - `state.health`
+ * @returns {boolean} 已处理返回 true
+ */
+function renderLostAuth(h) {
+  const auth = h && h.dataLocation && h.dataLocation.auth;
+  if (!auth || auth.enforce !== true || auth.state !== 'lost') return false;
+  const b = document.getElementById('m-banner');
+  const isAdmin = !!(state.me && state.me.is_admin);
+  const adminText = '数据库授权没有完成，无法提供使用！！！请前往 设置 - 账号设置 - 授权。';
+  const userText = '数据库授权没有完成，无法提供使用！！！请联系管理员检查授权信息。';
+  if (isAdmin && !lostAuthShown) {
+    lostAuthShown = true;
+    openSheet(
+      '数据库授权未完成',
+      `<div class="loc-red" style="margin:0 0 12px">${esc(adminText)}</div>
+       <button id="loc-auth-recheck" class="btn" type="button" style="width:100%">已重新授权，重新检查</button>`,
+      '<button class="btn" type="button" data-act="sheet-close">稍后处理</button>' +
+        '<button class="btn primary" type="button" id="loc-auth-jump" style="flex:1.4">【点击跳转】</button>',
+    );
+    const jump = document.getElementById('loc-auth-jump');
+    if (jump) {
+      jump.onclick = () => {
+        closeSheet();
+        gotoGrantPane();
+      };
+    }
+    const recheck = document.getElementById('loc-auth-recheck');
+    if (recheck) {
+      // ⭐⭐ 与电脑端同一条：授权是在飞牛那边做的，做完回来应用里可能还是旧结论 ——
+      //    没有这一颗，用户只能退出去再进，看起来就是「重新授权没用，还在弹」。
+      //    ⚠️ `?auth=1` = 不看缓存、现在问一次。
+      recheck.onclick = async () => {
+        recheck.disabled = true;
+        recheck.textContent = '正在检查…';
+        try {
+          const r = await api('GET', '/api/health?auth=1');
+          const st = r && r.dataLocation && r.dataLocation.auth;
+          if (st && st.state === 'ok') {
+            // ⚠️ 把新结论写回 `state.health`：不写的话下一次 `renderBanner()` 还按旧的 `lost`
+            //    把红字挂回来（用户会觉得「说好了，怎么又弹」）。
+            if (state.health && state.health.dataLocation) state.health.dataLocation.auth = st;
+            closeSheet();
+            const bn = document.getElementById('m-banner');
+            if (bn) {
+              bn.classList.add('hidden');
+              bn.textContent = '';
+            }
+            toast('授权已恢复，可以正常使用了');
+            return;
+          }
+          toast('还是没查到这个目录的授权 —— 请确认授权的是「数据位置」那个文件夹（或它的上级目录）', true);
+        } catch (e) {
+          toast(e.message || '检查失败，稍后再试', true);
+        }
+        recheck.disabled = false;
+        recheck.textContent = '已重新授权，重新检查';
+      };
+    }
+    return true;
+  }
+  if (!b) return true;
+  b.className = 'm-banner';
+  b.textContent = isAdmin ? adminText : userText;
+  return true;
+}
+
+/** 「请重新启动应用」那张常驻卡是否已经挂过（同一页只挂一张） */
+let restartNoticeShown = false;
+
+/**
+ * 功能：数据位置**待重启**时挂常驻遮罩（与电脑端同一张卡，见 `core/data-location.js`）。
+ *
+ * 说明：⭐ 迁移完成后应用只读；遮罩盖住界面、只留「去应用中心停止再启动」。
+ *      ⚠️ 刷新页面后也要重挂：`/api/bootstrap` 的 `health.dataLocation.pendingRestart` 会把它带回来。
+ * @param {Object} h - `state.health`
+ * @returns {boolean} 已挂
+ */
+function renderRestartGate(h) {
+  const loc = h && h.dataLocation;
+  if (!loc || !loc.pendingRestart) return false;
+  if (!restartNoticeShown) {
+    restartNoticeShown = true;
+    mountRestartNotice(loc.tail || '');
+  }
+  return true;
+}
+
 export function renderBanner() {
   const h = state.health;
   const b = document.getElementById('m-banner');
+  // ⭐ 待重启优先于一切（包括授权提示）：它挡着整个界面，别的提示此刻也没意义
+  if (renderRestartGate(h)) return;
+  if (renderLostAuth(h)) return;
   if (!b) return;
+  // ⭐ 数据位置（迁移中 / 待重启）优先：同样是只读状态，但它有明确的下一步（去重启）
+  const locText = h && h.dataLocation ? bannerTextOf(h.dataLocation) : null;
+  if (locText) {
+    b.className = 'm-banner';
+    b.textContent = `${locText}${LOC_TEXT.BANNER_RESTART_HOW}`;
+    return;
+  }
   if (!h || !(h.readOnly || h.degraded || h.backupError)) {
     b.classList.add('hidden');
     b.textContent = '';
@@ -3396,6 +3708,8 @@ const TITLES = {
   //    （并进「个人资产管理」的药丸格，`state.tab` 再也不会是 `'digital'` / `'ledger'`），
   //    顶栏标题在切格时是**整屏**的名字（`assets`），故这两个键从这张表里撤掉。
   assets: '个人资产管理',
+  // ⭐ 0.9.8：zx 实验室（纯屏宿主，决策 143）—— ⛔ 漏一行，顶栏标题就是字面量 `undefined`（不报错）。
+  lab: 'zx实验室',
   // ⭐ 0.7.5 番茄钟：⚠️ 这张表是**硬编码**的 —— 新加一屏忘了在这里补一行，
   //    顶栏标题就会显示字面量 `undefined`（不报错、不留痕）。
   pomodoro: '番茄钟',
