@@ -7,7 +7,9 @@
 package com.zxdesk.app.store
 
 import android.content.Context
+import com.zxdesk.core.connection.InputParser
 import com.zxdesk.core.connection.MiniJson
+import com.zxdesk.core.connection.Target
 
 /**
  * 一个保存过的 NAS 账号（地址 ＋ 飞牛账号）。
@@ -28,6 +30,19 @@ data class Account(
 
     /** 列表里的主标题：有账号就显示账号，没有就退回地址。 */
     val title: String get() = user.trim().ifBlank { address.trim() }
+
+    /**
+     * 分组键：地址里的主机名（去协议、去端口、去路径，统一小写）。
+     *
+     * 同一台 NAS 可能有多种写法（FNID / 局域网 IP / 自定义域名），这里只认地址自身的主机部分 ——
+     * 没有设备唯一标识就判定不了某个域名与某个 FNID 是同一台机器，⛔ 不靠猜合并。
+     */
+    val host: String
+        get() = when (val target = InputParser.parse(address)) {
+            is Target.Host -> target.host.lowercase()
+            is Target.FnId -> target.id.lowercase()
+            is Target.Invalid -> address.trim().lowercase()
+        }
 }
 
 /**

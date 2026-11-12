@@ -12,8 +12,8 @@ android {
         applicationId = "com.zxdesk.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 21
-        versionName = "0.3.1"
+        versionCode = 22
+        versionName = "0.3.2"
     }
 
     buildFeatures {
@@ -44,6 +44,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.coroutines.android)
+    // R-203 的唯一例外：WebView 的代理覆盖只有 ProxyController 一条路，而它在 androidx.webkit 里。
+    // ⛔ 只准用 ProxyController 与 WebViewFeature，别拿它做别的。
+    implementation(libs.androidx.webkit)
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)

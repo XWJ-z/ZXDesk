@@ -21,7 +21,16 @@ object Eula {
     /** 解析不出时按 1 处理：宁可少问一次，也不能每次启动都弹。 */
     private const val FALLBACK_VERSION = 1
 
-    private val VERSION_RE = Regex("版本\\s*(\\d+)")
+    /** 主版本占的位宽：`版本 1.1` → 101，`版本 2.0` → 200。 */
+    private const val MAJOR_STEP = 100
+
+    /**
+     * 「版本 x.y」→ 整数。
+     *
+     * ⚠️ **必须连次版本一起算**。只取整数部分的话 `1.0` 与 `1.1` 都会解析成 1：
+     * 协议改了版本号、老用户却不会再看到它 —— 那等于打着升版的旗号没升。
+     */
+    private val VERSION_RE = Regex("版本\\s*(\\d+)(?:\\.(\\d+))?")
 
     @Volatile
     private var cached: String? = null
@@ -36,6 +45,10 @@ object Eula {
         return loaded
     }
 
-    fun versionOf(text: String): Int =
-        VERSION_RE.find(text)?.groupValues?.get(1)?.toIntOrNull() ?: FALLBACK_VERSION
+    fun versionOf(text: String): Int {
+        val match = VERSION_RE.find(text) ?: return FALLBACK_VERSION
+        val major = match.groupValues[1].toIntOrNull() ?: return FALLBACK_VERSION
+        val minor = match.groupValues[2].toIntOrNull() ?: 0
+        return major * MAJOR_STEP + minor
+    }
 }

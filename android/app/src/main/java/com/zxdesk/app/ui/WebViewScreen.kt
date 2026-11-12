@@ -36,6 +36,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -50,7 +51,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -91,16 +91,16 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -112,6 +112,7 @@ import com.zxdesk.app.NoticeUi
 import com.zxdesk.app.Prefs
 import com.zxdesk.app.R
 import com.zxdesk.app.log.AppLog
+import com.zxdesk.app.net.WebViewProxy
 import com.zxdesk.app.store.Account
 import com.zxdesk.app.store.SessionStore
 import com.zxdesk.app.update.UpdatePhase
@@ -525,6 +526,18 @@ fun WebViewScreen(
                                 }
                             }
 
+                            val stageSink: (Stage) -> Unit = { s ->
+                                stage = s
+                                if (s is Stage.Failed) {
+                                    AppLog.w("Web", "页面失败：" + s.title + " · " + s.detail.replace('\n', ' ').take(180))
+                                }
+                                // 首帧画出来 ⇒ 之后的页面内跳转不再全屏遮（由那条细进度条接管）
+                                if (s == Stage.FirstPaint) booted = true
+                                // ⚠️ 三种时机都要通知上层收动画，缺一个就卡住（见参数注释）
+                                if (s == Stage.FirstPaint || s == Stage.Content || s is Stage.Failed) {
+                                    onFirstPaint()
+                                }
+                            }
                             webViewClient = buildClient(
                                 entry = entry,
                                 prefs = prefs,
@@ -533,18 +546,7 @@ fun WebViewScreen(
                                 // 已经在应用里、而且手里还握着会话 ⇒ 登录页是 401 跳出来的，
                                 // 先让上层试着续会话（首次进入时 arrived 还是 false，不拦）
                                 onLoginRedirect = { arrived && onLoginRedirect() },
-                                onStage = { s ->
-                                    stage = s
-                                    if (s is Stage.Failed) {
-                                        AppLog.w("Web", "页面失败：" + s.title + " · " + s.detail.replace('\n', ' ').take(180))
-                                    }
-                                    // 首帧画出来 ⇒ 之后的页面内跳转不再全屏遮（由那条细进度条接管）
-                                    if (s == Stage.FirstPaint) booted = true
-                                    // ⚠️ 三种时机都要通知上层收动画，缺一个就卡住（见参数注释）
-                                    if (s == Stage.FirstPaint || s == Stage.Content || s is Stage.Failed) {
-                                        onFirstPaint()
-                                    }
-                                },
+                                onStage = stageSink,
                                 onAskTrust = { trustQueue.add(it) },
                                 onMainFrame = { url ->
                                     when {
@@ -556,6 +558,28 @@ fun WebViewScreen(
                                     }
                                 },
                                 onExternal = { url -> openExternally(ctx, url) },
+                                /**
+                                 * 域名解析不了 ⇒ 起本机代理，起来后重新加载。
+                                 *
+                                 * ⚠️ 必须等 `enable` 返回 true 再 `reload`：代理覆盖是异步生效的，
+                                 * 抢跑那一页仍然走系统解析，等于白 reload 一次。
+                                 * 代理救不了（离线、内核不支持、覆盖被拒）就退回磁盘缓存那条老路。
+                                 */
+                                onDnsFailure = { host, cacheFallback ->
+                                    scope.launch {
+                                        if (WebViewProxy.enable(ctx, host)) {
+                                            stageSink(Stage.Loading)
+                                            webView?.reload()
+                                        } else if (!cacheFallback()) {
+                                            stageSink(
+                                                Stage.Failed(
+                                                    "打不开这个地址",
+                                                    "这台手机解析不了这个域名。换一个地址，或切到移动数据再试。",
+                                                ),
+                                            )
+                                        }
+                                    }
+                                },
                             )
 
                             // 原生 WS 登录（0.2.2）：直接种会话，⛔ 不经门户、⛔ 不等 Trim-MC-token
@@ -585,6 +609,8 @@ fun WebViewScreen(
                      */
                     onRelease = { view ->
                         webView = null
+                        // WebView 一拆，代理就没人用了：留着只是给下次进页面埋一个死端口
+                        WebViewProxy.disable()
                         runCatching {
                             view.stopLoading()
                             view.webChromeClient = null
@@ -777,6 +803,14 @@ fun WebViewScreen(
         }
     }
 
+    // 登录阶段就判过「系统解析被绕过」：首屏直接把代理挂上，别等页面报错再补。
+    // ⚠️ 只在真的新起代理时 reload —— 已经在生效还重载一次，等于白白多等一屏。
+    LaunchedEffect(webView) {
+        if (webView == null || WebViewProxy.isActive()) return@LaunchedEffect
+        if (!WebViewProxy.recentlyBypassed()) return@LaunchedEffect
+        if (WebViewProxy.enable(context)) webView?.reload()
+    }
+
     // 等「飞牛登录完成」：Cookie 名只是其中一条线索，主判据是网关真的能吐 HTML
     LaunchedEffect(webView, attempt) {
         if (webView == null) return@LaunchedEffect
@@ -915,20 +949,13 @@ internal fun ConnectionDrawer(
             modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp, top = 20.dp, bottom = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.primary,
+            // 品牌标＝桌面图标同一张图（drawable-<dpi>/ic_brand.png），⛔ 不再自绘「ZX」方块：
+            // 两处各画一份的结果是应用商店换了图标、抽屉里还是旧的紫方块。
+            Image(
+                painter = painterResource(R.drawable.ic_brand),
+                contentDescription = null,
                 modifier = Modifier.size(40.dp),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        "ZX",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onPrimary,
-                    )
-                }
-            }
+            )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text("ZXDesk", fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
@@ -1019,32 +1046,27 @@ internal fun ConnectionDrawer(
 /**
  * 顶置公告条：一行，长文案横向连续滚动（跑马灯）。
  *
- * 实测迭代（2026-11-03 一天四轮）：
+ * 四条判据：
  * ① 文字**放得下就完整显示、根本不滚** —— 短文案滚起来反而像出故障；
- * ② 放不下才滚，**不停顿**：16:07 那版在头尾各停了 1.5s / 1.2s，真机上被当成「卡一下」；
- * ③ 两份文案**各自 `offset` 定位**，不靠 `Row` 摆放 —— 那个会被父宽度压成重影（16:14）。
+ * ② 放不下才滚，**不停顿**：头尾各停一下，真机上会被当成「卡一下」；
+ * ③ 两份文案**各自 `graphicsLayer` 定位**，不靠 `Row` 摆放 —— 那个会被父宽度压成重影；
+ * ④ 滚动距离只能是「这一行文字的真实宽度 ＋ 间隔」的整数倍，⛔ 不能写死。
  *
- * ⚠️ 宽度必须用 [rememberTextMeasurer] 预量，⛔ 不能用 `Text.onSizeChanged`：
- *    那个拿到的是**被父约束压到视口宽之后**的值，长文案会被误判成「放得下」，
- *    表现就是「加了判断之后它干脆不滚了」（16:10）。
- *    同理 `Text` 要用 `requiredWidth` 强制完整宽度，否则超出部分被自己裁掉，尾巴看不见。
+ * ⚠️ 宽度必须**按真实排版量**，`TextMeasurer` 预量靠不住：它拿的是 `TextStyle` 的裸宽，
+ *    而 `Text` 渲染时还要合并 `LocalTextStyle`（`letterSpacing` / 字重都在里面），
+ *    两边的宽差多少、尾巴就被 `Text` 自己裁掉多少 —— 表现正是「滚到头了，后半句还没出来」。
+ *    这里的做法是让 `Layout` 以**无约束**量一份真实 `Text`，量出来多少就是多少；
+ *    ⛔ 别退回去用 `requiredWidth(预量值)` 或 `onSizeChanged`（后者拿到的是被父约束压过的宽）。
  *
  * 速度 30dp/s：11sp 的字在这个速度下刚好能跟着读。
  */
 @Composable
 private fun MarqueeBar(text: String) {
     val density = LocalDensity.current
-    val measurer = rememberTextMeasurer()
     val textStyle = remember { TextStyle(fontSize = 11.sp) }
-    // 单份文字的真实宽度（像素）：不带父约束量，短长一眼可判
-    val textWidthPx = remember(text, textStyle) {
-        measurer.measure(
-            text = AnnotatedString(text),
-            style = textStyle,
-            maxLines = 1,
-            softWrap = false,
-        ).size.width
-    }
+    val textColor = MaterialTheme.colorScheme.primary
+    // 单份文字的真实宽度（像素）：由下面的 Layout 在无约束下量回来
+    var textWidthPx by remember(text) { mutableStateOf(0) }
     var viewportWidthPx by remember(text) { mutableStateOf(0) }
     val gapPx = with(density) { 40.dp.toPx() }
     val speedPxPerSec = with(density) { 30.dp.toPx() }
@@ -1061,7 +1083,7 @@ private fun MarqueeBar(text: String) {
         val duration = ((total / speedPxPerSec) * 1000f).toInt().coerceAtLeast(1_500)
         offset.snapTo(0f)
         // 连续滚，中间不插 delay：`snapTo(0)` 那一刻第二份正好在 0 位置、内容与终点一致，
-        // 画面没有跳变；一旦中间停一下，用户看到的就是「卡住」（真机 2026-11-03 16:19）。
+        // 画面没有跳变；一旦中间停一下，用户看到的就是「卡住」。
         while (true) {
             offset.animateTo(-total, tween(duration, easing = LinearEasing))
             offset.snapTo(0f)
@@ -1090,36 +1112,52 @@ private fun MarqueeBar(text: String) {
                 .clipToBounds()
                 .onSizeChanged { viewportWidthPx = it.width },
         ) {
-            val fullWidth = with(density) { textWidthPx.toDp() }
-            // 两份文字**各自定位**，不靠 Row 依次摆放 —— 真机 2026-11-03 16:14 用 Row 时
-            // 第二份被压到第一份的位置上，两行字叠成重影（`requiredWidth` 只管子项自身宽度，
-            // 管不了 Row 在受限宽度下的摆放）。
+            // 两份文字**各自定位**，不靠 Row 依次摆放 —— 用 Row 时第二份会被压到第一份的位置上，
+            // 两行字叠成重影。
             // ⚠️ 位移走 `graphicsLayer`，⛔ 不用 `Modifier.offset { }`：后者是 layout modifier，
-            //    每帧都要重排一次长文本，慢机上就是「滚到某处卡一下」（16:19 的反馈）；
+            //    每帧都要重排一次长文本，慢机上就是「滚到某处卡一下」；
             //    `graphicsLayer` 只改绘制位置，不触发布局。
-            val shiftPx = textWidthPx + gapPx
-            Text(
-                text,
-                fontSize = 11.sp,
-                maxLines = 1,
-                softWrap = false,
-                color = MaterialTheme.colorScheme.primary,
-                // 强制完整宽度：不加它，超出视口的部分会被 Text 自己裁掉
-                modifier = Modifier
-                    .requiredWidth(fullWidth)
-                    .graphicsLayer { translationX = offset.value },
-            )
-            // 第二份起步晚「一整条 ＋ 间隔」：第一份滚完时它正好补到起点，看不出接缝
-            Text(
-                text,
-                fontSize = 11.sp,
-                maxLines = 1,
-                softWrap = false,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .requiredWidth(fullWidth)
-                    .graphicsLayer { translationX = offset.value + shiftPx },
-            )
+            // ⚠️ 量出来的宽度在下面回写到 `textWidthPx`；那一帧之前两份会重叠在 0 位置，
+            //    所以宽度未知时整条先不画（alpha 0），⛔ 别让它闪一下叠字。
+            val ready = textWidthPx > 0
+            val shiftPx = (textWidthPx + gapPx)
+            Layout(
+                content = {
+                    Text(
+                        text,
+                        style = textStyle,
+                        color = textColor,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.graphicsLayer {
+                            alpha = if (ready) 1f else 0f
+                            translationX = offset.value
+                        },
+                    )
+                    // 第二份起步晚「一整条 ＋ 间隔」：第一份滚完时它正好补到起点，看不出接缝
+                    Text(
+                        text,
+                        style = textStyle,
+                        color = textColor,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.graphicsLayer {
+                            alpha = if (ready) 1f else 0f
+                            translationX = offset.value + shiftPx
+                        },
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) { measurables, constraints ->
+                // ⭐ 以**无约束**量：softWrap=false ＋ 宽度无限 ⇒ 量到的就是这一行的完整宽度
+                val placeables = measurables.map { it.measure(Constraints()) }
+                val width = placeables.first().width
+                val height = placeables.maxOf { it.height }
+                if (width > 0 && width != textWidthPx) textWidthPx = width
+                layout(constraints.maxWidth, height) {
+                    placeables.forEach { it.place(0, 0) }
+                }
+            }
         }
     }
 }
@@ -1766,12 +1804,29 @@ private fun buildClient(
     onAskTrust: (PendingTrust) -> Unit,
     onMainFrame: (String?) -> Unit,
     onExternal: (String) -> Unit,
+    /**
+     * 主框架因**解析失败**打不开时的接管：上层去起本机代理，起来后重新加载这一页。
+     *
+     * 只在 `ERROR_HOST_LOOKUP` 时触发，且由 [proxyRetryUsed] 保证只触发一次。
+     *
+     * @param host 打不开的那个域名（代理要先确认它真能解析出来）
+     * @param cacheFallback 代理救不了时的退路 —— 改走磁盘缓存重载一次。
+     *   返回 false 表示缓存那条已经用过了，调用方该显示错误卡片。
+     */
+    onDnsFailure: (host: String, cacheFallback: () -> Boolean) -> Unit,
 ): WebViewClient = object : WebViewClient() {
 
     private val isGateway = entry.flow == EntryFlow.GATEWAY
 
     /** 是否已经试过「从磁盘缓存加载」（0.2.15）：只试一次，避免错误页 ↔ 重试的死循环。 */
     private var cacheRetryUsed = false
+
+    /**
+     * 是否已经为「解析不了域名」起过一次本机代理。
+     *
+     * ⚠️ 只试一次：代理起不来还重试就是死循环，页面会一直在「加载 → 失败 → 加载」之间闪。
+     */
+    private var proxyRetryUsed = false
 
     /**
      * 本次导航已经失败过。
@@ -1935,21 +1990,35 @@ private fun buildClient(
         error: WebResourceError?,
     ) {
         if (request?.isForMainFrame != true) return
-        // 断网兜底：网络层错误先试一次「完全走磁盘缓存」——
+        val code = error?.errorCode ?: 0
+        // 断网兜底：网络层错误改走「完全走磁盘缓存」——
         //    服务端的静态资源是 `no-cache` + ETag，断网时条件请求必然失败，
         //    WebView 按规范不会拿过期缓存顶（于是一张系统错误页）。
         //    LOAD_CACHE_ELSE_NETWORK 把这条限制放开，有缓存就能渲染出来。
         //    ⚠️ 只试一次（`cacheRetryUsed`）：缓存也没有时会再次 onReceivedError，
         //       那时必须老老实实显示错误页，否则就是「重试 → 失败 → 重试」的死循环。
-        val code = error?.errorCode ?: 0
-        if (!cacheRetryUsed && view != null && isNetworkLayerError(code)) {
-            cacheRetryUsed = true
-            AppLog.w("Web", "网络错误 " + code + "，改走磁盘缓存重试一次")
-            view.settings.cacheMode = WebSettings.LOAD_CACHE_ELSE_NETWORK
-            onStage(Stage.Loading)
-            view.loadUrl(request.url.toString())
+        val retryFromCache: () -> Boolean = {
+            if (cacheRetryUsed || view == null) {
+                false
+            } else {
+                cacheRetryUsed = true
+                AppLog.w("Web", "网络错误 " + code + "，改走磁盘缓存重试一次")
+                view.settings.cacheMode = WebSettings.LOAD_CACHE_ELSE_NETWORK
+                onStage(Stage.Loading)
+                view.loadUrl(request.url.toString())
+                true
+            }
+        }
+        // 解析类失败**先**走本机代理：Chromium 有自己的负缓存，
+        // 登录阶段绕过一次系统解析之后，进页面仍可能复发，这条兜底是必须的。
+        // 排在缓存之前 —— 解析没通的时候，缓存重载只是白 reload 一次。
+        if (code == ERROR_HOST_LOOKUP && !proxyRetryUsed) {
+            proxyRetryUsed = true
+            AppLog.w("Web", "解析失败，尝试改走本机代理")
+            onDnsFailure(request.url.host.orEmpty(), retryFromCache)
             return
         }
+        if (isNetworkLayerError(code) && retryFromCache()) return
         loadFailed = true
         onStage(
             Stage.Failed(

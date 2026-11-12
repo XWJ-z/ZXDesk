@@ -8,6 +8,8 @@ package com.zxdesk.core.connection
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 
 /** FNID 查询结果（字段对应 `POST /api/v1/fn/con` 的 `data`）。 */
 data class FnIdAddresses(
@@ -39,12 +41,22 @@ class FnIdNotFoundException(message: String) : FnIdException(message)
 
 /**
  * 真解析：`POST https://5ddd.com/api/v1/fn/con`（备用 `fnos.net`）。
- * 用 `HttpURLConnection`，不引 OkHttp —— 一次 POST、无连接复用需求。
+ *
+ * 为什么用 OkHttp 而不是 `HttpURLConnection`：要挂自定义解析器 [DohDns]。
+ * `fnos.net` 是 GeoDNS，论坛有同域解析事故，系统解析给不出地址时这条路得能自己走。
  */
 class HttpFnIdResolver(
     private val endpoints: List<String> = listOf(PRIMARY_ENDPOINT, FALLBACK_ENDPOINT),
     private val timeoutMs: Int = 8000,
 ) : FnIdResolver {
+
+    private val client by lazy {
+        okhttp3.OkHttpClient.Builder()
+            .dns(DohDns)
+            .connectTimeout(timeoutMs.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
+            .readTimeout(timeoutMs.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
+            .build()
+    }
 
     override suspend fun resolve(fnId: String): FnIdAddresses = withContext(Dispatchers.IO) {
         var lastError: Throwable? = null
@@ -67,24 +79,16 @@ class HttpFnIdResolver(
         val body = "{\"fnId\":\"$fnId\"}"
         val timestamp = System.currentTimeMillis()
         val nonce = (1_000_000 + (Math.random() * 9_000_000).toLong()).toString()
-        val connection = (java.net.URL(endpoint + FnIdSigner.CONNECT_PATH).openConnection()
-            as java.net.HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = timeoutMs
-            readTimeout = timeoutMs
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            setRequestProperty("authx", FnIdSigner.authx(timestamp, nonce, body))
-            setRequestProperty("fn-sign", FnIdSigner.fnSign(fnId, timestamp))
-            setRequestProperty("User-Agent", USER_AGENT)
-        }
-        try {
-            connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-            val status = connection.responseCode
-            val text = (if (status in 200..299) connection.inputStream else connection.errorStream)
-                ?.use { it.readBytes().toString(Charsets.UTF_8) }
-                .orEmpty()
-            if (status !in 200..299) throw FnIdException("FNID 服务器返回 HTTP $status")
+        val request = okhttp3.Request.Builder()
+            .url(endpoint + FnIdSigner.CONNECT_PATH)
+            .header("authx", FnIdSigner.authx(timestamp, nonce, body))
+            .header("fn-sign", FnIdSigner.fnSign(fnId, timestamp))
+            .header("User-Agent", USER_AGENT)
+            .post(body.toRequestBody(JSON.toMediaType()))
+            .build()
+        client.newCall(request).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw FnIdException("FNID 服务器返回 HTTP ${response.code}")
             return when (val parsed = FnIdResponse.parse(text)) {
                 is FnIdResponse.Ok -> parsed.addresses
                 is FnIdResponse.NotFound -> throw FnIdNotFoundException(
@@ -92,8 +96,6 @@ class HttpFnIdResolver(
                 )
                 is FnIdResponse.Bad -> throw FnIdException(parsed.reason)
             }
-        } finally {
-            connection.disconnect()
         }
     }
 
@@ -101,5 +103,6 @@ class HttpFnIdResolver(
         const val PRIMARY_ENDPOINT = "https://5ddd.com"
         const val FALLBACK_ENDPOINT = "https://fnos.net"
         private const val USER_AGENT = "okhttp/4.12.0"
+        private const val JSON = "application/json; charset=utf-8"
     }
 }

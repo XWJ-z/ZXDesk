@@ -229,6 +229,17 @@ internal fun HelpScreen(version: String, onClose: () -> Unit) {
                 }
 
                 HelpCard {
+                    HelpSectionTitle("域名解析")
+                    Text(
+                        "系统解析失败时，会用公共 DNS over HTTPS 再查一次 IP，" +
+                            "只查目标域名，不上传其它内容。",
+                        fontSize = 12.sp,
+                        lineHeight = 18.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                HelpCard {
                     HelpSectionTitle("交流群")
                     Text(
                         "欢迎加入QQ群交流与反馈！有问题联系任意管理员咨询哦！",

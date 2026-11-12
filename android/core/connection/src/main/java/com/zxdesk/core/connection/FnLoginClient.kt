@@ -187,16 +187,12 @@ class FnLoginFlow(
     private fun wsUrl(): String = "wss://$host/websocket?type=main"
 
     /**
-     * 建 WS 之前先把域名解析一次。
+     * 建连前做一次解析诊断（**不阻断**）。
      *
-     * 为什么不交给 OkHttp 自己报：它抛的是 `UnknownHostException`，原文是
-     * `Unable to resolve host "my-nas.fnos.net": No address associated with hostname` ——
-     * 用户既看不懂，也推不出下一步。中继域名（`<fnid>.fnos.net`）是**泛解析**：
-     * 手机上解析不了，多半是网络侧的 DNS 限制（运营商 / 路由器 / 私人 DNS / 代理），
-     * 不是 FNID 错了，更不是账号密码错了（0.2.17 真机报告 2026-11-02 20:48）。
+     * 为什么不在这里拦人：真正的解析交给 [DohDns] —— 系统解析不通时它会改走公共解析，
+     * 建连照常进行。这里再抛异常，只会把一条本来能走通的路提前掐断。
      *
-     * ⚠️ 只解析、不改写地址：失败就明确失败。⛔ 不要偷偷换成 IP —— 中继证书绑的是域名，
-     *    换 IP 之后 TLS 必然对不上，表现会从「解析失败」变成更难懂的「证书错误」。
+     * 唯一会失败的情况是**两条路都不通**：这时如实报错，文案按没网 / 中继无此设备分流。
      */
     private suspend fun preflightHost() {
         val name = hostName
@@ -204,24 +200,9 @@ class FnLoginFlow(
         // `substringBefore(':')` 会把 `2001:db8::1` 切成 `2001`，然后把一次自找的失败
         // 说成「解析不了域名 2001」，比原始错误更误导。
         if (host.count { it == ':' } > 1) return
-        if (name.isBlank() || isIpLiteral(name)) return
-        try {
-            withContext(Dispatchers.IO) { java.net.InetAddress.getAllByName(name) }
-        } catch (e: java.net.UnknownHostException) {
-            // 解析失败先做一次 DoH 复核：把「本地 DNS 坏了」与「中继记录真没了」分开，
-            // 这两种情况的处置完全不同（一个换网就好，一个只能等）。
-            val doh = withContext(Dispatchers.IO) { DohProbe.lookup(name) }
-            throw FnLoginException(
-                FnLoginStep.WS_CONNECT,
-                dnsFailureMessage(name, doh),
-                "UnknownHostException: ${e.message}",
-                e,
-            )
-        }
+        if (name.isBlank() || DnsCheck.isIpLiteral(name)) return
+        withContext(Dispatchers.IO) { DnsCheck.inspect(name) }
     }
-
-    private fun isIpLiteral(value: String): Boolean =
-        value.contains(':') || IPV4_RE.matches(value)
 
     /**
      * 握手要带的 Cookie：调用方递进来的网关 Cookie（过完访问码才有）＋ 中继的 `mode=relay`。
@@ -577,6 +558,7 @@ class FnLoginFlow(
      */
     private fun claimTicket(ticket: String, token: String): List<String> {
         val client = OkHttpClient.Builder()
+            .dns(DohDns)
             .connectTimeout(timeoutMs, TimeUnit.MILLISECONDS)
             .readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
             .build()
@@ -637,40 +619,32 @@ class FnLoginFlow(
         const val CREDENTIAL_EXPIRED = 102_570_109L
         const val VERIFICATION_CODE_WRONG = 135_168L
         const val KEEPALIVE_MS = 20_000L
-
-        /** 只用于「这是不是 IP」的粗判 —— 不做范围校验，那种事归 [InputParser]。 */
-        val IPV4_RE = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
     }
 }
 
 /**
  * 域名解析失败时给用户看的那句话。
  *
- * 三态由 [DohProbe] 判出来（见 [DohResult]），每一态的处置完全不同 —— 这是 0.2.18 真机
- * （2026-11-03 09:05）踩出来的：`*.fnos.net` 解析不了、同一时刻 DDNS 域名好好的，
- * 用户以为是「账号被风控」，实际只是本地 DNS 把一次 NODATA 负缓存了十几分钟。
+ * 两态由公共解析判出来（见 [DohResult]），处置完全不同：中继侧没有这台设备只能等，
+ * 连公共解析都到不了则是手机没网。
  *
- * ⚠️ 这句话会进失败卡片，也会被「复制诊断」带走 —— ⛔ 不要塞内部异常类名与堆栈。
- *    `detail` 那一路另有原始异常，排障时够用。
+ * ⚠️ `DohResult.Found` 不在这里：那条路**根本不算失败** —— 解析器拿到地址就照常建连了，
+ *    走不到失败卡片。⛔ 别为它留一个永远不执行的分支。
  *
- * @param doh 复核结果；`null` = 没做复核（例如 OkHttp 在握手回调里抛的，不能在那里阻塞）
+ * ⚠️ 这句话会进失败卡片，也会被「复制诊断」带走 —— ⛔ 不要塞内部异常类名与堆栈，
+ *    也⛔ 不要出现破折号与括号。`detail` 那一路另有原始异常，排障时够用。
+ *
+ * @param doh 公共解析的结果；`null` = 没查（例如 OkHttp 在握手回调里抛的，不能在那里阻塞）
  */
-internal fun dnsFailureMessage(host: String, doh: DohResult? = null): String = when (doh) {
-    is DohResult.Found ->
-        "手机本地 DNS 解析不了 $host，但域名本身有记录（公共 DoH 查到 ${doh.ips.first()}）。" +
-            "这是本地 DNS 缓存或过滤的问题，不是 FNID 失效，也不是风控；" +
-            "开关一次飞行模式、或切换 WiFi / 移动数据即可恢复。如果你在家，直接填 NAS 的局域网 IP 更快。"
-    DohResult.NoRecord ->
-        "$host 现在没有解析记录（公共 DoH 复核也是空）。这是飞牛中继侧暂时没有这台设备，" +
-            "不是账号被风控；通常十几分钟会自愈。着急的话先用你的 DDNS 域名或局域网 IP 连接。"
-    DohResult.Unreachable ->
-        "手机现在连公共 DNS 都到不了，先检查网络（WiFi / 移动数据）是否真的通了。" +
+internal fun dnsFailureMessage(host: String, doh: DohResult? = null): String = when {
+    doh is DohResult.NoRecord ->
+        "$host 现在没有解析记录，飞牛中继侧暂时没有这台设备。" +
+            "不是账号被风控，通常十几分钟会自愈。"
+    doh is DohResult.Unreachable ->
+        "手机现在连公共解析都到不了，先确认网络真的通了。" +
             "$host 解析不了是网络不通的连带结果。"
-    null ->
-        "手机网络解析不了域名 $host（不是 FNID 错了，也不是账号密码错）。" +
-            "请切换 WiFi / 移动数据后重试；开了「私人 DNS」的话先关掉——" +
-            "国外 DoT 对这类泛解析子域经常返回空结果；" +
-            "如果你在家，地址栏改填 NAS 的局域网 IP 更快，也不受这个影响。"
+    else ->
+        "手机解析不了域名 $host。不是 FNID 错了，也不是账号密码错。"
 }
 
 /**
@@ -760,7 +734,12 @@ internal class WsRpc(
     @Volatile
     private var connected = false
 
+    /** 本次连接是否已经因为「解析到了但连不上」兜过一次；成功了就重置。 */
+    private var dnsRetried = false
+
     private fun buildClient(): OkHttpClient = OkHttpClient.Builder()
+        // 系统解析不通时改走公共解析：飞牛 APP 能连我们不能，差的就是这一层
+        .dns(DohDns)
         .connectTimeout(timeoutMs, TimeUnit.MILLISECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         // ⛔ 不开 pingInterval：飞牛中继不一定回 pong，OkHttp 到时会把连接判死；
@@ -778,7 +757,7 @@ internal class WsRpc(
     /** 已连着就复用；断了就重开。 */
     suspend fun ensureConnected() {
         if (connected) return
-        openSocket()
+        openWithFreshDns()
     }
 
     /** 换一条新连接（旧的可能已经被服务端关掉，别复用）。 */
@@ -788,7 +767,31 @@ internal class WsRpc(
         client = buildClient()
         socket = null
         connected = false
-        openSocket()
+        dnsRetried = false
+        openWithFreshDns()
+    }
+
+    /**
+     * 建连失败时，若是中继域名且属于「连不上 / 超时」，强制重查一次解析再试一遍。
+     *
+     * 为什么要单独兜这一手：`fnos.net` 是 GeoDNS，系统解析**成功**也可能给出一个不可达的
+     * 海外节点 —— 这种情况上层不会报解析失败，60 秒缓存里还是那批坏地址，只能在这里主动绕过。
+     *
+     * ⛔ 只兜一次（[dnsRetried]）：连不通的节点不该把登录拖成无限重连。
+     */
+    private suspend fun openWithFreshDns() {
+        try {
+            openSocket()
+            dnsRetried = false
+        } catch (e: Throwable) {
+            val host = hostOf(url)
+            if (!shouldRetryWithFreshDns(host, e, dnsRetried)) throw e
+            val fresh = runCatching { DohDns.refreshIfChanged(host) }.getOrNull()
+            // 重查也拿不到新地址（或还是同一批）：按原失败路径报错
+            if (fresh.isNullOrEmpty()) throw e
+            dnsRetried = true
+            openSocket()
+        }
     }
 
     private suspend fun openSocket() {

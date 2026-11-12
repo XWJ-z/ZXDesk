@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-      图标底色：与 App 内的强调色同一个值（Material3 light primary #6650A4）。
-      ⚠️ 改这里要跟 theme 对齐，否则桌面图标和 App 里第一眼就不是一家。
+      图标底色已挪进 drawable/ic_launcher_background.xml（渐变，跟素材库最新稿同源）。
+      ⛔ 别再在这里补一个同名 <color>：自适应图标要的是**铺满 108dp 的渐变**，
+      纯色会把原稿上亮下暗的立体感抹掉。
     -->
-    <color name="ic_launcher_background">#6650A4</color>
 
     <!-- 窗口底色 = 登录页背景（AND-008 §4.4），状态栏/导航栏透出同色 -->
     <color name="window_background">#F5F7FB</color>

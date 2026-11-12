@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标底色：与 `PublicMaterial/应用图标/ZXDesk-图标.svg` 的 `#bg` + `#glow` 同源。
+
+  为什么底色不用位图：自适应图标由系统裁形状，底色铺满 108dp 才不会在圆形遮罩下露白边；
+  位图会跟着前景一起缩放，边角总有缝。渐变角度也照原稿的 0.12,-0.05 → 0.78,1.05 换算，
+  ⛔ 别改成 45° —— 原稿的光在上、阴影在下，角度一偏就没有那个立体感。
+
+  ⚠️ aapt:attr 里的 gradient 需要 API 24+（本项目 minSdk=26，安全）。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 主渐变：8FC0FF → 3B7BF5 → 1B4CD4 -->
+    <path android:pathData="M0,0h108v108H0z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="12.96"
+                android:startY="-5.4"
+                android:endX="84.24"
+                android:endY="113.4"
+                android:startColor="#8FC0FF"
+                android:centerColor="#3B7BF5"
+                android:endColor="#1B4CD4" />
+        </aapt:attr>
+    </path>
+
+    <!-- 顶部白色光晕（原稿 #glow，38% → 10% → 0） -->
+    <path android:pathData="M0,0h108v108H0z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="54"
+                android:centerY="-6.48"
+                android:gradientRadius="91.8"
+                android:startColor="#61FFFFFF"
+                android:centerColor="#1AFFFFFF"
+                android:endColor="#00FFFFFF" />
+        </aapt:attr>
+    </path>
+</vector>

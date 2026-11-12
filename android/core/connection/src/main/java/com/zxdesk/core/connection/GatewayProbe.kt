@@ -6,6 +6,8 @@
 
 package com.zxdesk.core.connection
 
+import java.util.concurrent.TimeUnit
+
 /** 网关在 `/app/zxdesk/` 下可能给出的四种响应（决定界面下一步走哪一屏）。 */
 enum class GatewayPage {
     /** 真正的应用页面（HTML）。 */
@@ -87,6 +89,17 @@ class GatewaySessionProbe(
     private val gatewayPath: String = ConnectionPlanner.DEFAULT_GATEWAY_PATH,
     private val timeoutMs: Int = 5000,
 ) {
+    /** 复用一份客户端：同一台 NAS 的探页会连续发生，连接复用能省掉握手。 */
+    private val client by lazy {
+        okhttp3.OkHttpClient.Builder()
+            .dns(DohDns)
+            .connectTimeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
+            .readTimeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
+            // ⛔ 不跟跳转：跳过去的多半是登录页，跟着走会把「未登录」测成「有页面」
+            .followRedirects(false)
+            .build()
+    }
+
     /** 阻塞调用，⛔ 别在主线程跑。 */
     fun isReady(cookieHeader: String?): Boolean = probe(cookieHeader) == GatewayPage.APP
 
@@ -103,26 +116,19 @@ class GatewaySessionProbe(
      * 服务端给了非 200 或认不出的正文仍算 [GatewayProbeResult.Page]，那是服务端在说话，不是网络断。
      */
     fun probeDetailed(cookieHeader: String?): GatewayProbeResult {
-        val connection = try {
-            (java.net.URL("$baseUrl$gatewayPath/login.html").openConnection() as java.net.HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = timeoutMs
-                readTimeout = timeoutMs
-                instanceFollowRedirects = false
-                setRequestProperty("Accept", "text/html,application/xhtml+xml")
-                if (!cookieHeader.isNullOrBlank()) setRequestProperty("Cookie", cookieHeader)
+        val request = okhttp3.Request.Builder()
+            .url("$baseUrl$gatewayPath/login.html")
+            .header("Accept", "text/html,application/xhtml+xml")
+            .apply { if (!cookieHeader.isNullOrBlank()) header("Cookie", cookieHeader) }
+            .get()
+            .build()
+        return try {
+            client.newCall(request).execute().use { response ->
+                if (response.code != 200) return GatewayProbeResult.Page(GatewayPage.UNKNOWN)
+                GatewayProbeResult.Page(GatewayBody.classify(response.body?.string().orEmpty()))
             }
         } catch (_: Exception) {
-            return GatewayProbeResult.Unreachable
-        }
-        return try {
-            if (connection.responseCode != 200) return GatewayProbeResult.Page(GatewayPage.UNKNOWN)
-            val body = connection.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
-            GatewayProbeResult.Page(GatewayBody.classify(body))
-        } catch (_: Exception) {
             GatewayProbeResult.Unreachable
-        } finally {
-            connection.disconnect()
         }
     }
 }

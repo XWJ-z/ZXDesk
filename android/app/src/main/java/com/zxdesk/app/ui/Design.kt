@@ -7,6 +7,7 @@
 package com.zxdesk.app.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -49,6 +50,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -58,6 +60,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.zxdesk.app.R
 
 /**
  * 统一设计语言（色板与 tokens.css 同源）。
@@ -190,18 +193,14 @@ internal fun StepPage(
     }
 }
 
-/** 品牌头：44dp 圆角方块，primary 底 + 白字「ZX」（18sp Bold）。 */
+/** 品牌头：44dp，直接用桌面图标那张图（`drawable-<dpi>/ic_brand.png`），⛔ 不自绘「ZX」方块。 */
 @Composable
 private fun BrandMark() {
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.primary,
+    Image(
+        painter = painterResource(R.drawable.ic_brand),
+        contentDescription = null,
         modifier = Modifier.size(44.dp),
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text("ZX", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimary)
-        }
-    }
+    )
 }
 
 /** 主按钮：整宽、52dp、16dp 圆角、primary 实心白字；禁用灰底灰字；[busy] 时转圈。 */

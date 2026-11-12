@@ -27,6 +27,17 @@ internal data class ReleaseNote(
  */
 internal val ANDROID_RELEASES: List<ReleaseNote> = listOf(
     ReleaseNote(
+        version = "0.3.2",
+        date = "2026-11-12",
+        items = listOf(
+            "修复侧边栏滚动公告条显示不全、后半句永远看不到的问题",
+            "优化账号列表：按主机分组显示，当前账号所在的主机排在最前",
+            "优化 FNID 解析：增加域名解析兜底，当手机的系统域名解析失败时，" +
+                "通过 HTTPS 向公共 DNS 服务获取正在连接的服务器域名的 IP 地址",
+            "许可协议升级到 1.1，第五条新增第 5 点「域名解析兜底」",
+        ),
+    ),
+    ReleaseNote(
         version = "0.3.1",
         date = "2026-11-03",
         items = listOf(

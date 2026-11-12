@@ -12,6 +12,7 @@ import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.zxdesk.app.log.AppLog
+import com.zxdesk.app.net.WebViewProxy
 import com.zxdesk.app.store.Account
 import com.zxdesk.app.store.AccountStore
 import com.zxdesk.app.store.CredentialStore
@@ -25,6 +26,7 @@ import com.zxdesk.core.connection.FnLoginException
 import com.zxdesk.core.connection.FnLoginFlow
 import com.zxdesk.core.connection.FnLoginOutcome
 import com.zxdesk.core.connection.FnLoginStep
+import com.zxdesk.core.connection.DohDns
 import com.zxdesk.core.connection.FnSession
 import com.zxdesk.core.connection.FnTwoFactor
 import com.zxdesk.core.connection.GatewayPage
@@ -33,6 +35,7 @@ import com.zxdesk.core.connection.InputParser
 import com.zxdesk.core.connection.GatewayProbeResult
 import com.zxdesk.core.connection.Target
 import com.zxdesk.core.connection.TargetKind
+import com.zxdesk.core.connection.isRelayHost
 import com.zxdesk.core.datasource.AccountScope
 import com.zxdesk.core.datasource.DataSourceKind
 import com.zxdesk.core.datasource.Entry
@@ -255,6 +258,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var reloginFromAccessCode = false
 
     /**
+     * 本机 DNS 把这个域名拦住时，自动换地址重试用掉的额度与已试过的地址。
+     *
+     * 只在这**一种**失败上自动换：域名解不开说明「换条不查 DNS 的路」确定能绕过；
+     * 别的失败（密码错 / 超时 / 证书）换地址可能连到另一台机器，仍然只给建议让人点。
+     * 新人一轮连接在 [connect] 里清零，切换自己触发的那次不清。
+     */
+    private var autoSwitchBudget = AUTO_SWITCH_LIMIT
+    private val autoTried = mutableSetOf<String>()
+    private var autoSwitching = false
+
+    /**
      * 这一轮进程里是否**真的**进过应用（[enterApp] 成功过一次）。
      *
      * 只为一件事：冷启动直接从盘里恢复的快照常常已经过期（服务端会续期，快照里是旧 token），
@@ -296,6 +310,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 connectGuard.reset()
                 prefs.lastRunVersionCode = code
             }
+        }
+        // 系统解析不通、改走公共解析时只留一行日志：这条路径对用户是「无感」的，⛔ 不弹提示。
+        // ⛔ 只记动作不记域名 —— 域名里带设备标识。
+        // 顺带记一笔给 WebView：页面走的是 Chromium 自己的解析，同一台手机同样解析不了，
+        // 首屏要据此先把本机代理挂上（见 WebViewProxy）。
+        DohDns.onFallback = {
+            AppLog.i(TAG, "解析：公共解析")
+            WebViewProxy.noteResolutionBypassed()
         }
         restore()
     }
@@ -585,6 +607,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             accessCodeAutoPassed = false
         }
         reloginFromAccessCode = false
+        // 自动换地址自己触发的那次重连不清额度 —— 清了就成来回打转
+        val fromAutoSwitch = autoSwitching
+        if (!fromAutoSwitch) {
+            autoSwitchBudget = AUTO_SWITCH_LIMIT
+            autoTried.clear()
+        }
+        autoSwitching = false
         AppLog.i(TAG, "开始连接：" + s.address + " 账号=" + s.user)
         // 冷却期内一律不发起。飞牛对短时间内的反复连接有风控，
         //    连点「连接」看着是重试，在服务端就是一次次的失败取证 —— 触发后一段时间根本不让连。
@@ -629,8 +658,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
 
-            prefs.lastAddress = address
-            prefs.preferHttps = s.https
+            // 自动换上来的地址只是这次的绕行，⛔ 别固化成下次的默认入口：
+            // 它可能只在特定网络下可用（例如公网 DDNS 在家里反而不通）
+            if (!fromAutoSwitch) {
+                prefs.lastAddress = address
+                prefs.preferHttps = s.https
+            }
             if (s.user.isNotBlank()) prefs.lastUser = s.user.trim()
 
             // 8990 直连：不需要飞牛账号
@@ -767,6 +800,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         // 中继域名解析不了时的排障出口：FNID 解析阶段顺带拿到的局域网地址（没有就 null）
         val lanHint = pendingEntry?.lanHint
         pendingEntry = null
+        // 换地址是**最后兜底**，且触发面很窄（见 [worthSwitchingAddress]）：
+        // 解析彻底失败，或中继域名的建连类失败。NAS 关机、端口不通这些换了也没用，
+        // 反而可能连到另一台同名账号的设备 —— 只给建议条让人自己点。
+        if (worthSwitchingAddress(throwable, pendingAddress) && autoSwitchAddress(pendingAddress)) return
         // 记一次失败，按阶梯冷却 —— 但**网络类失败不算**：DNS 解析不了 / 连不上 / 超时
         // 都是环境问题，换个网就能好；按「密码错」罚冷却只会让用户白等 60 秒。
         val network = isNetworkFailure(throwable)
@@ -774,6 +811,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val step = (throwable as? FnLoginException)?.step ?: FnLoginStep.WS_CONNECT
         AppLog.w(TAG, "登录失败：" + step.name + " · " + (throwable.message ?: "原因未知"))
         val raw = throwable.message ?: "登录失败"
+        // 地址栏已经是自动换上来的那条，用户看不出前因 —— 把「试过哪些」说清楚，
+        // 否则他只会看到一句「连接超时」，以为自己填错了地址
+        val triedNote = autoTried
+            .takeIf { it.isNotEmpty() }
+            ?.let { "已自动改用过 ${it.joinToString("、")}，还是连不上。" }
         update {
             it.copy(
                 busy = false,
@@ -782,7 +824,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 failure = LoginFailure(
                     address = pendingAddress,
                     step = step,
-                    message = if (network && lanHint != null) "$raw（可试的局域网地址：$lanHint）" else raw,
+                    message = when {
+                        // 另起一句：界面文案不用括号补注，也不出现破折号
+                        triedNote != null -> raw.trimEnd('。', '！', '!', '.') + "。" + triedNote
+                        network && lanHint != null -> "$raw（可试的局域网地址：$lanHint）"
+                        else -> raw
+                    },
                     detail = (throwable as? FnLoginException)?.detail ?: throwable.cause?.toString(),
                 ),
                 alternatives = alternativesFor(pendingAddress, prefs.lastUser),
@@ -791,11 +838,82 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * 换一条地址重试。
+     *
+     * 这是**最后兜底**，不是首选项：域名解析已经由 [DohDns] 接管（系统不通就走公共解析），
+     * 换地址只解决剩下那一小撮情况 —— 目标域名整体不可用，或同账号下另一条地址确实更通。
+     *
+     * 候选只取「同账号保存过的其它地址」。⛔ **不自动换局域网 IP**：
+     * 那条路走 `https://<ip>:64999`，证书是设备自签的，握手要么失败、要么回落到 8990 直连 ——
+     * 直连会绕过飞牛登录，等于替用户改了要做的事。IP 只写在失败卡片里，由人决定。
+     *
+     * @param from 刚失败的那个地址（别再试它）
+     * @return 是否已经接管这次失败（接管了就不要显示失败卡片）
+     */
+    private fun autoSwitchAddress(from: String): Boolean {
+        // 只有连接页才谈得上换地址；其它步骤换过去也不会重新发起连接（会静默停在原界面）
+        if (state()?.step != OnboardingStep.CONNECT) return false
+        if (autoSwitchBudget <= 0) return false
+        val next = alternativesFor(from, pendingUser ?: prefs.lastUser)
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.equals(from.trim(), ignoreCase = true) }
+            .distinctBy { it.lowercase() }
+            .firstOrNull { candidate -> autoTried.none { it.equals(candidate, ignoreCase = true) } }
+            ?: return false
+        // 存原样：失败文案要把它原封不动念给用户听（小写化只用于比较）
+        autoTried += next
+        autoSwitchBudget -= 1
+        AppLog.i(TAG, "改路：$from 连不上，改用 $next")
+        // failWith 走到这里时 busy 还是 true，先放开 —— 否则 useAddress 会以为自己被打断而直接返回
+        update { it.copy(busy = false, progress = null, error = null, failure = null, alternatives = emptyList()) }
+        autoSwitching = true
+        useAddress(next)
+        // useAddress 内部会先写「正在改用…」，紧接着 connect 又把它清空；这里补一条能留到连上的说明
+        update { it.copy(notice = "当前地址用不了，已改用 $next 连接") }
+        return true
+    }
+
+    /**
+     * 这次失败值不值得**自动**换地址。
+     *
+     * 只有两种情况：
+     * ① **解析失败** —— 系统与公共解析都拿不到地址，换一条不经这个域名的地址确实能绕开；
+     * ② **中继域名的建连类失败** —— GeoDNS 给了不可达的节点，换条地址等于换台机器试。
+     *
+     * ⛔ 其它网络失败一律不自动跳：NAS 关机、端口不通、局域网 IP 连不上，
+     *    换地址既治不好，还可能连到另一个同名账号的设备 —— 那比报错更糟。这些只给建议条。
+     */
+    private fun worthSwitchingAddress(throwable: Throwable, address: String): Boolean {
+        var current: Throwable? = throwable
+        var depth = 0
+        var dnsFailed = false
+        var connectFailed = false
+        while (current != null && depth < 6) {
+            if (current is java.net.UnknownHostException) dnsFailed = true
+            if (current is java.net.ConnectException || current is java.net.SocketTimeoutException) {
+                connectFailed = true
+            }
+            current = current.cause
+            depth++
+        }
+        if (dnsFailed) return true
+        return connectFailed && isRelayTarget(address)
+    }
+
+    /** 目标是不是走飞牛中继：FNID 一律走中继，域名看后缀，IP 与局域网地址不是。 */
+    private fun isRelayTarget(address: String): Boolean = when (val target = InputParser.parse(address)) {
+        is Target.FnId -> true
+        is Target.Host -> isRelayHost(target.host)
+        is Target.Invalid -> false
+    }
+
+    /**
      * 同一账号在账号清单里的**其他地址**（排除当前这个），最多 3 条。
      *
      * 只按「账号名相同」筛：同一台设备换输入方式（FNID / DDNS / 局域网 IP）时账号是同一个。
-     * ⚠️ 不同设备也可能用同一个账号名 —— 所以这只是**建议**，⛔ 不自动切：
-     *    点错了会连到另一台机器，由人确认那一下。
+     * ⚠️ 不同设备也可能用同一个账号名，所以这里只给**建议**；
+     *    唯一的自动切换发生在网络类失败（连解析器都救不回来）时（见 [autoSwitchAddress]），
+     *    其余失败仍然由人点。
      */
     private fun alternativesFor(address: String, user: String): List<String> {
         val who = user.trim()
@@ -822,6 +940,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (s.busy) return
         val target = address.trim()
         if (target.isEmpty()) return
+        // 换地址 = 换一条连接路径，旧代理上挂的还是上一台设备的解析结果
+        WebViewProxy.disable()
         val user = s.user.trim().ifBlank { prefs.lastUser.trim() }
         val saved = if (user.isEmpty()) null else credentials.load(target, user)
         AppLog.i(TAG, "改用备用地址：$target（账号=$user，记住密码=${saved != null}）")
@@ -1529,6 +1649,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         sessions.clear()
         triedLongToken = false
         triedPasswordRelogin = false
+        // 会话没了，页面也就没了：本机代理必须一起拆，否则下次进页面还挂着一个没人管的端口
+        WebViewProxy.disable()
     }
 
     /**
@@ -1543,9 +1665,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         prefs.signedOut = true
         backToLoginScreen()
         AppLog.i(TAG, "退出登录：" + prefs.lastUser + " @ " + prefs.lastAddress)
-    }
-
-    /**
+    }    /**
      * 切换到一个已保存的账号（抽屉或登录页的「切换账号」）。
      *
      * 丢掉当前会话 → 回连接页并预填地址/账号 → 记住过密码就**直接连**，不用再输入。
@@ -1945,6 +2065,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
          * （2026-11-03「输入访问码后一直在循环加载」）。这时停下来，把选择权交回给人。
          */
         const val MAX_ACCESS_CODE_ROUNDS = 2
+
+        /**
+         * DNS 被拦时自动换地址的**总**次数上限。
+         *
+         * 一次给局域网 IP（云端给的，确定是同一台设备），一次给同账号的其它地址（自己的域名）。
+         * 再多就是打转了：候选本来就没几条，试完还连不上说明问题不在地址上。
+         */
+        const val AUTO_SWITCH_LIMIT = 2
 
         /** 日志标签。 */
         const val TAG = "App"

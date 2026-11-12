@@ -98,18 +98,33 @@ internal fun AccountPickerScreen(
             if (accounts.isEmpty()) {
                 EmptyAccounts(Modifier.weight(1f), onAdd = onAdd)
             } else {
+                val groups = remember(accounts, currentKey) { groupByHost(accounts, currentKey) }
                 LazyColumn(
                     modifier = Modifier.weight(1f),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(accounts, key = { it.key }) { account ->
-                        AccountRow(
-                            account = account,
-                            current = account.key == currentKey,
-                            onPick = { onPick(account) },
-                            onDelete = { pendingDelete = account },
-                        )
+                    groups.forEachIndexed { index, group ->
+                        // 组标题＝主机名：同一台 NAS 上的多个账号聚在一起
+                        item(key = "host:" + group.host) {
+                            Text(
+                                group.host,
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(
+                                    start = 4.dp,
+                                    top = if (index == 0) 0.dp else 8.dp,
+                                ),
+                            )
+                        }
+                        items(group.accounts, key = { it.key }) { account ->
+                            AccountRow(
+                                account = account,
+                                current = account.key == currentKey,
+                                onPick = { onPick(account) },
+                                onDelete = { pendingDelete = account },
+                            )
+                        }
                     }
                 }
             }
@@ -152,6 +167,38 @@ internal fun AccountPickerScreen(
         )
     }
 }
+
+/** 一组账号：同一台主机（[Account.host]）下的全部账号。 */
+private data class AccountGroup(
+    val host: String,
+    val accounts: List<Account>,
+    val hasCurrent: Boolean,
+    val lastUsedAt: Long,
+)
+
+/**
+ * 按主机分组。
+ *
+ * 排序：当前账号所在的组置顶（它就是用户最可能再点的那一组），其余按组内最近使用时间倒序；
+ * 组内同样按最近使用倒序 —— 与账号清单本身的排序口径一致。
+ */
+private fun groupByHost(accounts: List<Account>, currentKey: String?): List<AccountGroup> =
+    accounts
+        .groupBy { it.host }
+        .map { (host, rows) ->
+            val sorted = rows.sortedWith(compareByDescending<Account> { it.lastUsedAt }.thenBy { it.address })
+            AccountGroup(
+                host = host,
+                accounts = sorted,
+                hasCurrent = rows.any { it.key == currentKey },
+                lastUsedAt = sorted.firstOrNull()?.lastUsedAt ?: 0L,
+            )
+        }
+        .sortedWith(
+            compareByDescending<AccountGroup> { it.hasCurrent }
+                .thenByDescending { it.lastUsedAt }
+                .thenBy { it.host },
+        )
 
 @Composable
 private fun AccountRow(
