@@ -25,7 +25,7 @@
 
 <br>
 
-<a href="https://github.com/XWJ-z/ZXDesk/releases/download/v0.9.7/zxdesk-android-0.3.1-debug.apk"><img src="https://img.shields.io/badge/%E5%AE%89%E5%8D%93%E5%AE%89%E8%A3%85%E5%8C%85-zxdesk--android--0.3.1--debug.apk%20%C2%B7%20%E7%BA%A610MB-3ddc84?style=for-the-badge&logo=android&logoColor=white" alt="下载安卓安装包"/></a>
+<a href="https://github.com/XWJ-z/ZXDesk/releases/download/v0.9.8/zxdesk-android-0.3.2-debug.apk"><img src="https://img.shields.io/badge/%E5%AE%89%E5%8D%93%E5%AE%89%E8%A3%85%E5%8C%85-zxdesk--android--0.3.2--debug.apk%20%C2%B7%20%E7%BA%A610MB-3ddc84?style=for-the-badge&logo=android&logoColor=white" alt="下载安卓安装包"/></a>
 
 <br>
 
