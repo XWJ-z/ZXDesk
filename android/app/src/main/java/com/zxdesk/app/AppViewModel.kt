@@ -1747,6 +1747,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun ensureAlive() {
         val running = flow ?: return
         if (running.isConnected()) return
+        // 正在提交验证码时⛔ 不要重连：提交请求正等在那条连接上，此刻拆掉就是
+        // 「验证中…」转两下然后报「连接已断开，重连失败」。让它自己走完，失败后 call2fa 会恢复。
+        if (state()?.twoFactor?.busy == true) return
         // 冷却期内不做静默重连 —— 每次回前台都补一次 user.login 同样会撞风控
         if (connectGuard.remainingMs() > 0) return
         viewModelScope.launch {

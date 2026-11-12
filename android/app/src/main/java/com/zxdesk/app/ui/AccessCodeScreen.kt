@@ -36,18 +36,22 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.zxdesk.app.log.AppLog
+import com.zxdesk.app.net.WebViewProxy
 import com.zxdesk.core.datasource.Entry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
@@ -97,6 +101,10 @@ fun AccessCodeScreen(
     var hint by remember { mutableStateOf<String?>(null) }
     /** 本地只自动通过一次：上层即使没接手，也不要每 700ms 再问一遍。 */
     var autoTried by remember { mutableStateOf(false) }
+    /** 解析不了时只给代理一次机会：起不来还重试就是「加载 → 失败 → 加载」的死循环。 */
+    var proxyTried by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     /** 白屏起点（0 = 当前不是白屏）。 */
     var blankSince by remember { mutableStateOf(0L) }
     /** 中继白屏时改加载站点根，只试一次。 */
@@ -115,6 +123,18 @@ fun AccessCodeScreen(
     }
 
     BackHandler { onBack() }
+
+    // 登录阶段就判过「系统解析被绕过」：**这一屏也得把代理挂上**。
+    // 访问码页是另一个 WebView（不是 `WebViewScreen` 那一个），只在那边接线的话，
+    // 登录一过落到这一屏，网关页照样 ERR_NAME_NOT_RESOLVED —— 人卡在访问码上。
+    LaunchedEffect(webView) {
+        val view = webView ?: return@LaunchedEffect
+        if (WebViewProxy.isActive() || !WebViewProxy.recentlyBypassed()) return@LaunchedEffect
+        if (WebViewProxy.enable(context, hostOf(entry.zxDeskLoginUrl))) {
+            AppLog.i(TAG, "访问码页改走本机代理")
+            loadWithSession(view, entry, entry.zxDeskLoginUrl)
+        }
+    }
 
     // 判据不能只看一次 —— 网关从访问码页往下跳时会经过中间页，单次判定会把它当成
     // 「已经进去了」，于是自动重登又吃 401、又弹回这一页（0.2.17「反复加载」就是这么来的）。
@@ -271,6 +291,21 @@ fun AccessCodeScreen(
                                     val code = error?.errorCode ?: 0
                                     val desc = error?.description?.toString() ?: "网络错误"
                                     AppLog.w(TAG, "访问码页加载失败：$desc（错误码 $code）")
+                                    // 解析类失败先给本机代理一次机会，⛔ 不直接把「换个地址」摆出来 ——
+                                    // 域名解析不了换地址只是碰运气，代理才是对症的。
+                                    if (code == WebViewClient.ERROR_HOST_LOOKUP && !proxyTried) {
+                                        proxyTried = true
+                                        val host = request.url.host.orEmpty()
+                                        AppLog.w(TAG, "访问码页解析失败，尝试改走本机代理")
+                                        scope.launch {
+                                            if (WebViewProxy.enable(context, host)) {
+                                                webView?.let { loadWithSession(it, entry, entry.zxDeskLoginUrl) }
+                                            } else {
+                                                hint = "网关页打不开：$desc。点「刷新」再试一次，或返回换个地址"
+                                            }
+                                        }
+                                        return
+                                    }
                                     hint = "网关页打不开：$desc。点「刷新」再试一次，或返回换个地址"
                                 }
 
@@ -387,6 +422,9 @@ private const val CLIP_JS: String = """(function(){try{
   }
   return 'ok';
 }catch(e){return 'fail';}})()"""
+
+/** 从网址里取主机名；取不到返回空串（代理那边会跳过解析预检）。 */
+private fun hostOf(url: String): String = runCatching { Uri.parse(url).host }.getOrNull().orEmpty()
 
 private fun loadWithSession(view: WebView, entry: Entry, url: String) {
     if (entry.relayHost != null) {

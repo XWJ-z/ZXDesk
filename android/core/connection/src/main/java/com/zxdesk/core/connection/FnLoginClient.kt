@@ -18,6 +18,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.MediaType.Companion.toMediaType
@@ -737,6 +739,9 @@ internal class WsRpc(
     /** 本次连接是否已经因为「解析到了但连不上」兜过一次；成功了就重置。 */
     private var dnsRetried = false
 
+    /** 建连与重连串行化，见 [ensureConnected] / [reconnect]。 */
+    private val linkLock = Mutex()
+
     private fun buildClient(): OkHttpClient = OkHttpClient.Builder()
         // 系统解析不通时改走公共解析：飞牛 APP 能连我们不能，差的就是这一层
         .dns(DohDns)
@@ -757,18 +762,27 @@ internal class WsRpc(
     /** 已连着就复用；断了就重开。 */
     suspend fun ensureConnected() {
         if (connected) return
-        openWithFreshDns()
+        // 与 [reconnect] 共用一把锁：两条恢复路径同时进来时，后一个会把前一个正在握手的
+        // 连接掐掉，报出来是「Socket closed」—— 用户看到的就是「来不及输验证码」。
+        linkLock.withLock {
+            if (connected) return
+            openWithFreshDns()
+        }
     }
 
     /** 换一条新连接（旧的可能已经被服务端关掉，别复用）。 */
     suspend fun reconnect() {
-        runCatching { socket?.cancel() }
-        runCatching { client.dispatcher.executorService.shutdown() }
-        client = buildClient()
-        socket = null
-        connected = false
-        dnsRetried = false
-        openWithFreshDns()
+        linkLock.withLock {
+            // 排队期间前一个已经接回来了：⛔ 别再拆一次，拆掉的是别人正在用的那条
+            if (connected) return
+            runCatching { socket?.cancel() }
+            runCatching { client.dispatcher.executorService.shutdown() }
+            client = buildClient()
+            socket = null
+            connected = false
+            dnsRetried = false
+            openWithFreshDns()
+        }
     }
 
     /**
@@ -801,7 +815,7 @@ internal class WsRpc(
             val builder = Request.Builder().url(url)
             val cookie = runCatching { cookieProvider() }.getOrNull()
             if (!cookie.isNullOrBlank()) builder.header("Cookie", cookie)
-            socket = client.newWebSocket(
+            val created = client.newWebSocket(
                 builder.build(),
                 object : WebSocketListener() {
                     override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -848,7 +862,10 @@ internal class WsRpc(
                     }
                 },
             )
-            cont.invokeOnCancellation { socket?.cancel() }
+            socket = created
+            // ⚠️ 取消时只能关**这一次建的那条**。写成 `socket?.cancel()` 是读当时的字段值 ——
+            //    若这中间又建了一条新连接，取消旧协程会把新连接掐掉，报出来就是「Socket closed」。
+            cont.invokeOnCancellation { created.cancel() }
         }
     }
 
