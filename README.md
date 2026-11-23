@@ -21,7 +21,11 @@
 
 <div align="center">
 
-<a href="https://github.com/XWJ-z/ZXDesk/releases/download/v0.9.8/zxdesk-0.9.8.fpk"><img src="https://img.shields.io/badge/%E9%A3%9E%E7%89%9B%E5%BA%94%E7%94%A8%E5%8C%85-zxdesk--0.9.8.fpk%20%C2%B7%20%E7%BA%A63.8MB-2ea44f?style=for-the-badge&logo=linux&logoColor=white" alt="下载 fnOS 应用包"/></a>
+<a href="https://github.com/XWJ-z/ZXDesk/releases/download/v0.9.9/zxdesk-0.9.9.fpk"><img src="https://img.shields.io/badge/%E9%A3%9E%E7%89%9B%E5%BA%94%E7%94%A8%E5%8C%85-zxdesk--0.9.9.fpk%20%C2%B7%20%E7%BA%A62.9MB-2ea44f?style=for-the-badge&logo=linux&logoColor=white" alt="下载 fnOS 应用包"/></a>
+
+<a href="https://github.com/XWJ-z/ZXDesk/releases/download/v0.9.9/ksdownloader-1.6.0-002.fpk"><img src="https://img.shields.io/badge/%E5%BF%AB%E6%89%8B%E4%BD%9C%E5%93%81%E4%B8%8B%E8%BD%BD%E5%99%A8-ksdownloader--1.6.0--002.fpk%20%C2%B7%20%E7%BA%A634MB-8b5cf6?style=for-the-badge&logo=linux&logoColor=white" alt="下载快手作品下载器"/></a>
+
+<br>
 
 <br>
 
