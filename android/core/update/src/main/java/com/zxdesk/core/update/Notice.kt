@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：Notice.kt
- * 职责：服务端公告（app_notice / app_notice_marquee）的模型、解析与拉取
  */
 
 package com.zxdesk.core.update
@@ -14,8 +12,6 @@ import okhttp3.Request
 /**
  * 一条公告（对应服务端 `app_notice` 表的一行）。
  *
- * [id] 是**业务 id**（表里的 `notice_id`，形如 `20261028-android-001`）：
- * 客户端拿它记「这条我读过了」，所以它发出后不能改 —— 改了等于同一条公告又弹一次。
  */
 data class Notice(
     val id: String,
@@ -31,8 +27,6 @@ data class Notice(
 /**
  * 一次公告查询的完整结果。
  *
- * [marquee] 与 [notices] 是**两张表**：前者是长期挂着的横幅（`app_notice_marquee`），
- * 不参与已读；后者是公告列表（`app_notice`），有条目级的已读。
  */
 data class NoticeBundle(
     val marquee: String = "",
@@ -40,9 +34,6 @@ data class NoticeBundle(
     /**
      * 响应里**根本没有 `marquee` 这个键** —— 说明服务端跑的还是旧版 `server.js`
      * （`readMarquee` 那批没部署上去）。
-     *
-     * 只用于日志：界面上就是「没有跑马灯」，⛔ 不弹错误 —— 公告列表本身是好的，
-     * 不该因为少一条横幅就让用户看到报错。真机核对见 `test-contract.js` 的三条 marquee 断言。
      */
     val marqueeMissing: Boolean = false,
 ) {
@@ -59,8 +50,6 @@ sealed interface NoticeResult {
 /**
  * `GET /api/notices/:platform` 的响应解析。
  *
- * 与版本清单不同，公告的**空结果是正常状态**（服务端也可能回 200 + 空数组），
- * 所以这里不把「没有公告」当失败 —— 界面上就是「暂无公告」。
  */
 object NoticeContract {
 
@@ -86,8 +75,6 @@ object NoticeContract {
     /**
      * 单条转换。
      *
-     * ⚠️ **没有 id 的公告直接丢掉**：已读是按 id 记的，没 id 就永远弹不完。
-     * 服务端 `toNoticeDto` 里 `id` 取自 `notice_id`，正常不会为空；为空说明那条数据没录好。
      */
     private fun toNotice(node: Any?): Notice? {
         val map = node as? Map<*, *> ?: return null
@@ -108,8 +95,6 @@ object NoticeContract {
 /**
  * 公告客户端。
  *
- * 与版本接口同一个域、同一套 https 规则；差别只在没有 channel 参数 ——
- * 公告是全网一份，不分稳定 / 测试通道。
  */
 class NoticeClient(
     private val http: OkHttpClient = defaultHttpClient(),

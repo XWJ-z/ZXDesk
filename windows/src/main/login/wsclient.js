@@ -1,17 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：wsclient.js
- * 职责：最小 WebSocket 客户端（RFC 6455 子集，`node:tls` / `node:net` 手写）
- *
- * 为什么手写（允许的兜底，也是本机的唯一可行解）：
- * 1. 需求只有「发文本帧、按 reqid 收文本帧」，不需要子协议协商、扩展、压缩；
- * 2. Node 内置 `WebSocket` 带 `{ headers }` 是 undici 扩展；而**本机（NAS 沙箱）undici 的 llhttp
- *    WASM 实例分配失败**（`Out of memory: Cannot allocate Wasm memory`）⇒ 无法在此验证内置实现，
- *    也没法在此跑；手写的这份只用 `net`/`tls`，能在本机对着裸 socket mock 真跑通（S4 证据）；
- * 3. 零依赖 —— 不引 `ws`（`dependencies` 必须为空）。
- *
- * ⚠️ 飞牛中继**不回 pong**，且空闲 60~65 秒会主动关连接 ⇒ 不用协议层 ping 保活，
- *    改由上层每 20 秒发一次 `util.crypto.getRSAPub` 业务心跳（见 flow.js）。
  */
 
 import crypto from 'node:crypto';
@@ -31,13 +19,6 @@ export class WsClosedError extends Error {
 /**
  * 网关在 **WS 握手**阶段就回了 401 / 403 —— 十有八九是这台 NAS 开了「访问码」。
  *
- * 访问码是飞牛网关自己的闸门：在浏览器里输过一次，网关才种下凭据；
- * 原生 WS 请求不在那个浏览器里，带不上凭据就只能被挡在 101 之前。
- *
- * ⚠️ 它**不是**账号密码错，也**不是**网络问题 ⇒ 上层要把人送到第 ④ 步（访问码），
- *    ⛔ 不许当成登录失败处理（那会让用户以为密码错了，怎么输都进不去）。
- *
- * 与 Android `AccessCodeRequiredException` 同口径（见 `AppViewModel` 0.2.18）。
  */
 export class AccessCodeRequiredError extends Error {
   constructor(message = '网关要求先输入访问码', status = 0) {
@@ -146,13 +127,7 @@ export function parseHandshakeResponse(text) {
 
 /**
  * 一条到飞牛的 WS RPC 连接。
- *
  * @param {object} options
- * @param {string} options.url - `wss://host/websocket?type=main`
- * @param {string|Function|null} options.cookie - `mode=relay`（仅中继）；**也可以是函数**，
- *   每次握手现取（过完访问码后重连要拿到新的网关 Cookie，构造时取的那份会是旧的）
- * @param {number} options.timeoutMs - 单条请求超时（默认 20 s）
- * @param {Function} options.onSelfSigned - 自签证书确认：(host, info) => Promise<boolean>；缺省则拒绝
  */
 export class WsClient {
   constructor({ url, cookie = null, timeoutMs = 20000, onSelfSigned = null }) {
@@ -245,7 +220,6 @@ export class WsClient {
           if (!parsedHead) return;
           this.buffer = this.buffer.subarray(parsedHead.headLength);
           if (parsedHead.status === 401 || parsedHead.status === 403) {
-            // ⭐ 网关的访问码闸门（Android 0.2.18 同口径）：不是账号错，交给上层送第 ④ 步。
             return fail(new AccessCodeRequiredError(`网关要求先输入访问码（HTTP ${parsedHead.status}）`, parsedHead.status));
           }
           if (parsedHead.status !== 101) {

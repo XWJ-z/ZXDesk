@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：FnIdResponse.kt
- * 职责：FN Connect 查询响应的解析
  */
 
 package com.zxdesk.core.connection
@@ -9,13 +7,6 @@ package com.zxdesk.core.connection
 /**
  * `POST /api/v1/fn/con` 的响应解析。
  *
- * 结构样本（字段名照抄真实响应；**IP / FNID 已全部脱敏**，公网段为文档保留段）：
- * ```json
- * {"msg":"","code":0,"data":{"ddns":null,"ipv4":["10.1.2.4"],
- *  "ipv6":[],"publicIpv4":["203.0.113.7"],"publicIpv6":["2001:db8:..."],
- *  "fn":["demo-nas.fnos.net:443"],"port":{"httpsPort":64999,"httpPort":64888},
- *  "checkSum":"8812","ver":"3.0.0","forbbidPublicIpv6":false}}
- * ```
  */
 object FnIdResponse {
     sealed interface Result

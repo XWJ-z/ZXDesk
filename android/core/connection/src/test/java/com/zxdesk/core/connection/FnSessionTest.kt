@@ -52,7 +52,6 @@ class FnSessionTest {
 
     @Test
     fun longTokenIsCookieWith30Days() {
-        // 勾了「信任此设备」才有 longToken；Cookie 要带 Max-Age，否则杀进程就丢（30 天 = 2592000 秒）
         val cookies = FnSession(token = "tk", longToken = "lt").cookies(relayHost = null)
         val long = cookies.first { it.startsWith("fnos-long-token=") }
         assertTrue(long.contains("Max-Age=2592000"))
@@ -68,7 +67,6 @@ class FnSessionTest {
 
     @Test
     fun cookieNameIsNotTrimMcToken() {
-        // 0.2.0/0.2.1 等错名字白等了两版；这条用例防止回退
         val joined = FnSession(token = "tk", entryToken = "et").cookies("x.fnos.net").joinToString(";")
         assertFalse(joined.contains("Trim-MC-token"))
     }

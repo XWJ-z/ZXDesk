@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：OnboardingScreen.kt
- * 职责：引导流程，选模式、连接、两步验证、访问码
  */
 
 package com.zxdesk.app.ui
@@ -80,12 +78,6 @@ import kotlinx.coroutines.launch
 /**
  * 引导流程：① 选模式 → ② 填连接信息 → ③ 两步验证 → ④ 访问码 → ⑤ 应用。
  *
- * 排版规则全在 [Ui] / [StepPage] 里，四步共用：一个 420dp 居中容器、28/16/14sp 三级字号、48dp 主按钮。
- * 状态全在 [AppViewModel]，切后台/旋转不丢。
- *
- * ⭐ 0.2.18：登录页也能划出侧边抽屉（老大 2026-11-03 14:51）。抽屉复用浏览页那一份
- * （[ConnectionDrawer]），只是 `entry = null` —— 「刷新页面 / 换个地址 / 账户 / 设置」
- * 四项没有对象，自动变灰不可点；升级卡、日志、许可、打赏、更新日志、帮助照常可用。
  */
 @Composable
 fun OnboardingScreen(
@@ -128,7 +120,6 @@ fun OnboardingScreen(
         }
     }
 
-    // 返回键：抽屉开 → 关抽屉；否则按原规则逐级回退；第 ① 步没有上一级，交给系统退出
     BackHandler(enabled = drawerState.isOpen || state.step != OnboardingStep.MODE) {
         if (drawerState.isOpen) scope.launch { drawerState.close() } else vm.back()
     }
@@ -216,7 +207,6 @@ fun OnboardingScreen(
             // 左缘把手：与浏览页同一套交互（R-212 只写一份）。
             // 两处与浏览页不同，都是为了不抢表单：
             // ① 热区窄 4dp（36dp）：登录页左侧是输入框，别把左边那一条整个吃掉；
-            // ② 高度只取中间 62%：登录页左上角有「‹ 返回」，全高热区会把它的左半边吃掉。
             val haptic = LocalHapticFeedback.current
             Box(
                 Modifier
@@ -390,8 +380,7 @@ private fun ConnectStep(
             value = state.address,
             onValueChange = vm::onAddressChange,
             label = "地址或 FNID",
-            // ⛔ 占位符必须是「一眼假」的示例：IP 用 RFC 5737 文档保留段，FNID 用 my-nas，
-            //    域名用 example.com。⛔ 不许写任何真实设备地址 / FNID / 公网 IP。
+            // 占位符必须是「一眼假」的示例：IP 用 RFC 5737 文档保留段，FNID 用 my-nas，
             placeholder = "192.0.2.10 / nas.example.com / my-nas",
             enabled = !state.busy,
             trailing = { kind?.let { KindBadge(it) } },
@@ -401,7 +390,7 @@ private fun ConnectStep(
 
         // 飞牛账号可能是 myaccount 这种，⛔ 不要邮箱键盘
         // 右侧「切换」：保存过账号之后才出现（没有可切的目标时不摆一个空入口）。
-        // ⚠️ 用文字不用图标：和下面密码框的「显示 / 隐藏」同一形态，一眼知道能点。
+        // 用文字不用图标：和下面密码框的「显示 / 隐藏」同一形态，一眼知道能点。
         Field(
             value = state.user,
             onValueChange = vm::onUserChange,
@@ -634,10 +623,6 @@ private fun EmailView(tf: TwoFactorUi, vm: AppViewModel) {
 /**
  * 失败后的第二条路：同一账号在账号清单里的其他地址。
  *
- * 为什么不做成自动切换：账号名相同不代表同一台设备（家里也可能有两台 NAS 用同一个账号）。
- * 一次误切就是连到另一台机器上，所以这里只给**建议**，点一下才切。
- *
- * 来源与筛选见 `AppViewModel.alternativesFor`：同账号、排除当前地址、最多 3 条。
  */
 @Composable
 private fun AlternativeAddresses(addresses: List<String>, onPick: (String) -> Unit) {

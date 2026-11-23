@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：DonateScreen.kt
- * 职责：打赏与支持页，支付宝与微信两张收款码
  */
 
 package com.zxdesk.app.ui
@@ -41,11 +39,6 @@ import com.zxdesk.app.R
 /**
  * 打赏与支持（整屏，从抽屉「更多」进）。
  *
- * 内容与飞牛端 `core/about.js` 的「请我喝杯咖啡」同源：
- * 一句说明 ＋ 支付宝 / 微信两张收款码。⛔ 不放任何「解锁」「会员」暗示 —— 打赏不换功能。
- *
- * 两张码都是竖版（480×720 / 480×615），并排各占一半宽即可；
- * 高度固定，比例差由 `ContentScale.Fit` 吸收，⛔ 不要各自按自身比例撑高，否则两块对不齐。
  */
 @Composable
 internal fun DonateScreen(onClose: () -> Unit) {
@@ -144,7 +137,6 @@ private fun DonateCard(content: @Composable ColumnScope.() -> Unit) {
 
 /**
  * 一张收款码：图在上、名字在下。
- *
  * @param modifier 由外部给 `weight`，两张码才能等宽
  */
 @Composable

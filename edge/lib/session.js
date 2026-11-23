@@ -1,15 +1,13 @@
 /**
  * session.js —— 会话侧（中继域判定 / 会话 Cookie / 中继保活 / 用户名展示）
- *
  * 功能：`RELAY_RE` 判飞牛中继域；`sidInfo` 读 `zxdesk_sid` 的属性（⛔ 不取值）；
  *      `ensureRelayCookie` 在中继域补一个 `mode=relay`；`fetchUserName` 取展示名（不落盘）。
  *
- * ⚠️ 会话注入走 `credentials:'include'`（浏览器自动带 Cookie），⛔ 不手工拼 Cookie 头。
- * ⚠️ `cookies.getAll({url})` 在 Edge 上可能返回 0 条，而 `cookies.get` 找得到 ⇒
+ * 会话注入走 `credentials:'include'`（浏览器自动带 Cookie），⛔ 不手工拼 Cookie 头。
+ * `cookies.getAll({url})` 在 Edge 上可能返回 0 条，而 `cookies.get` 找得到 ⇒
  *    存在性判定只用 `cookies.get`。
- *
  * @author zx
- * @since 0.1.0
+ * @since
  * 相关：Project/Edge/README.md
  */
 import { fetchJson } from './api.js';

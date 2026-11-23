@@ -1,55 +1,10 @@
 /**
- * modules/teamwork/desktop.js —— 对话**视图**（电脑版，0.3.5）
+ * modules/teamwork/desktop.js —— 对话**视图**
  *
  * 功能：电脑版「对话」这一屏的全部取数与渲染 ——
- *      `openTeamwork()` 开屏（拉好友总览 + 接上实时通道），`teamworkLeave()` 离开时收尾（⭐ 0.5.2 起不停通道），
- *      `renderTeamworkSide()` 画左栏（⭐ 0.7.6 起只有**会话区** + 顶部两颗入口按钮；⭐ 2h 起会话区是三组：
- *      「内置助手」「好友」「协作项目」），`renderTeamworkHead()` / `renderTeamworkMessages()`
- *      画右边的对话流，`openConversation()` / `openTeamworkWithFriend()` 打开一个会话，
- *      `sendTeamworkMessage()` 发消息，`bindTeamworkEvents()` 给整屏挂**一次性**事件委托。
- *
- * ⭐ **实时通道走 `modules/teamwork/teamwork-stream.js`**（两端共用）：它负责连、重连、降级轮询与 `mergeById()` 去重；
- *    本文件只负责「收到事件之后该刷哪块界面」。历史消息**永远不走 SSE**（只走 REST 分页），
- *    所以这里没有第二处「消息怎么取」的实现。
- *
- * ⚠️ **三条界面硬约定**（方案 §七 / §八，别被后来的人改掉）：
- *    ① ⭐ **消息正文一律 `esc()` 转义后插入**（`body` / `username` / `display_name` 都是**别人可控**的内容）——
- *       这是本项目第一次出现「A 的内容给 B 看」，XSS 是本模块的头号风险（方案）；
- *    ② ⚠️⭐ **2026-10-04：页头那颗常驻「连接状态」徽标已整颗移除**（原约定是
- *       「连接状态必须看得见」，要求删掉）—— 电脑端从此没有常驻连接提示
- *       （重连中 / 已降级为轮询也不再显示，别当成缺陷往回调）。手机端另有「只在异常时出现」
- *       的告警条（`#teamwork-netwarn`），电脑端目前没有对应物；
- *    ③ ⭐ **适用范围那句常驻**（`index.html` 的 `.teamwork-privacy`）—— 稿为
- *       「仅ZXDesk成员可互相加好友，仅用于团队间的任务下达和协作交流」（原先放的是
- *       「消息以明文存在你自己的 NAS 上」那句，方案 §八-6）。⭐ 0.4.4 起它贴在**「对话」标题右边**
- *       （「移动到 对话旁边」），不再占标题下面那一条。⚠️ 那句诚实边界**仍要出现在界面上**：
- *       `confirmRemoveFriend()` 的确认框里写着「消息一条都没删 —— 它仍然以明文存在你自己的 NAS 上」，
- *       手机版列表页也照旧显示 —— 别因为顶栏换了文案就对用户说「加密聊天」。
- *
- * ⭐ **0.4.4 的三处新交互**（四条需求里的三条落在这里，第四条是备注的显示规则）：
- *    ④ **会话区可折叠** —— 折叠态存在 `teamworkState.fold` 里，**不是 DOM class**：
- *       左栏每收一条消息就整块重画，状态放 DOM 上会被下一次重画抹掉（表现是「一有新消息，
- *       收起来的那块又自己弹开了」）。⭐ 收起只影响**列表**，分区标题里的计数始终可见。
- *       ⚠️⭐ 0.7.6 起「好友」「申请」两块不再内联（改成两颗按钮 + 弹窗，见 `openTeamworkFriendsModal()` /
- *       `openTeamworkRequestsModal()`）；⭐ 0.7.7 起会话列表**拆成两段**（「内置助手」/「好友」，
- *       判据走 `shared.js` 的 `isAssistConv()`）⇒ `teamworkState.fold` 现在是 `assist` / `convs` 两个键。
- *       ⚠️ 而**申请按钮上的红点在左栏始终看得见**（这一点与原「收起 ≠ 藏红点」同源）。
- *    ⑤ **右键消息 → 添加到任务** —— 菜单里还有一条「复制文本」：拦下右键就顶掉了浏览器原生菜单，
- *       不给复制通道的话，用户在这屏再也复制不走消息（`core/dom.js` 的 `copyText()` 带兜底）。
- *    ⑥ **我起的备注优先于对方的显示名**（`teamworkRowName()`，0.4.4 服务端加 `teamwork_friendships.remark`）——
- *       ⚠️ 备注只写我这一行，**对方看不到**（服务端 `teamworkSetFriendRemark()` 有说明），
- *       所以界面上「左栏显示的名字」与「对话头显示的名字」必须都走同一个函数，不许各处自己拼。
- *
- * ⭐ **0.5.2 起通道是应用级常驻的**（`teamworkBoot()` 登录后开一条，`teamworkShutdown()` 只在
- *    「设置里关掉对话模块」时调）：一台设备任何时刻只有一条，服务端每账号 5 条的
- *    名额（`server.js` → `modules/teamwork/stream.js` 的连接表）毫无压力。
- *    旧的「离开这一屏必须 `stream.stop()`」口径已废 —— 那样做红点/实时性要靠
- *    「记得重新开」来维持，漏一处就是静默失联。
- *
- * ⭐ 0.5.0 模块化重构：本文件从 `public/desktop/views/teamwork.js` **原样搬进模块目录**
- *    （方案 `09-模块化重构` §七，纯搬运不改逻辑）—— 前端两屏跟着模块走，
- *    `public/modules/` 与后端 `app/modules/` 模块名对齐。只改了文件头路径、相对 import 与这段说明，
- *    渲染与交互一个字没动。
+ * `openTeamwork()` 开屏（拉好友总览 + 接上实时通道），`teamworkLeave()` 离开时收尾（起不停通道），
+ * `renderTeamworkSide()` 画左栏（起只有**会话区** + 顶部两颗入口按钮；⭐ 2h 起会话区是三组：
+ * 「内置助手」「好友」「协作项目」），`renderTeamworkHead()` / `renderTeamworkMessages()`
  *
  * @author zx
  * @date   2026-09-12
@@ -57,18 +12,19 @@
  * 相关：docs/公共/架构文档/17-对话.md、docs/公共/开发方案/06-对话-1期.md
  */
 
-// ⭐ 0.8.54：图片上传走裸 `fetch`（`api()` 只发 JSON）⇒ 挂载前缀 `BASE` 与 401 跳登录要自己接。
+// 图片上传走裸 `fetch`（`api()` 只发 JSON）⇒ 挂载前缀 `BASE` 与 401 跳登录要自己接。
 import { BASE, api, backToLogin } from '../../core/api.js';
-// ⭐ 0.7.1：新建任务统一走共用层那个入口（不许跨模块 import 实现，所以它在 `core/`）
+// 新建任务统一走共用层那个入口（不许跨模块 import 实现，所以它在 `core/`）
 import { createTask } from '../../core/task-create.js';
-// ⭐ 0.5.2 第二轮：消息转任务的弹窗也能绑网址（「添加消息到任务的弹窗
-//    没有选择网址的能力」）—— 实现与任务表单共用 core 一份（见 core/bookmarks.js 的说明）。
+// 消息转任务的弹窗也能绑网址 —— 实现与任务表单共用 core 一份（见 core/bookmarks.js）。
 import { fillBookmarkSelect } from '../../core/bookmarks.js';
 import { createTeamworkStream, mergeById } from './teamwork-stream.js';
 import { todayStr } from '../../core/date.js';
 import { $, copyText, esc, skeletonHtml } from '../../core/dom.js';
+// ⭐ 自动草稿：「消息转任务」「改备注」都可能填到一半被打断，重载后靠登记表把同一张表单再打开
+import { registerResume } from '../../core/draft.js';
 import { loadProjects, renderSidebar, setTeamworkUnread, showView } from '../../desktop/shell.js';
-// ⭐ 0.6.0：对话页是 AI 插槽的**宿主**—— 本文件只认识通用的 slots 宿主与本端接线表，
+// 对话页是 AI 插槽的**宿主**—— 本文件只认识通用的 slots 宿主与本端接线表，
 //    **不 import 任何具体模块的片段**（删掉那个模块目录后对话页必须照常能用）。
 import { uiOf } from '../../desktop/modules.js';
 import { mountSlots, warmSlots } from '../../core/slots.js';
@@ -77,15 +33,11 @@ import { closeModal, openConfirmModal, openModal, setModalSave, toast } from '..
 import { openBoard } from '../tasks/desktop-board.js';
 import { bindDateRangeMin } from '../tasks/desktop-forms.js';
 import { openTaskDetail } from '../tasks/desktop-items.js';
-// ⭐ 0.6.4（任务联动）：任务卡片的渲染与动作 —— 与手机版**共用一份**（见 `shared.js` 的说明）
-// ⭐ 0.7.7：四种**系统提醒**的卡片同样共用一份（理由一字不差：两端必须长得一样）；
-//    `isAnyCardMsg()` 是「卡片 → `.teamwork-msg.is-card`」那一步的判据，`isAssistConv()` 是
-//    「内置助手 / 好友」两段的判据 —— ⛔ 两处判断都不许在本文件里再写一遍。
-// ⭐ 0.8.54：图片消息（`isImageMsg` / `imageMsgHtml`）、点开看大图（`bindImageZoom`）与
-//    任务选择弹窗（`pickListHtml`）同样两端一份 —— 理由与卡片一字不差。
+// 任务卡片、系统提醒卡片、图片消息、任务选择弹窗的渲染与动作两端**共用一份**（`shared.js`）。
+// `isAnyCardMsg()` / `isAssistConv()` 是分组判据，⛔ 不许在本文件里再写一遍。
 import {
   bindImageZoom,
-  // ⭐ 0.8.54：取数（`fetchSendGroups`）与筛选（`filterPickGroups` / `pickPanelHtml`）也共用了
+  // 取数（`fetchSendGroups`）与筛选（`filterPickGroups` / `pickPanelHtml`）也共用了
   //    —— 两端原本是一字不差的两份复制，改一处忘另一处就会「电脑端有、手机端没有」。
   fetchSendGroups,
   filterPickGroups,
@@ -113,11 +65,6 @@ const TEAMWORK_TASK_TITLE_MAX = 100;
 
 /**
  * 对话这一屏的临时状态。
- *
- * ⚠️ **刻意不放进 `desktop/state.js`**：`state` 是「多个视图都要读」的共享真值，
- * 而这里的每一项（当前会话、消息列表、连接句柄）只有本屏自己用 ——
- * 放进去只会让「谁在读它」变得需要全仓库搜索。连接句柄更是本模块的私有资源。
- *
  * @type {Object}
  */
 const teamworkState = {
@@ -132,50 +79,32 @@ const teamworkState = {
   hasMore: true, // 还能不能继续往上翻历史
   loadingMore: false, // 正在翻历史（防止一次滚动触发多次请求）
   opening: false, // 正在开新会话（防止连点好友行造出两次 POST）
-  stream: null, // `createTeamworkStream()` 的句柄（⭐ 0.5.2 起应用级常驻，见 `teamworkBoot()`）
+  stream: null, // `createTeamworkStream()` 的句柄（起应用级常驻，见 `teamworkBoot()`）
   /**
-   * ⭐ 0.5.2 `teamworkBoot()` 是否已经跑过（幂等闸门）。`teamworkShutdown()` 里复位：
+   * `teamworkBoot()` 是否已经跑过（幂等闸门）。`teamworkShutdown()` 里复位：
    * 模块被关掉再重新打开时，引导要能重新走一遍。
    */
   booted: false,
   /**
    * ⭐ 左栏三组的折叠态（`assist` = 内置助手、`convs` = 好友、`collab` = 协作项目）。
-   *
-   * ⚠️⭐ 0.7.6 起「好友」「申请」不再内联（改成两颗按钮 + 弹窗，「折叠一块按钮」没有意义）。
-   *    ⛔ 别把 `friends` / `reqs` 加回来 —— 那是永远不会被读的死状态，下次改的人会以为它还在起作用。
-   * ⚠️⭐ 0.7.7 拆组时**必须先在这里加上 `assist`**：`toggleTeamworkFold()` 只认这个对象里**已经有的键**
-   *    （见它的说明），漏加的表现是「点标题没反应」，而且**不报错**。
-   * ⚠️ 必须住在 state 里、不能只改 DOM class：左栏每收一条消息就整块 `innerHTML` 重画，
-   *    状态放 DOM 上会被下一次重画抹掉 —— 表现是「一有新消息，收起来的那块又自己弹开了」。
-   * ⚠️ 与手机版 `state.foldSecs` 同一个套路（0.3.3 设置页折叠），只是各自存各自的 key。
+   * 起「好友」「申请」不再内联（改成两颗按钮 + 弹窗，「折叠一块按钮」没有意义）。
    */
   fold: { assist: false, convs: false, collab: false },
   /**
-   * ⭐ 0.6.x「会话对象插槽」（0.6.1）：`slotEntries` 是**当前登记进会话区的
+   * .x「会话对象插槽」：`slotEntries` 是**当前登记进会话区的
    *    插槽条目**（键 → `{ key, icon, name, sub }`，由 `zx:teamwork-conv-entries` 留白事件收集，
-   *    每次重画左栏都会重新收集 —— 条目是纯展示数据，行为在 `openSlotConv()`）；
-   *    `slotConv` 是**当前打开的插槽会话**（键）：它非空时右栏的对话流与输入区整个让位给
-   *    `teamwork-thread` 插槽片段（`setSlotMain()`），再点一条真会话就还回来（`closeSlotConv()`）。
-   * ⚠️ 两个都必须住 state：左栏整块 `innerHTML` 重画，放 DOM 上会被抹掉（与 `fold` 同一条理由）。
    */
   slotEntries: new Map(),
   slotConv: null,
   /**
    * ⭐ 2h（丁 · 排版）「协作项目组」：`collabEntries` 是**当前登记进左栏第三组的协作项目**
    *    （键 → `{ key, name, sub }`，由 `zx:teamwork-collab-entries` 留白事件收集 ——
-   *    派发方是本文件、填写方是 tasks 模块的 page 片段；⚠️ 宿主**不认识 `tasks` 这个东西**，
-   *    ⇒ 这一组空着、其它一切照旧）；
-   *    `collabBoard` 是**当前打开的协作看板**（项目 id 字符串）：它非空时右栏的对话流与输入区
-   *    整个让位给 `teamwork-board` 插槽片段（`setSlotMain()`），点一条真会话就还回来（`closeCollabBoard()`）。
-   * ⚠️ 两个都必须住 state：左栏整块 `innerHTML` 重画，放 DOM 上会被抹掉（与 `slotEntries` 同一条理由）。
-   * ⚠️ 与「插槽会话」（`slotConv`）**互斥**：同一时刻只许有一个占着主区。
    */
   collabEntries: new Map(),
   collabBoard: null,
   /**
-   * ⭐ 0.4.4「这条消息建过哪些任务」—— `{ 消息 id: [{ scope, id, title }] }`。
+   * 「这条消息建过哪些任务」—— `{ 消息 id: [{ scope, id, title }] }`。
    * ⚠️ **刻意不挂在消息对象上**：同一条消息会从 REST 与 SSE 两条路到达，而 `mergeById()`
-   *    是「后到的整个对象覆盖先到的」，SSE 那条不带标记 ⇒ 挂上去会把标记抹掉（时有时无）。
    */
   msgTasks: {},
 };
@@ -193,20 +122,16 @@ const teamworkState = {
 const teamworkCtx = { el: null, onDoc: null, onKey: null, onScroll: null };
 
 /**
- * 功能：取一段关系（好友行 / 会话行）该显示的名字 —— ⭐ 0.4.4 起**我起的备注优先**，
+ * 功能：取一段关系（好友行 / 会话行）该显示的名字 —— 起**我起的备注优先**，
  *      没有备注才回落到对方的显示名 / 登录名。
- *
  * 说明：⚠️ 三种行的字段名不一样，这里必须一次收齐，否则就会在某一处「忘了备注」：
  *      · 好友行（`GET /api/teamwork/friends` 的 `friends[i]`）—— `remark` + `user`；
- *      · 会话行 —— `peer_remark` + `peer_user`（服务端 `teamworkListConversations()` 补的）。
- *      ⚠️ 备注是**我单方面**的（只在我这一行），所以它天然只影响我看到的界面。
- *
  * @param {Object} row - 好友行或会话行
  * @returns {string} 可显示的名字
  */
 function teamworkRowName(row) {
   const o = row || {};
-  // ⭐ 0.6.x：内置角色会话（提醒助手）**最先判** —— 它既没有 `peer_user`、也没有 `peer_gone`，
+  // .x：内置角色会话（提醒助手）**最先判** —— 它既没有 `peer_user`、也没有 `peer_gone`，
   //    落到下面任何一支都会得到一个含义不明的名字（『?』或『（账号已不可见）』）。
   //    名字由**服务端**随会话行给出（`builtin_name`），前端不另写一份 —— 见 `modules/teamwork/store.js`。
   if (o.builtin_key) return String(o.builtin_name || '助手');
@@ -219,20 +144,10 @@ function teamworkRowName(row) {
 /**
  * 功能：把两种来源的消息**归一成同一个形状** —— REST 的 `user_id` / `conversation_id` / `created_at`
  *      与 SSE 的 `senderId` / `conversationId` / `createdAt` 必须变成同一套字段名才能交给 `mergeById()`。
- *
  * 说明：⭐ 这是「按 id 去重」能成立的前提：`mergeById()` 只按 `id` 合并，**同一条消息从两条路到达时
  *      会以后到的那个对象为准** —— 两边字段名不一致的话，界面会在「自己的消息」与「对方的消息」之间闪。
- *
- * ⚠️ **`senderId` 这一支绝不能漏**（0.3.5 修的真实缺陷）：REST 返回的是库里的列名 `user_id`，
- *    而 SSE 事件体（本模块 `routes.js` 的 `pushMessage()`）与「自己刚发出去的那条」用的都是 `senderId`。
- *    漏掉它的后果不是报错，而是 `Number(undefined) = NaN` ⇒ `teamworkMsgHtml()` 里
- *    `NaN === myUserId()` 恒为 false ⇒ **自己发的消息显示在左边（成了对方的消息）**，
- *    直到下一次走 REST 取数（重新打开会话 / 断线补齐）才自己好 —— 表现就是
- *    「有几率我的消息跑到对方那边，刷新一下又好了」，前端不报任何错。
- *
  * @param {Object} m - 任一种来源的消息行
  * @returns {{ id: number, userId: number, conversationId: number, body: string, createdAt: string,
- *      senderBuiltin: ?string }} 归一后的消息
  */
 function normMsg(m) {
   const o = m || {};
@@ -245,12 +160,12 @@ function normMsg(m) {
     conversationId: Number(o.conversationId !== undefined ? o.conversationId : o.conversation_id),
     body: String(o.body == null ? '' : o.body),
     createdAt: o.createdAt !== undefined ? o.createdAt : o.created_at,
-    // ⭐ 0.6.x：内置角色（提醒助手）发的消息 —— **REST 的 `sender_builtin` 与 SSE 的
+    // .x：内置角色（提醒助手）发的消息 —— **REST 的 `sender_builtin` 与 SSE 的
     //    `senderBuiltin` 两个名字都要认**（与 `sender` 是同一个坑、同一套理由）。
     //    ⚠️ 漏认的后果不是报错，而是**提醒消息被画成「我自己发的」**（靠右、和自己一个颜色）：
     //    因为内置角色消息的 `user_id` 就是收件人自己（见 `teamwork_messages` 的建表说明）。
     senderBuiltin: o.senderBuiltin !== undefined ? o.senderBuiltin : o.sender_builtin || null,
-    // ⭐⭐ 0.7.7：**卡片的两个字段必须一起带过去** —— `kind`（画哪一种卡片）与 `meta`
+    // **卡片的两个字段必须一起带过去** —— `kind`（画哪一种卡片）与 `meta`
     //    （任务卡片的快照载荷）。⚠️⭐ 漏这两行的后果**不是报错**：消息会安静地退回降级文本
     //    （一条普通气泡 + 它的 `body`），而「任务卡片 / 四种提醒卡片在**电脑端**永远画不出来」
     //    —— 手机端不经过本函数（它直接读消息行），所以别人只会看到「手机上有卡片、电脑上没有」。
@@ -281,10 +196,8 @@ function teamworkPeerName(u) {
 /**
  * 功能：取一个**会话**里对方的名字 —— ⚠️ 对方账号已注销时 `peer_user` 是 `null`，
  *      这时必须说清「人没了、会话还在」，而不是显示一句含义不明的「账号已不可见」。
- *
  * 说明：⭐ 服务端对已注销的对端**照样列出这个会话**（`peer_gone: true`，只读）：
  *      否则「对方的历史会话缺一段」会变成「会话凭空消失」，用户完全不知道发生过什么。
- *
  * @param {Object} c - 会话行（`peer_user` / `peer_gone`）
  * @returns {string} 对方名字（或「已注销」的说明）
  */
@@ -303,11 +216,9 @@ function activeConversation() {
 
 /**
  * 功能：按「当前有没有可写的会话」开关输入区 —— 没打开会话、或对方账号已注销时**置灰输入框与发送键**。
- *
  * 说明：⚠️ 这不是装饰：对方账号注销后服务端**允许读历史、拒绝发新消息**，
  *      不置灰的话用户敲完一整段话才收到一个 400，而他根本不知道为什么。
  *      与 `sendTeamworkMessage()` 里的那道判断是**同一条规则的两次表达**（一处管「能不能点」，一处管「点了也别发」）。
- *
  * @returns {void}
  */
 function syncTeamworkComposer() {
@@ -317,21 +228,21 @@ function syncTeamworkComposer() {
   const btn = $('#teamwork-send');
   if (inp) {
     inp.disabled = !canWrite;
-    // ⭐ 0.6.x：内置角色这一屏**可以打字，但它不会回话** —— 这句话必须说出来：
+    // .x：内置角色这一屏**可以打字，但它不会回话** —— 这句话必须说出来：
     //    不说的话用户敲一句、等半天、什么也没发生，只会以为应用坏了。
     //    ⚠️ 名字取**我起的那个**（`teamworkRowName()`），不写死「提醒助手」：名字是可以改的。
     //    `placeholder` 是纯文本属性（不进 HTML 解析器），所以这里不必 esc。
     inp.placeholder = !canWrite
       ? '先在左边选一个好友或会话'
       : c && c.builtin_key
-        ? // ⭐ 0.7.7：内置角色现在**会回一句**（服务端自动回复「请与 AI 助手对话」）⇒
+        ? // 内置角色现在**会回一句**（服务端自动回复「请与 AI 助手对话」）⇒
           //    这句提示必须跟着改，否则它写在输入框上、说的却是一件已经不成立的事。
           //    ⚠️ 与手机版 `renderTeamworkThread()` 副标题里那一句**逐字一致**。
           '这里只发提醒；想聊天请到「AI 助手」'
         : '输入消息，Enter 发送（Shift + Enter 换行）';
   }
   if (btn) btn.disabled = !canWrite;
-  // ⭐ 0.8.54：那颗 ＋ 同样要跟着置灰 —— 没会话时点开菜单，挑完任务才发现发不出去
+  // 那颗 ＋ 同样要跟着置灰 —— 没会话时点开菜单，挑完任务才发现发不出去
   //    （与服务端「对方已注销 ⇒ 拒发」同一条规则，⛔ 不各写一份判断）
   const plus = $('#teamwork-plus');
   if (plus) plus.disabled = !canWrite;
@@ -351,10 +262,8 @@ function teamworkAvatar(name) {
 /**
  * 功能：把服务端的时间戳（`YYYY-MM-DD HH:MM:SS`）压成聊天界面习惯的短标签 ——
  *      今天的只写 `HH:MM`，更早的写 `M/D HH:MM`。
- *
  * 说明：⚠️ 一律按**字符串切片**解析，不 `new Date()` —— 项目里「日期字符串比较用字典序、
  *      不转 Date」是老规矩（时区坑会把 UTC 的某条消息显示成昨天）。
- *
  * @param {string} s - 时间戳
  * @returns {string} 短标签；格式不认识时原样返回
  */
@@ -368,10 +277,8 @@ function fmtTeamworkTime(s) {
 
 /**
  * 功能：把消息流容器滚到底部 —— `force` 为假时**只在用户本来就贴着底部**时才滚。
- *
  * 说明：⚠️ 「只在贴底时滚」是聊天界面的必备细节：用户正在往上翻历史，
  *      一条新消息到达就把他拽回底部，等于历史根本翻不动。
- *
  * @param {boolean} [force] - 是否无条件滚到底（刚打开会话时为 true）
  * @returns {void}
  */
@@ -384,28 +291,24 @@ function scrollTeamworkToBottom(force) {
 
 /**
  * 功能：渲染一条消息（气泡 + 时间），自己的消息靠右。
- *
  * ⚠️ **正文必须走 `esc()`** —— `body` 是别人可控内容，直接拼进 `innerHTML` 就是一个存储型 XSS
  *    （对方只要发一句 `<img onerror=…>` 就能拿到你的会话）。这是本文件最不能改的一行。
- * ⭐ 0.4.4：气泡带 `data-teamwork-msg="<id>"`（右键「添加到任务 / 复制文本」靠它认出点的是哪一条）。
- *    ⚠️ **正文不进属性**：`data-*` 里塞用户内容等于把它们摆到 HTML 解析器面前，
- *    菜单要正文时一律按 id 回 `teamworkState.messages` 里取（见 `onTeamworkMessageMenu()`）。
- *
+ * 气泡带 `data-teamwork-msg="<id>"`（右键「添加到任务 / 复制文本」靠它认出点的是哪一条）。
  * @param {Object} m - 归一后的消息
  * @returns {string} 消息气泡的 HTML 片段
  */
 function teamworkMsgHtml(m) {
-  // ⭐ 0.6.x：内置角色发的消息**不是「我发的」** —— 它的 `user_id` 恰好等于收件人自己
+  // .x：内置角色发的消息**不是「我发的」** —— 它的 `user_id` 恰好等于收件人自己
   //    （见 `teamwork_messages` 的建表说明），只看发送者会把它画成「我自己说的话」。
   const mine = Number(m.userId) === myUserId() && !m.senderBuiltin;
   // ⭐ 同上：助手说的话再带一层 `builtin`，气泡走暖色 —— 一屏里「我说的 / 真人说的 / 助手说的」
   //    三种气泡各有各的样子（配色在 `desktop/app.css`）。
   const bl = m.senderBuiltin ? ' builtin' : '';
-  // ⭐ 0.6.4（任务联动）：卡片消息把气泡换成一张**任务卡片**（版式在 `desktop/app.css`）。
+  // （任务联动）：卡片消息把气泡换成一张**任务卡片**（版式在 `desktop/app.css`）。
   //    渲染本身在 `shared.js`（两端一份）—— 这里只管把它放进消息行。
   //    ⚠️ 卡片**不是活的**：它画的全是发送那一刻的快照；`body` 是渲染端不认这个
   //    `kind` 时的降级文本（服务端强制必填），所以卡片替掉气泡时它不显示，但也没有丢。
-  // ⭐ 0.7.7：四种系统提醒各画一种卡片（渲染在 `shared.js`，两端一份）。
+  // 四种系统提醒各画一种卡片（渲染在 `shared.js`，两端一份）。
   //    ⚠️ 认不出 kind（含**老消息的 kind 是 NULL**）⇒ 退回普通气泡 —— 这是**有意的**降级，
   //    `body` 本来就是「渲染端不认这个 kind 时显示的东西」。
   const inner = isCardMsg(m)
@@ -413,10 +316,10 @@ function teamworkMsgHtml(m) {
     : isRemindMsg(m)
       ? remindCardHtml(m)
       : isImageMsg(m)
-        ? // ⭐ 0.8.54：图片消息 —— 画成一张圆角缩略图（点开看大图，见 `bindImageZoom()`）
+        ? // 图片消息 —— 画成一张圆角缩略图（点开看大图，见 `bindImageZoom()`）
           imageMsgHtml(m, teamworkState.activeConvId)
         : `<div class="teamwork-bubble">${esc(m.body)}</div>`;
-  // ⭐ 0.7.7：卡片消息在**外层**消息行上再加一个 `is-card` —— 卡片的宽度统一在那一层定
+  // 卡片消息在**外层**消息行上再加一个 `is-card` —— 卡片的宽度统一在那一层定
   //    （`width: min(78%, 560px)`，见 `desktop/app.css` 的 `.teamwork-msg.is-card`）。
   //    ⚠️ 判据走 `shared.js` 的 `isAnyCardMsg()`（任务卡片 + 四种提醒的并集），⛔ 不在这里另写一份。
   //    ⚠️ 为什么不在 `.teamwork-card` / `.teamwork-remind` 本体上定宽：那两个类**被发送前的预览弹窗复用**
@@ -432,21 +335,10 @@ function teamworkMsgHtml(m) {
 }
 
 /**
- * 功能：画一条消息下面那几枚「已添加到任务」标记（0.4.4，第 5 条）。
- *
+ * 功能：画一条消息下面那几枚「已添加到任务」标记。
  * 说明：⭐ 标记来自 `teamworkState.msgTasks`（服务端 `teamworkMessages()` 按**我自己的任务**反查出来的，
  *      所以对方的界面上永远没有这一块 —— 见 `modules/tasks/schema.js` 的文件头）。
  *      一条消息可以对应**多条**任务（同一句话分别落进两个项目），所以这里是一个列表。
- *      ⚠️ **为什么不挂在消息对象上**（`m.tasks`）：同一条消息会在 REST 与 SSE 两条路上到达，
- *      而 `mergeById()` 是「后到的整个对象覆盖先到的」—— SSE 那一条**不带** `tasks`，
- *      挂上去的话每次推送都会把已经画出来的标记抹掉（一次静默的「标记时有时无」）。
- *      所以它单独存在 `teamworkState.msgTasks` 里，由 REST 取数写、SSE 不碰。
- *      ⚠️ 标题是**我自己写的任务标题**（用户内容）⇒ 一律 `esc()`；进 `data-*` 的只有
- *      「'daily' / 数字」两种形态，不含用户内容。
- *      ⭐ 0.5.2：标记上要写清**这条任务做完没有**（「添加到任务的消息下应该
- *      显示这个任务的完成状态，没有完成用红色、完成是灰色并用横线划掉」）——
- *      两种状态的样式差异 `.teamwork-task-chip.todo / .done` 由 CSS 给，这里只落 class。
- *
  * @param {Object} m - 归一后的消息
  * @returns {string} 标记区的 HTML 片段（没有任务时是空串）
  */
@@ -477,10 +369,8 @@ function teamworkMsgTasksHtml(m) {
 
 /**
  * 功能：把服务端给的消息标记收进 `teamworkState.msgTasks`（**只写不改**，按消息 id 归位）。
- *
  * 说明：⚠️ 只在服务端真的带了 `tasks` 数组时才写：SSE / 本地乐观插入的那些行没有这个字段，
  *      不能拿「没有」当成「没有标记」去覆盖（那正是标记会闪没的原因）。
- *
  * @param {Array.<Object>} items - 服务端返回的消息行（可能带 `tasks`）
  * @returns {void}
  */
@@ -492,13 +382,8 @@ function applyMsgTasks(items) {
 
 /**
  * 功能：从对话里的「已添加到任务」标记跳到那条任务 —— 进任务板那一屏，并**弹出它的详情**。
- *
  * 说明：⭐ 用 `openBoard(scope)` 而不是自己拼一个视图：它顺带把这一屏的数据取回来、
  *      让侧栏高亮与选中态都对（换屏的唯一出口，见 `shell.js`）；`openBoard` 是 async 的，
- *      等它取完数再从 `state.tasks` 里按 id 找那条任务。
- *      ⚠️ **找不到**（任务刚被删掉）时说一句人话，不要静默什么都不做 ——
- *      标记还在而点下去没反应，用户会以为应用坏了。
- *
  * @param {string} scope - `'daily'` 或项目 id（来自标记的 `data-teamwork-task-scope`）
  * @param {number} id - 任务 id
  * @returns {Promise.<void>}
@@ -514,15 +399,10 @@ async function jumpToTask(scope, id) {
 
 /**
  * 功能：把「未读合计」这一件事**一次说清** —— 重算 / 记进 `teamworkState` / 通知宿主。
- *
- * 说明：⭐ 0.5.5（「来消息并不是实时出现红点提示，需要刷新才能出现」）。
+ * 说明：（「来消息并不是实时出现红点提示，需要刷新才能出现」）。
  *      在此之前 `teamworkState.unreadTotal` 被四处各赋一次值，而那四个地方**谁也不知道
  *      外面还有人在看这个数** —— 于是侧栏角标与首页看板那张卡永远停在旧值上。
- *      现在四条路都走这里，宿主那边一处收口（`shell.js` 的 `setTeamworkUnread()`）。
- *      ⚠️ 别绕开它直接给 `teamworkState.unreadTotal` 赋值：那样红点又不会亮，而且**不报任何错**。
- *
  * @param {number} [total] - 明确的未读合计；不给就按 `teamworkState.conversations` 重算
- *      （`/api/teamwork/friends` 直接给了一个数，别丢掉它）
  * @returns {void}
  */
 function publishUnread(total) {
@@ -534,10 +414,8 @@ function publishUnread(total) {
 /**
  * 功能：把一条消息的结果就地写回会话列表那一行（最后一条摘要 / 排序 / 未读），
  *      免得为「自己刚发的那句话」再打一次接口。
- *
  * 说明：⭐ 未读数**只对「不是我发的 + 不是当前打开的会话」**递增 —— 与后端口径一致
  *      （打开着的会话会立刻 `read`）；自己的消息永远不给自己算未读。
- *
  * @param {Object} msg - 归一后的消息
  * @returns {void}
  */
@@ -547,7 +425,7 @@ function applyMessageToConversations(msg) {
   c.last_body = msg.body;
   c.last_created_at = msg.createdAt;
   c.last_sender_id = msg.userId;
-  // ⭐⭐ 0.7.7 修复（真机报的「我：」闪现）：内置角色（提醒助手）发的消息，`user_id` **就是收件人自己**
+  // 修复：内置角色（提醒助手）发的消息，`user_id` **就是收件人自己**
   //    （`teamwork_messages` 建表说明）⇒ 只判发送者会把它当成「我发的」，预览行于是写上「我：」；
   //    下一次 REST 全量刷新时服务端算对了（`store.js` 的 `lastMine()`：发送者是我 **且** 不是内置角色）
   //    ⇒ 「我：」消失 ⇒ 表现为**闪现**。
@@ -555,7 +433,7 @@ function applyMessageToConversations(msg) {
   //    它早就带着 `|| msg.senderBuiltin` —— 同一条规矩，别只改一半）。
   c.last_mine = Number(msg.userId) === myUserId() && !msg.senderBuiltin;
   if (Number(msg.id) > Number(c.last_message_id || 0)) c.last_message_id = Number(msg.id);
-  // ⭐ 0.6.x：内置角色（提醒助手）发的消息**要计未读** —— 它就是「叫你」的唯一方式，
+  // .x：内置角色（提醒助手）发的消息**要计未读** —— 它就是「叫你」的唯一方式，
   //    而它的 `userId` 恰好是我自己，只判发送者会把红点吃掉（后端同样口径，见 `teamwork_reminders` 那一批）。
   if (
     (msg.userId !== myUserId() || msg.senderBuiltin) &&
@@ -570,13 +448,10 @@ function applyMessageToConversations(msg) {
 
 /**
  * 功能：拉一次 `GET /api/teamwork/friends` 覆盖左栏数据，并重画左栏与对话头部。
- *
  * 说明：⭐ 这是**唯一**给 `teamworkState.friends / conversations` 赋值的入口（SSE 的 `friend` 事件、
  *      好友申请、同意、删除、拉黑全都回到这里重新取一次）—— 这样「哪些字段能跨账号传」
  *      只有服务端一处答案，前端不去自己拼账号信息。
  *      ⚠️ 当前打开的会话若已不在列表里（被删好友 / 拉黑），必须**主动关掉**：
- *      否则右边会一直挂着一个再也读不到（404）的对话，用户点发送只会不断报错。
- *
  * @returns {Promise.<void>}
  */
 export async function loadTeamworkOverview() {
@@ -600,10 +475,8 @@ export async function loadTeamworkOverview() {
 /**
  * 功能：只刷会话列表（`GET /api/teamwork/conversations`）并重画左栏 ——
  *      用于「消息到达了别的会话」与「轮询周期到」这两种只想更新未读数的场合。
- *
  * 说明：⚠️ 失败**只吞掉**：未读数是锦上添花，为它弹一个错误框反而打断正在进行的对话；
  *      真正的连接异常由顶栏的「重连中 / 已降级为轮询」负责说明。
- *
  * @returns {Promise.<void>}
  */
 async function refreshConversations() {
@@ -619,11 +492,9 @@ async function refreshConversations() {
 
 /**
  * 功能：把当前会话标记为已读（`POST …/read`），并就地清掉左边那一行的红点。
- *
  * 说明：⭐ 游标取「已加载消息里的最大 id」而不是某个计数 —— 服务端的已读游标就是消息 id，
  *      而且它会把游标夹到会话现有的最大 id（多端同时在线也不会把将来的消息误标已读）。
  *      ⚠️ 已经零未读时**不再发请求**：否则每来一条自己的消息都会白白多一次往返。
- *
  * @returns {Promise.<void>}
  */
 async function markConversationRead() {
@@ -648,14 +519,7 @@ async function markConversationRead() {
 
 // ---------- 渲染：左栏（会话区 + 顶部两颗入口按钮） ----------
 /**
- * 功能：画**会话区**的标题行 —— ⭐ 0.4.4 起它是一颗**按钮**（点一下收起 / 展开这一区），
- *      右侧的计数**始终画着**（收起来也看得见「有几个会话 / 几条未读」）。
- *
- * 说明：⚠️ 计数在按钮**里面**，所以点它也算折叠 —— 这正是想要的（整行都能点）。
- *      箭头方向就是当前状态：`▾` 展开着、`▸` 已收起（不看文案也能一眼分辨）。
- *      ⚠️ 0.7.6 起本函数只服务会话区（好友 / 申请改成了两颗按钮 + 弹窗，见 `paintTeamworkActs()`），
- *      于是原先那个给「好友区待处理红点」用的 `badge` 参数没人传了 —— 一并去掉，红点搬到申请按钮上。
- *
+ * 功能：画**会话区**的标题行 —— 起它是一颗**按钮**（点一下收起 / 展开这一区），
  * @param {string} key - 折叠键（`assist` / `convs`，必须是 `teamworkState.fold` 里已有的键）
  * @param {string} title - 分区名
  * @param {string} cnt - 右侧计数文案（已转义）
@@ -673,12 +537,8 @@ function teamworkSecHeadHtml(key, title, cnt, folded) {
 
 /**
  * 功能：算一段会话标题右侧的计数 —— 有未读就说未读，否则说条数。
- *
  * 说明：⚠️⭐ 两段**各算各的**：共用一个数（旧口径是全局的 `teamworkState.unreadTotal`）会让
  *      两行标题写着同一个数字，看的人只会以为算错了。
- *      ⚠️ 插槽会话条目**没有未读语义**（`teamworkSlotRowHtml()` 里不画红点）⇒ 它只用 `extra`
- *      计入条数，不进未读。
- *
  * @param {Array.<Object>} rows - 本段的会话行
  * @param {number} extra - 本段额外的「非会话行」条数（插槽条目），可为 0
  * @returns {string} 计数文案
@@ -689,17 +549,11 @@ function teamworkSecCnt(rows, extra) {
 }
 
 /**
- * 功能：渲染左栏 —— ⭐ 0.7.7 起是**可折叠的分组**（`内置助手` / `好友`），⭐ 2h 起多第三组
+ * 功能：渲染左栏 —— 起是**可折叠的分组**（`内置助手` / `好友`），⭐ 2h 起多第三组
  *      `协作项目`，三组各用 `teamworkSecHeadHtml()` 画头（⇒ 同款），
  *      顺手把顶部两颗入口按钮的计数刷一遍。
- *
  * 说明：⚠️ 好友 / 申请两块已从内联改成**两颗按钮**（点开是弹窗，见 `openTeamworkFriendsModal()` /
  *      `openTeamworkRequestsModal()`），这里不再画它们；但按钮上的数字与红点必须跟着数据变，
- *      所以每回重画都顺手调一次 `paintTeamworkActs()` —— 所有 `renderTeamworkSide()` 的调用点
- *      （收消息、拉总览、折叠…）于是自动覆盖到按钮，不必各自记得刷。
- *      ⚠️ 那两颗按钮住在 `#teamwork-side-body` **外面**（`index.html` 的 `.teamwork-acts`），
- *      不参与这块 `innerHTML` 重画 —— 否则每收一条消息按钮就要被重建一次。
- *
  * @returns {void}
  */
 export function renderTeamworkSide() {
@@ -707,20 +561,17 @@ export function renderTeamworkSide() {
   if (!box) return;
   box.innerHTML = teamworkConvSecHtml();
   paintTeamworkActs();
-  // ⭐ 0.8.4：这一拍重启完之后，条目表是新的 ⇒ 顺手兑现一次「外部请求打开某个插槽会话」
+  // 这一拍重启完之后，条目表是新的 ⇒ 顺手兑现一次「外部请求打开某个插槽会话」
   //    （记账那颗 AI 圆环走的就是这条路；幂等，没请求时立刻返回）。
   tryOpenWantSlot();
 }
 
 /**
  * 功能：把**顶部两颗入口按钮**（好友 / 申请）的计数与红点刷成当前值。
- *
  * 说明：⭐ 按钮是 `index.html` 里的**静态骨架**（不进左栏那块重画范围），所以计数得由本函数补上去。
  *      ⚠️ 节点取不到时**静默返回**：手机版没有这两颗按钮（它用自己的列表页操作行），
  *      而且骨架与代码不同步时也不该把整屏拖挂（本项目记过「少一个节点 = 整屏读取失败」）。
  *      ⚠️ 申请按钮上的红点只在**有待处理**时出现 —— 数字与弹窗里「收到」那一段同源
- *      （都取 `teamworkState.incoming`），不会出现「按钮说 2、点开只有 1」。
- *
  * @returns {void}
  */
 function paintTeamworkActs() {
@@ -754,13 +605,10 @@ function paintTeamworkActs() {
 
 /**
  * 功能：画**好友弹窗**的正文 —— 全部好友，每行「名字（点了开会话）+ 拉黑 + 删好友」。
- *
- * 说明：⭐ 0.7.6 从原来的内联区搬过来，行的结构与动作**一个字没改**（仍是 `teamworkFriendRowHtml()`）——
+ * 说明：从原来的内联区搬过来，行的结构与动作**一个字没改**（仍是 `teamworkFriendRowHtml()`）——
  *      改的只是它被谁装：以前装进左栏，现在装进弹窗。
  *      ⚠️ 只画「账号还查得到」的好友：后端把 `user` 补不出来时是 `null`（对方账号已注销），
  *      这种行既不能开会话也不能删好友（`data-*` 会变成 NaN），画出来只是个会报错的按钮。
- *      ⚠️ 右键这一行仍然能改备注 —— 委托挂在弹窗容器上（见 `bindTeamworkEvents()`）。
- *
  * @returns {string} 弹窗正文的 HTML 片段
  */
 function teamworkFriendsListHtml() {
@@ -800,14 +648,9 @@ function teamworkRequestsListHtml() {
 
 /**
  * 功能：渲染一位好友 —— 名字本身是按钮（点了就开/接着聊），右侧是拉黑与删好友。
- *
  * 说明：⚠️ 名字与操作**是两个并排的按钮**，不是「整行可点 + 行内按钮」——
  *      后者靠 `closest()` 分派时，先判整行会让「点删好友」变成「打开对话」，且不报任何错
  *      （本项目已记录的坑）。这里从结构上就不给它出错的机会。
- *      ⭐ 0.4.4：名字走 `teamworkRowName()`（**我起的备注优先**）；`@登录名` 那一行照旧显示 ——
- *      备注只是「我认他的方式」，登录名才是「他到底是谁」，两样都要看得见。
- *      改备注的入口是**右键这一行**（`onTeamworkSideMenu()`），所以行上不必再挤第三颗按钮。
- *
  * @param {Object} f - 好友行（`remark` / `user` / `conversation_id` / `unread`）
  * @returns {string} 好友行的 HTML 片段
  */
@@ -833,15 +676,9 @@ function teamworkFriendRowHtml(f) {
 /**
  * 功能：渲染会话区（⭐ 2h 起是**三组**：`内置助手` / `好友` / `协作项目`）—— 每个会话带未读数与最后一条摘要，
  *      当前打开的那个高亮。
- *
- * 说明：⭐ 0.6.x 会话区顶部多一块「**插槽会话条目**」：本区每次重画都先发一次
+ * 说明：.x 会话区顶部多一块「**插槽会话条目**」：本区每次重画都先发一次
  *      `zx:teamwork-conv-entries` 留白事件（与 `zx:teamwork-msg-menu` 同一套规矩 —— 本模块不认识
  *      任何具体模块，谁想把自己的会话摆进这张列表谁就来填），收集到的条目用**本模块自己的
- *      行样式**画在真会话前面 —— 条目长得和真会话一模一样（头像 / 名字 / 摘要），点它
- *      由 `openSlotConv()` 接手。⚠️ 事件是同步派发的（`dispatchEvent` 不异步），
- *      所以可以在拼 HTML 前就地收齐。
- *      ⭐ 0.7.7：这些插槽条目与 `builtin_key` 会话**同属「内置助手」那一组**（它们都不是真人）。
- *      ⭐ 2h：第三组「协作项目」由 `teamworkCollabSecHtml()` 画（同样走留白事件登记条目）。
  * @returns {string} 会话区各组的 HTML 片段（「内置助手」那一段可能整段不画）
  */
 function teamworkConvSecHtml() {
@@ -853,7 +690,7 @@ function teamworkConvSecHtml() {
   const slots = ((ev.detail && ev.detail.items) || []).filter((it) => it && it.key);
   for (const it of slots) teamworkState.slotEntries.set(String(it.key), it);
   const slotHtml = slots.map(teamworkSlotRowHtml).join('');
-  // ⭐ 0.7.7：会话列表拆成**两段** —— 「内置助手」（插槽条目 + `builtin_key` 会话）与「好友」（其余）。
+  // 会话列表拆成**两段** —— 「内置助手」（插槽条目 + `builtin_key` 会话）与「好友」（其余）。
   //    判据只走 `shared.js` 的 `isAssistConv()`（⛔ 两端各写一份 `if` 就是分叉的起点）；
   //    ⚠️ 两段的**组内顺序照服务端给的顺序**（`store.js` 已把内置角色排最前）—— 这里只分组、不重排。
   const assist = cs.filter(isAssistConv);
@@ -888,15 +725,9 @@ function teamworkConvSecHtml() {
 /**
  * 功能：画左栏**第三组**「协作项目」—— 组内第一行恒为「＋ 添加共享项目」，其余行是每个已加进
  *      协作的项目（点它 ⇒ 主区让位给看板，走 `openCollabBoard()`）。
- *
  * 说明：⭐ 与「内置助手 / 好友」两组用**同一个** `teamworkSecHeadHtml()` 画分组头 ⇒ 三组同款，
  *      这正是提这一条的**全部理由**。⚠️ 条目走 `zx:teamwork-collab-entries` 留白事件收集
  *      （与 `zx:teamwork-conv-entries` 同一套规矩）—— 本模块**不认识 `tasks` 这个东西**，
- *      谁想把自己的项目摆进这一组谁就来填；填的是 `{ key, name, sub }`，行由本模块用自己的样式画。
- *      ⚠️ 事件是同步派发的，所以可以在拼 HTML 前就地收齐；⚠️ 先清再收（残留的旧条目会指向已卸载的片段）。
- *      ⭐ 三组恒画（不像「内置助手」那样整段不画）：组内第一行「＋ 添加共享项目」永远要有 ——
- *      一组都不能凭空消失，否则「加进来」的门就没了。
- *
  * @returns {string} 第三组的 HTML 片段
  */
 function teamworkCollabSecHtml() {
@@ -929,9 +760,7 @@ function teamworkCollabSecHtml() {
  * 功能：画一条**协作项目行** —— 与真会话行（`teamworkConvRowHtml()`）同一套类名与结构，
  *      只是数据来自条目本身（头像用统一的文件夹图标、没有未读数与时间）。
  *      ⭐ 点它由 `openCollabBoard()` 接手（主区让位给看板），选中态与真会话同一个 `on` 类。
- *      ⭐⭐ 0.8.53（团队协作的项目中也要有 + 图标可以新建任务）：行尾多一颗 `＋`
- *      （`data-teamwork-collab-new`）—— 点它打开这个项目的看板并**直接摆出新建任务弹层**。
- *      ⚠️ 它在**行按钮内部**，所以点击委托里必须先判它、再判整行（见 `onClick` 那一段）。
+ *      （团队协作的项目中也要有 + 图标可以新建任务）：行尾多一颗 `＋`
  * @param {Object} it - 条目（`{ key, name, sub }`，`key` ＝ 项目 id 字符串）
  * @returns {string} 该行的 HTML 片段
  */
@@ -959,7 +788,7 @@ function teamworkCollabRowHtml(it) {
 function teamworkSlotRowHtml(it) {
   const on = teamworkState.slotConv === String(it.key);
   // ⚠️ 键是模块自己登记的内部常量（不是用户内容），但仍先 esc 落到局部变量再拼 ——
-  //    别把 `${esc(` 直接写进 data-teamwork-* 属性（特征化断言钉着这条口径，teamwork.test.js 0.4.4 需求 3）
+  //    别把 `${esc
   const key = esc(String(it.key));
   return (
     `<button class="teamwork-row conv${on ? ' on' : ''} builtin" type="button" data-teamwork-slot="${key}">` +
@@ -970,12 +799,10 @@ function teamworkSlotRowHtml(it) {
 }
 
 /**
- * 功能：把一条消息摘要压成**会话列表里那一行**能放的形状 —— ⭐ 0.6.x：只取第一行。
- *
+ * 功能：把一条消息摘要压成**会话列表里那一行**能放的形状 —— .x：只取第一行。
  * 说明：⚠️ 提醒助手的消息是**多行**的（上课提醒含教室与两条备注），整段塞进 320px 的预览行
  *      会被挤成一团（`<small>` 里换行渲染成空格，读者只看到一长串）。活人的消息通常是单行，
  *      所以只对内置角色生效 —— 不改变原有的显示习惯。
- *
  * @param {Object} c - 会话行
  * @returns {string} 预览文案（未转义；由调用方 `esc()`）
  */
@@ -996,7 +823,7 @@ function teamworkConvRowHtml(c) {
   const unread = Number(c.unread) || 0;
   const on = Number(c.id) === Number(teamworkState.activeConvId);
   const sub = c.peer_gone ? '对方账号已注销 · 只能看历史' : teamworkPreview(c);
-  // ⭐ 0.6.x：内置角色（提醒助手）整行带 `builtin` —— 头像与名字走**暖色**，
+  // .x：内置角色（提醒助手）整行带 `builtin` —— 头像与名字走**暖色**，
   //    在会话列表里一眼就能和真人区分开（「颜色要不一样」）。
   //    配色写在 `desktop/app.css` 的 `.teamwork-*` 那一段，这里只落 class。
   const bl = c.builtin_key ? ' builtin' : '';
@@ -1016,11 +843,8 @@ function teamworkConvRowHtml(c) {
 
 /**
  * 功能：渲染一条好友申请 —— 收到的给「同意 / 拒绝」，发出的只写「等对方同意」。
- *
  * 说明：⚠️ 发出的申请**刻意不给任何按钮**：一期没有「撤回申请」接口，
  *      而「拒绝」在服务端只允许被申请方调用 —— 摆一个点了必然报错的按钮是更坏的选择。
- *      「作废一条自己发出的申请」要等二期给了接口再说。
- *
  * @param {Object} f - 申请行（`user`）
  * @param {boolean} isIn - 是否是我收到的（true = 我可以同意 / 拒绝）
  * @returns {string} 申请行的 HTML 片段
@@ -1064,31 +888,19 @@ function teamworkBlockedRowHtml(f) {
   );
 }
 
-// ---------- 关系弹窗：好友 / 申请（0.7.6，从内联区改成两颗按钮） ----------
+// ---------- 关系弹窗：好友 / 申请 ----------
 /**
  * 当前打开的**关系弹窗**是哪一个（`'friends'` / `'reqs'` / `null`）。
- *
- * 说明：⭐ 它只服务一件事：弹窗里做了个动作（同意 / 拉黑 / 删好友…）之后，要把**同一个弹窗**
- *      重画成最新数据 —— 否则用户会盯着一个「刚同意过、却还写着等处理」的旧列表。
- *      ⚠️ 弹窗关闭时**不必清它**：重画只发生在「弹窗内的操作成功之后」这条路径上，
- *      那一刻这个值必然就是刚操作的那个弹窗；悬空的值不会被别的路径读走。
- *      ⚠️ 它只记**本模块自己开的**这两个弹窗；改备注 / 转任务那些弹窗不参与。
- *
  * @type {?('friends'|'reqs')}
  */
 let teamworkModalKind = null;
 
 /**
  * 功能：打开「好友」弹窗 —— 列出全部好友，行上「拉黑 / 删好友」，右键「改备注」。
- *
- * 说明：⭐ 0.7.6：好友管理从**左栏内联区**改成**一颗按钮 + 弹窗** —— 左栏只留会话，
+ * 说明：好友管理从**左栏内联区**改成**一颗按钮 + 弹窗** —— 左栏只留会话，
  *      好友与申请各占一颗按钮。行的结构与操作一个字没动（仍是 `teamworkFriendRowHtml()`），
  *      改的只是它被装进哪里。
  *      ⚠️ 内容**每次打开都重画**（读当前 `teamworkState`），不缓存 —— 好友/申请随时在变。
- *      ⚠️ 主按钮设成「关闭」并绑 `closeModal`（这是个只读列表，没有要保存的东西），
- *      而且**必须每次都设**：`closeModal()` 只还原按钮文案、不解除 `onclick`，
- *      漏设就会顶着上一个弹窗的动作（本项目记过这类串味）。
- *
  * @returns {void}
  */
 export function openTeamworkFriendsModal() {
@@ -1120,13 +932,9 @@ function repaintTeamworkModal() {
 
 /**
  * 功能：弹窗内的点击委托 —— 好友行 / 申请行 / 拉黑行上的动作。
- *
  * 说明：⚠️⭐⭐ 弹窗（`#modal`）挂在 `body` 下、**不在 `#teamwork-view` 里面** ⇒
  *      `bindTeamworkEvents()` 给 `#teamwork-view` 挂的那条委托根本收不到弹窗里的点击，
  *      所以这一批动作必须有**第二条委托**（挂在 `#modal-body` 上，见 `bindTeamworkEvents()`）。
- *      ⚠️ 顺序与 `#teamwork-view` 那条一致：**先判行内的按钮、再判整行**（`[data-teamwork-friend]` 放最后）——
- *      反了的话「点删好友」会变成「打开对话」，且不报任何错。
- *
  * @param {MouseEvent} e - 点击事件
  * @returns {void}
  */
@@ -1148,7 +956,7 @@ function onTeamworkModalClick(e) {
     closeModal();
     return void openTeamworkWithFriend(Number(fr.dataset.teamworkFriend));
   }
-  // ⭐ 0.8.54：发送菜单的三项 + 任务选择弹窗里的一行
+  // 发送菜单的三项 + 任务选择弹窗里的一行
   const send = t.closest('[data-tw-send]');
   if (send) {
     const act = send.dataset.twSend;
@@ -1159,7 +967,7 @@ function onTeamworkModalClick(e) {
     }
     if (act === 'collab' || act === 'daily') return void openSendTaskPicker(act);
   }
-  // ⭐ 0.8.54：筛选标签（全部 / 未完成 / 已完成）—— 必须排在任务行**前面**
+  // 筛选标签（全部 / 未完成 / 已完成）—— 必须排在任务行**前面**
   const tab = t.closest('[data-pick-tab]');
   if (tab) {
     sendPick.tab = String(tab.dataset.pickTab || 'all');
@@ -1172,12 +980,10 @@ function onTeamworkModalClick(e) {
 // ---------- 渲染：右栏对话流 ----------
 /**
  * 功能：渲染对话头部 —— 对方是谁 / 最近活跃时间 / 「备注」与「删除好友」两颗按钮。
- *
- * 说明：⭐ 0.4.4 加了一颗「✎ 备注」：想改备注的时机十有八九就是**正看着这个人这一屏**，
+ * 说明：加了一颗「✎ 备注」：想改备注的时机十有八九就是**正看着这个人这一屏**，
  *      不该让人退回左栏再右键找。⚠️ 名字走 `teamworkRowName()`（备注优先），与左栏同一个函数 ——
  *      两处各拼一次迟早会出现「左栏是备注、头上还是原名」。⚠️ 对方账号已注销时不摆任何按钮：
  *      没有可改的关系，点了必然是 404。
- *
  * @returns {void}
  */
 export function renderTeamworkHead() {
@@ -1196,7 +1002,6 @@ export function renderTeamworkHead() {
   // ⭐ 2h（丁 · 排版）：协作看板开着时，头也由本模块画（返回键 ＋ 项目名 ＋ 角色）——
   //    「点开一条协作项目」与「点开一条真会话」看到的头部结构必须一致，看板片段只画进度 / 按钮 / 列。
   //    ⚠️ 返回入口在这里（**插槽块的头上**，与插槽会话同一个位置感）；它由本模块的点击委托接住（`closeCollabBoard()`）。
-  //    ⭐ 2026-10-05：「这个返回按键**去掉箭头**，颜色**不要是白色**」
   //    ⇒ 文案 `← 返回` 改成 `返回`；类名从 `btn-subtle`（白底）换成自己的 `collab-back-btn`
   //      （品牌淡底 ＋ 品牌色字，定义在 `desktop/app.css`）。⛔ `data-teamwork-board-back` 与 title 不动。
   if (teamworkState.collabBoard) {
@@ -1216,7 +1021,7 @@ export function renderTeamworkHead() {
   }
   const u = c.peer_user || {};
   const name = teamworkRowName(c);
-  // ⭐ 0.6.x：内置角色（提醒助手）不是「一个人」—— 它没有登录名、没有最近登录时间、
+  // .x：内置角色（提醒助手）不是「一个人」—— 它没有登录名、没有最近登录时间、
   //    也不能删好友 / 改备注，所以那一行副标题与两颗按钮**都不该出现**（见下面的 `acts`）。
   const sub = c.builtin_key
     ? '系统内置角色 · 上课、任务与逾期提醒都发在这里'
@@ -1232,7 +1037,7 @@ export function renderTeamworkHead() {
         `<button class="btn btn-danger btn-sm" type="button" data-teamwork-del="${Number(u.id)}" ` +
         `title="删除好友（消息不删）">删除好友</button>`;
   box.innerHTML =
-    // ⭐ 0.6.x：内置角色的标题走**暖色**，与左栏那一条同一个约定（
+    // .x：内置角色的标题走**暖色**，与左栏那一条同一个约定（
     //    「提醒助手的颜色要不一样」）—— 配色在 `desktop/app.css`，这里只落 class。
     `<div class="teamwork-conv-title${c.builtin_key ? ' builtin' : ''}">` +
     `<b>${esc(name)}</b><span class="teamwork-conv-sub">${sub}</span></div>` +
@@ -1258,7 +1063,7 @@ export function renderTeamworkMessages(force) {
   if (!teamworkState.messages.length) {
     // ⚠️ 已注销的对端不能再说「说点什么吧」—— 输入区此时是置灰的，两句文案自相矛盾
     const gone = activeConversation();
-    // ⭐ 0.6.x：内置角色会话（提醒助手）的空态要**说清它靠什么出声** —— 它是这个功能唯一被看见的地方，
+    // .x：内置角色会话（提醒助手）的空态要**说清它靠什么出声** —— 它是这个功能唯一被看见的地方，
     //    而用户第一次点进来时它必然是空的（提醒要等到那个时刻才发）。
     //    ⚠️ 标题里的名字**取我自己起的那个**（`teamworkRowName()`），不写死「提醒助手」：名字是可以改的，
     //    写死就会出现「标题是我起的名、空态说『提醒助手还没有发过消息』」这种自相矛盾。
@@ -1291,16 +1096,12 @@ export function renderTeamworkMessages(force) {
 let wantSlot = '';
 
 /**
- * 功能：兑现「外部请求打开某个插槽会话」—— ⭐ 0.8.4 新增（记账的 AI 圆环要用）。
- *
+ * 功能：兑现「外部请求打开某个插槽会话」—— 新增（记账的 AI 圆环要用）。
  * 说明：⭐⭐ 为什么要有这一步（与手机端**逐字同款**）：插槽会话的**条目**是 ai 片段异步
  *      `import()` 之后才登记的（`zx:teamwork-conv-entries`），而记账那颗圆环点下去时片段可能
  *      **还没挂** —— 直接 `openSlotConv(key)` 会因为它「不在条目表里」而**什么都不做**
- *      （表现是「点了 AI 圆环只停在对话列表」这种**不报错**的坏体验）。
- *      ⇒ 请求先记在 `wantSlot`，**每次左栏重画完**（含片段挂载完补画那一次）都来问一次，
- *      条目齐了才真开。
  * @returns {void}
- * @since 0.8.4
+ * @since 0.9.7
  */
 function tryOpenWantSlot() {
   const k = String(wantSlot || '');
@@ -1314,7 +1115,7 @@ function tryOpenWantSlot() {
   openSlotConv(k);
 }
 
-// ⭐ 0.8.4：宿主转发过来的「请打开这个插槽会话」（它来自别处模块的 `zx:open-module`）
+// 宿主转发过来的「请打开这个插槽会话」（它来自别处模块的 `zx:open-module`）
 document.addEventListener('zx:teamwork-slot-open', (e) => {
   const k = String((e && e.detail && e.detail.key) || '');
   if (!k) return;
@@ -1336,12 +1137,9 @@ document.addEventListener('zx:teamwork-board-close', () => {
 
 /**
  * 功能：打开一个**插槽会话**（会话区里由 `zx:teamwork-conv-entries` 登记的条目，键 = `it.key`）。
- *
  * 说明：⭐ 主区让位的形态：对话头仍由本模块画（`renderTeamworkHead()` 的插槽分支），
  *      消息流（`#teamwork-body`）与输入区（`.teamwork-compose`）隐藏，腾出的位置放
  *      `#teamwork-slot-main`（懒建，里头是 `teamwork-thread` 插槽）—— 插槽片段画什么、怎么聊，
- *      本模块一概不认识。⚠️ `teamwork-thread` 的挂载是异步的（动态 `import()`），
- *      不必 await：片段渲染完自己会出现。
  * @param {string} key - 条目键
  * @returns {void}
  */
@@ -1374,16 +1172,10 @@ export function closeSlotConv() {
 
 /**
  * 功能：打开一个**协作看板**（左栏「协作项目」组里的一条，键 ＝ 项目 id 字符串）。
- *
  * 说明：⭐ 与 `openSlotConv()` 是**同一个形态**：主区让位 —— 头由本模块画（`renderTeamworkHead()`
  *      的看板分支），消息流与输入区隐藏，腾出的位置放 `#teamwork-slot-main`（懒建）里的
- *      `teamwork-board` 挂载点，挂 `teamwork-board` 插槽片段（⛔ **不复用** `teamwork-thread`，
- *      那是会话线程）。点开的是**哪一个项目**随挂载上下文（`collabPid`）传给片段 ——
- *      本模块不认识那个片段画什么。
- *      ⚠️ 与「插槽会话」互斥：先 `closeSlotConv()` 把那边关掉（`setSlotMain()` 按 `collabBoard` 选挂载点）。
- *      ⚠️ 条目还没登记（左栏没画过这一组）时不开 —— 免得开出一个指向不存在项目的空看板。
  * @param {string} pid - 项目 id
- * @param {boolean} [openNew] - ⭐ 0.8.53：打开后**立刻摆出【新建任务】弹层**（项目行那颗 ＋ 用）
+ * @param {boolean} [openNew] - 打开后**立刻摆出【新建任务】弹层**（项目行那颗 ＋ 用）
  * @returns {void}
  */
 export function openCollabBoard(pid, openNew) {
@@ -1421,20 +1213,17 @@ export function closeCollabBoard() {
 /**
  * 功能：主区在「真会话」与「插槽（会话线程 / 协作看板）」之间切换可见性 —— 头部三态共用
  *      `#teamwork-conv-head`，消息流与输入区让位给 `#teamwork-slot-main`（懒建一次、之后只切 `hidden`）。
- *
  * 说明：⭐ 2h（丁）起 `#teamwork-slot-main` 里放着**两个**挂载点 —— `#teamwork-slot-mount`
  *      （`teamwork-thread`，插槽会话）与 `#teamwork-board-mount`（`teamwork-board`，协作看板）。
- *      同一时刻只显示当前这一路，另一路**清空并藏起来**（两条路互斥，见 `openSlotConv()` /
- *      `openCollabBoard()`）；具体显示哪一路由 `teamworkState.collabBoard` 决定。
  * @param {boolean} on - true = 让位给插槽
  * @returns {void}
  */
 function setSlotMain(on) {
   const mountId = teamworkState.collabBoard ? 'teamwork-board-mount' : 'teamwork-slot-mount';
   const body = $('#teamwork-body');
-  // ⭐⭐ 0.8.61 修（真机：「团队协作从 AI 助手切换到其它对话，底部的输入框整体没有了，只有电脑端」）：
+  // 修：
   //    这里从前是按**类名**找真人这一块（`#teamwork-view` 下的 `.teamwork-compose`）。
-  //    0.8.55 起 AI 会话片段**自己也造了一个 `.teamwork-compose`**（`modules/ai/shared.js` 的
+  //    AI 会话片段**自己也造了一个 `.teamwork-compose`**（`modules/ai/shared.js` 的
   //    `createAiThreadView()`，与好友聊天共用同一套类名 —— 那是「两套 UI 要一模一样」的要求），
   //    而下面 `insertBefore(slot, body.nextSibling)` 把插槽容器插在 `#teamwork-body` **之后、
   //    真人 compose 之前** ⇒ AI 片段一旦挂上过，那句按类名的查询命中的就是**AI 那一个**：
@@ -1447,7 +1236,7 @@ function setSlotMain(on) {
   let slot = $('#teamwork-slot-main');
   // ⚠️⭐ 懒建的判据是「里头那两个**挂载点**还在不在」，不是「`#teamwork-slot-main` 在不在」。
   //    只判外层那个 div，会让「外层还在、里头被清空」这种状态**再也建不回来** —— 真机上
-  //    表现为「点开 AI 助手一片空白，只能重启应用」（0.6.4 修的就是这条）。
+  //    表现为「点开 AI 助手一片空白，只能重启应用」。
   if (on && body && body.parentNode && !(slot && slot.querySelector('#teamwork-slot-mount') && slot.querySelector('#teamwork-board-mount'))) {
     if (slot) slot.textContent = ''; // 结构残缺：整个重建
     slot = document.createElement('div');
@@ -1464,7 +1253,7 @@ function setSlotMain(on) {
     slot.hidden = !on;
     // ⚠️⭐ 卸载 / 切换只清**挂载点里面**（片段画的 DOM），⛔ 绝不把外层那个 div 的内容清空 ——
     //    那连两个挂载点本身一起铲掉，而它们是懒建一次的（见上）⇒ 下次点开时 `mountSlots(null, …)`
-    //    拿到 null 静默 return，消息区一片空白（0.6.4 修的正是这一条）。
+    //    拿到 null 静默 return，消息区一片空白。
     //    片段自己的收尾由 `closeSlotConv()` 的 `zx:teamwork-conv-close` 负责，不靠清 DOM。
     if (!on) {
       const tm = slot.querySelector('#teamwork-slot-mount');
@@ -1489,10 +1278,8 @@ function setSlotMain(on) {
 // ---------- 打开会话 / 加载消息 ----------
 /**
  * 功能：打开一个会话 —— 取最近一页消息、渲染、标记已读。
- *
  * 说明：⚠️ 取数回来时先核对 `teamworkState.activeConvId` 是否还是它：用户可能已经点了别的会话，
  *      慢回来的响应若照样写进 `messages`，就会出现「点 A 看到 B 的消息」这种串屏。
- *
  * @param {number} convId - 会话 id
  * @returns {Promise.<void>}
  */
@@ -1534,12 +1321,9 @@ export async function openConversation(convId) {
 
 /**
  * 功能：点好友 → 打开（或新建）与他的会话。
- *
  * 说明：⭐ 先用会话列表里的 `conversation_id`（已有就不打接口），没有才 `POST /api/teamwork/conversations`
  *      （那个接口是**幂等**的，两个设备同时点也只会有一个会话）。
  *      `opening` 标志挡住连点：连点两次会发两次 POST —— 虽然幂等，但两次 `loadTeamworkOverview`
- *      互相覆盖回来仍是浪费。
- *
  * @param {number} friendId - 对方账号 id
  * @returns {Promise.<void>}
  */
@@ -1562,12 +1346,10 @@ export async function openTeamworkWithFriend(friendId) {
 
 /**
  * 功能：向上翻历史 —— 用 `before=<当前最早一条的 id>` 再取一页并合并。
- *
  * 说明：⭐ 合并用 `mergeById()`（幂等），插入后**把滚动位置往下补回原来的高度**：
  *      新内容插在顶部，不补的话视口会跟着内容一起跳，用户会以为自己点错了。
  *      ⚠️ `hasMore` 是「还能不能继续往上翻」的唯一依据（服务端只在 `before` 模式下有意义），
  *      到 false 时上面会显示不出提示条，滚动也不会再触发请求。
- *
  * @returns {Promise.<void>}
  */
 async function loadOlderMessages() {
@@ -1610,12 +1392,10 @@ function onTeamworkScroll() {
 // ---------- 发送 / 加好友 / 关系操作 ----------
 /**
  * 功能：发一条消息（`POST /api/teamwork/conversations/:id/messages`）—— 成功后立刻就地插进消息流。
- *
  * 说明：⭐ **不等服务端推回来**：同一账号的其它端会收到 SSE，自己这一端也收得到，
  *      但等它绕一圈再显示会有肉眼可见的延迟。这里先插一条本地消息（id 用响应里的真 id），
  *      SSE 到达时 `mergeById()` 按 id 去重把它覆盖掉 —— 不会有重复气泡。
  *      ⚠️ 失败时把正文**还回输入框**：用户敲了一百个字，报个错就把它吞掉是不可接受的。
- *
  * @returns {Promise.<void>}
  */
 export async function sendTeamworkMessage() {
@@ -1630,7 +1410,7 @@ export async function sendTeamworkMessage() {
   const inp = $('#teamwork-input');
   const body = inp ? String(inp.value || '').trim() : '';
   if (!body) return;
-  // ⭐ 0.7.7：清空之后要把高度一起收回去（否则发完一条长消息，输入框还占着半屏）
+  // 清空之后要把高度一起收回去（否则发完一条长消息，输入框还占着半屏）
   if (inp) {
     inp.value = '';
     autoGrow(inp);
@@ -1658,7 +1438,7 @@ export async function sendTeamworkMessage() {
   }
 }
 
-// ================================================================ ⭐ 0.8.54：输入框左边那颗 ＋
+// ================================================================ 输入框左边那颗 ＋
 
 /**
  * 发送菜单的三项 —— 顺序就是那句话的顺序：「发送图片、协作项目任务、普通任务」。
@@ -1671,11 +1451,7 @@ const SEND_MENU_ITEMS = [
 ];
 
 /**
- * 功能：把一条**已经发出去**的消息并进当前屏（⭐ 0.8.54）—— 文本 / 卡片 / 图片共用。
- *
- * 说明：⚠️ 与 `sendTeamworkMessage()` 里那三行是同一套口径（`mergeById` → 会话列表 → 重画），
- *      抽出来只是因为「发卡片」「发图片」两条新路都要它 —— ⛔ 别让任何一条路自己拼一半。
- *      ⚠️ `kind` / `meta` 必须一起带：漏了它俩，卡片会**安静地**退回一句降级文本（不报错）。
+ * 功能：把一条**已经发出去**的消息并进当前屏（）—— 文本 / 卡片 / 图片共用。
  * @param {{id: number, conversationId: number, createdAt: string}} r - 服务端返回
  * @param {string} body - 降级文本（服务端也存的是它）
  * @param {?string} kind - 消息种类（`task_card` / `image`；纯文本传 null）
@@ -1699,8 +1475,7 @@ function pushSentMessage(r, body, kind, meta) {
 }
 
 /**
- * 功能：电脑端的「看大图」—— 在 `body` 上盖一层浮层，点任意处 / 按 Esc 关掉（⭐ 0.8.54）。
- *
+ * 功能：电脑端的「看大图」—— 在 `body` 上盖一层浮层，点任意处 / 按 Esc 关掉（）。
  * 说明：⚠️ 手机端**不用这个**：那边要压一条 history 才能让返回键先关图（见 `shared.js` 的
  *      `bindImageZoom()` 说明）—— 两边共用同一层浮层的话，手机返回会直接退出页面。
  * @param {string} url - 图片地址（内容寻址，服务端已校验过权限）
@@ -1727,7 +1502,7 @@ function openTeamworkImageBox(url, name) {
 }
 
 /**
- * 功能：打开**发送菜单**（⭐ 0.8.54：「点击加号可以发送图片、协作项目任务、普通任务」）。
+ * 功能：打开**发送菜单**（「点击加号可以发送图片、协作项目任务、普通任务」）。
  *
  * 说明：⚠️ 没选会话 / 对方已注销时**不打开**（与服务端拒发同一条规则）——
  *      让用户挑完任务才发现发不出去，比一开始就说清楚更费事。
@@ -1777,8 +1552,7 @@ function pickSendImage() {
 }
 
 /**
- * 功能：把选中的图片**上传并发出去**（⭐ 0.8.54）—— 二进制走裸 `fetch`，元数据走查询串。
- *
+ * 功能：把选中的图片**上传并发出去**（）—— 二进制走裸 `fetch`，元数据走查询串。
  * 说明：⚠️ ⛔ 不用 `api()`（它固定 JSON 体）；`Content-Type` 写死 `application/octet-stream`
  *      （与协作附件上传同一条路，服务端**自己派生** MIME，不信客户端）。
  *      ⚠️ 401 要回登录页（裸 `fetch` 绕过了 `api()` 的统一处理）；非 2xx 弹服务端那句原话。
@@ -1813,14 +1587,14 @@ async function uploadImageAndSend(file) {
 }
 
 /**
- * 功能：打开**任务选择**弹窗（⭐ 0.8.54）—— 按项目分组的可点列表，点一条就发出去。
+ * 功能：打开**任务选择**弹窗（）—— 按项目分组的可点列表，点一条就发出去。
  *
  * @param {string} kind - `'collab'`（协作项目任务）/ `'daily'`（普通任务）
  * @returns {Promise.<void>}
  */
 async function openSendTaskPicker(kind, onPick) {
   const cid = Number(teamworkState.activeConvId);
-  // ⭐ 0.8.55：**代挑**模式（AI 会话借这个选择器把任务发给 AI）不需要当前会话 ——
+  // **代挑**模式（AI 会话借这个选择器把任务发给 AI）不需要当前会话 ——
   //    它只借「挑一条任务」这一段，不是要往会话里发消息。
   const delegate = typeof onPick === 'function' ? onPick : null;
   if (!cid && !delegate) return toast('先在左边选一个好友或会话', true);
@@ -1862,13 +1636,13 @@ async function openSendTaskPicker(kind, onPick) {
 }
 
 /**
- * 发送任务弹窗当前的筛选状态（⭐ 0.8.54）—— 与手机端同名同义（那一份在 `mobile.js`）。
+ * 发送任务弹窗当前的筛选状态（）—— 与手机端同名同义（那一份在 `mobile.js`）。
  * @type {{kind: string, groups: Array.<Object>, q: string, tab: string}}
  */
 let sendPick = { kind: 'collab', groups: [], q: '', tab: 'all', delegate: null };
 
 /**
- * 功能：按当前筛选条件**只重画列表区**（⭐ 0.8.54）。
+ * 功能：按当前筛选条件**只重画列表区**（）。
  *
  * 说明：⚠️ 只换 `[data-pick-list]`，⛔ 不整块重画弹窗正文 —— 搜索框会被重建，输入法当场断。
  * @returns {void}
@@ -1887,7 +1661,7 @@ function paintSendPickList() {
 }
 
 /**
- * 功能：电脑端弹窗开着吗（⭐ 0.8.54）。
+ * 功能：电脑端弹窗开着吗（）。
  *
  * 说明：⚠️ 判据是 `.hidden` **不在**（`closeModal()` 加它、`openModal()` 摘它）——
  *      ⛔ 别照抄手机端的 `.on`：两端的开关标记本来就不是同一个类名，抄错的表现是
@@ -1900,12 +1674,10 @@ function isModalOpen() {
 }
 
 /**
- * 功能：点一条任务 ⇒ 取回它的字段、拼一张**任务卡片**发给对方（⭐ 0.8.54）。
- *
+ * 功能：点一条任务 ⇒ 取回它的字段、拼一张**任务卡片**发给对方（）。
  * 说明：⭐ 卡片载荷是**快照**：标题 / 截止 / 重要紧急 / 备注在发送那一刻定死，
  *      收件人看到的是「那一刻的样子」，⛔ 对话不去反查对方任务（那是越权通道）。
  *      ⚠️ 协作任务带上 `src: 'collab'` ＋ 项目名：卡片抬头写「分享了「项目名」里的任务」，
- *      并且**不给**「收进我的任务板」那颗按钮（对方本来就是项目成员）。
  * @param {string} key - `data-pick` 的值（`daily:<id>` / `collab:<id>:<pid>`）
  * @returns {Promise.<void>}
  */
@@ -1916,7 +1688,7 @@ async function sendPickedTask(key) {
   const tid = Number(parts[1]);
   const pid = Number(parts[2]);
   if (!tid) return;
-  // ⭐ 0.8.55：代挑模式 —— 选中就回传给调用方（AI 会话要自己发，不走会话消息那条路）
+  // 代挑模式 —— 选中就回传给调用方（AI 会话要自己发，不走会话消息那条路）
   const delegate = sendPick.delegate;
   if (!delegate && !cid) return;
   closeModal();
@@ -1971,7 +1743,7 @@ async function sendPickedTask(key) {
 }
 
 /**
- * 功能：⭐ 0.8.55 —— 把「挑一条任务」这件事借给别的会话用（目前是 AI 助手）。
+ * 功能：—— 把「挑一条任务」这件事借给别的会话用（目前是 AI 助手）。
  *
  * 说明：⭐ 走留白事件：AI 模块**不认识**任务表，也不该复制一份选择器 ——
  *      它派发 `zx:ai-pick-task`，这里用**同一个弹层**挑完，把 `{card, bodyText}` 回给它。
@@ -1990,11 +1762,9 @@ export function bindChatPickTask() {
 
 /**
  * 功能：按登录名发好友申请（`POST /api/teamwork/friends`）。
- *
  * 说明：⭐ 一期**没有「可添加的账号」列表**（那等于把全 NAS 的账号摊开给人挑，
  *      既有隐私问题也不需要）：所以这里的输入框配了一句「让对方把登录名给你」的说明，
  *      空态里也写着同一句。⚠️ 目标不存在时服务端回 404，这里原样把消息弹给用户看。
- *
  * @returns {Promise.<void>}
  */
 export async function addTeamworkFriend() {
@@ -2020,7 +1790,7 @@ async function acceptTeamworkFriend(friendId) {
   try {
     await api('POST', `/api/teamwork/friends/${Number(friendId)}/accept`);
     await loadTeamworkOverview();
-    // ⭐ 0.7.6：这个动作现在只可能从「申请」弹窗里发起（左栏那一区已经不存在了）⇒
+    // 这个动作现在只可能从「申请」弹窗里发起（左栏那一区已经不存在了）⇒
     //   把弹窗重画成最新列表 —— 否则用户会盯着一条「刚同意过、却还写着等处理」的旧行。
     repaintTeamworkModal();
     toast('已同意，你们现在是好友了');
@@ -2057,7 +1827,6 @@ function confirmRejectFriend(friendId) {
  * 功能：删除好友（必须确认）—— ⭐ 文案要把「消息一条都没删」说清楚。
  *
  * 说明：⚠️ 这是本模块最容易误解的操作：删好友**关掉的是读取这道闸门**，不是清空聊天记录。
- *      用户在确认框里读到的这句话，就是他事后不惊慌的唯一依据（方案 §八-2）。
  *
  * @param {number} friendId - 对方账号 id
  * @returns {void}
@@ -2136,16 +1905,12 @@ export function confirmUnblockFriend(friendId) {
   );
 }
 
-// ---------- 折叠 / 右键菜单 / 消息转任务 / 备注（0.4.4）----------
+// ---------- 折叠 / 右键菜单 / 消息转任务 / 备注----------
 /**
  * 功能：收起 / 展开左栏的**一段**（`assist` = 内置助手 / `convs` = 好友）—— 就地翻标志位再重画左栏。
- *
  * 说明：⚠️ 重画会让 `#teamwork-side-body` 的滚动位置回到顶部，所以先把 `scrollTop` 记下来再补回去：
  *      会话一多这块就有滚动条，「收起一节就把人弹回页首」是纯粹的骚扰。
  *      ⚠️⭐ 只认 `teamworkState.fold` 里**已经有的键**（现在是 `assist` / `convs`）：这是刻意的 ——
- *      `data-teamwork-fold` 将来多写一个别的值，宁可「点了没反应」也不许静默往 `teamworkState.fold`
- *      里塞新键（那是永不生效的死状态）。⚠️ 所以**新加一段时要先去 `teamworkState.fold` 里加上那个键**。
- *
  * @param {string} key - 折叠键（`assist` / `convs`）
  * @returns {void}
  */
@@ -2179,13 +1944,8 @@ function closeTeamworkMenu() {
 }
 
 /**
- * 功能：在鼠标位置弹一个右键菜单（0.4.4）。
- *
+ * 功能：在鼠标位置弹一个右键菜单。
  * 说明：⭐ 用 `document.body` + `position: fixed` 而不是往 `#teamwork-view` 里塞：这一屏的左右两栏
- *      各自带 `overflow: hidden`，菜单一旦落进它们就会被裁掉半截（本项目记过同款坑）。
- *      ⚠️ 位置要夹回窗口内：右键点在屏幕右下角时，菜单默认会露到窗口外面去。
- *      ⚠️ 点菜单项**先收起菜单再执行**：动作里多半会弹窗 / 重画，留着菜单在屏幕上会跟新内容打架。
- *
  * @param {number} x - 视口坐标 X（`event.clientX`）
  * @param {number} y - 视口坐标 Y（`event.clientY`）
  * @param {Array.<{ key: string, label: string, run: Function }>} items - 菜单项（`label` 会被转义）
@@ -2230,15 +1990,10 @@ function openTeamworkMenu(x, y, items) {
 }
 
 /**
- * 功能：右键**一条消息** → 菜单「添加到任务 / 复制文本」（0.4.4，第 3 条）。
- *
+ * 功能：右键**一条消息** → 菜单「添加到任务 / 复制文本」。
  * 说明：⚠️ 只在真的点中一条消息时才接管右键（查不到 `[data-teamwork-msg]` 就直接 return，
  *      让浏览器原生菜单照常出现在空白处 / 输入框上）。
  *      ⚠️ 拦下右键＝**顶掉浏览器原生菜单**，所以「复制文本」这一条必须给：
- *      不给的话用户在这一屏再也复制不走消息（只能用拖选 + Ctrl+C）。
- *      ⚠️ 正文按 id 从 `teamworkState.messages` 里取，**不从 DOM 上读**：
- *      一是 `data-*` 里不放用户内容，二是气泡里的正文可能被后到的同 id 消息覆盖过。
- *
  * @param {MouseEvent} e - 右键事件
  * @returns {void}
  */
@@ -2252,7 +2007,7 @@ function onTeamworkMessageMenu(e) {
     { key: 'task', label: '📋 添加到任务', run: () => openMessageTaskModal(msg) },
     { key: 'copy', label: '📄 复制文本', run: () => copyTeamworkMessage(msg) },
   ];
-  // ⭐ 0.6.0 菜单留白：插槽片段可以往消息菜单里添自己的条目 ——
+  // 菜单留白：插槽片段可以往消息菜单里添自己的条目 ——
   //    派发是**同步**的，监听方在 `detail.items` 上 push 即可；本文件不认识添菜单的是谁，
   //    没有监听方时事件无人在意，菜单照旧两项。
   document.dispatchEvent(new CustomEvent('zx:teamwork-msg-menu', { detail: { msg, items } }));
@@ -2260,14 +2015,10 @@ function onTeamworkMessageMenu(e) {
 }
 
 /**
- * 功能：点任务卡片上的一个动作按钮（0.6.4，任务联动）—— 「收进我的任务板」这类按钮由**别的模块**
+ * 功能：点任务卡片上的一个动作按钮—— 「收进我的任务板」这类按钮由**别的模块**
  *      通过 `zx:teamwork-card-actions` 留白事件供给，本模块只把点击转交过去（不认识具体模块）。
- *
  * 说明：⚠️ 消息对象**按 id 从 `teamworkState.messages` 里取**，不从 DOM 上读卡片里的字（与右键菜单
  *      同一条规矩：`data-*` 里不放用户内容，而卡片正文是对方可控内容）。
- *      ⚠️ 找不到对应动作时说一句人话（不许静默）—— 点一下没反应，用户只会以为应用坏了；
- *      真正常见的原因是「提供这个动作的模块被关掉了 / 被删掉了」。
- *
  * @param {HTMLElement} btn - 被点的按钮（读 `data-card-act`）
  * @returns {void}
  */
@@ -2280,14 +2031,10 @@ function onTeamworkCardAct(btn) {
 }
 
 /**
- * 功能：右键**一位好友** → 菜单「改备注」（0.4.4，第 4 条）。
- *
+ * 功能：右键**一位好友** → 菜单「改备注」。
  * 说明：⭐ 备注入口用右键而不是在行上再挤一颗按钮：一行本来就窄，右侧还站着
  *      「拉黑」「删好友」两颗，再加一颗会把名字挤成两三个字。
  *      ⚠️ 只认好友行（`data-teamwork-friend`）：正在聊的那个人的备注，走对话标题旁那颗「✎ 备注」。
- *      ⚠️⭐ 0.7.6：好友行搬进了**弹窗**，所以这条委托现在挂在弹窗容器（`#modal-body`）上，
- *      见 `bindTeamworkEvents()` 末尾 —— 左栏已经没有好友行了。
- *
  * @param {MouseEvent} e - 右键事件
  * @returns {void}
  */
@@ -2311,23 +2058,16 @@ async function copyTeamworkMessage(msg) {
 
 /**
  * 功能：把一条消息变成一条任务 —— 弹窗里选**归属**（日常任务 / 某个项目）并设置任务自己的属性。
- *
  * 说明：⭐ 第 3 条：右键消息就能直接落成任务，属性与归属在弹窗里定。
  *      两个「不能省」的细节：
  *      ① **归属切换要联动字段**：日常任务表里没有负责人 / 标签两列（`checkDailyTask` 也不认），
- *         选「日常任务」时那两栏必须**收起来**，否则就是「填了会被丢掉」；
- *      ② **描述默认带来源引用**（谁、什么时候、说了什么）—— 任务与那句话的关联要落在数据上，
- *         否则过两周没人记得这条任务是从哪句话变来的。
- *      ⚠️ 标题取消息**首行**并截到 `TEAMWORK_TASK_TITLE_MAX`（服务端 100 字上限、超了报 400 不截断）。
- *      ⚠️ 保存成功后刷一次 `loadProjects()`：侧栏的「今日待办」与项目列表里就多了一条，
- *      不刷的话那个数字会一直停在旧值（本项目记过「静默过期」这类坑）。
- *
  * @param {Object} msg - 归一后的消息（右键的那一条）
+ * @param {string} [draftKey] - 重载恢复时带回来的原草稿键（有它就优先用，⛔ 别重算）
  * @returns {void}
  */
-export function openMessageTaskModal(msg) {
+export function openMessageTaskModal(msg, draftKey) {
   const conv = activeConversation();
-  // ⭐ 0.7.7：与 `teamworkMsgHtml()` 同一口径 —— 内置角色发的消息**不是「我说的」**，
+  // 与 `teamworkMsgHtml()` 同一口径 —— 内置角色发的消息**不是「我说的」**，
   //    它只是恰好 `user_id` 写着我。漏了后半句，从提醒转出来的任务会写着「来自『我』的消息」（一句假话）。
   const from = Number(msg.userId) === myUserId() && !msg.senderBuiltin ? '我' : teamworkRowName(conv);
   const body = String(msg.body || '');
@@ -2361,6 +2101,23 @@ export function openMessageTaskModal(msg) {
       </div></div>
     <div class="form-group"><label>绑定网址</label><select id="mt-bookmark"></select></div>
     <p class="set-note">⭐ 消息原文已经填进「内容描述」里了，并写明了是谁在什么时候说的 —— 任务和那句话的关联就留在数据里，不必回头翻聊天记录。</p>`,
+    {
+      // 一条消息一张表单：键里带消息 id，转两条不同的消息不会互相覆盖
+      draft: draftKey || `tw-msg-task:${Number(msg.id)}`,
+      // 重载后这条消息可能已经不在内存里了 ⇒ 把「重建这张表单」要用的那几项一起存进恢复槽
+      resume: {
+        kind: 'tw-msg-task',
+        payload: {
+          msg: {
+            id: Number(msg.id),
+            userId: Number(msg.userId) || 0,
+            senderBuiltin: !!msg.senderBuiltin,
+            body,
+            createdAt: msg.createdAt,
+          },
+        },
+      },
+    },
   );
   bindDateRangeMin('#mt-start', '#mt-due');
   fillBookmarkSelect('#mt-bookmark');
@@ -2386,15 +2143,15 @@ export function openMessageTaskModal(msg) {
       important: $('#mt-important').checked ? 1 : 0,
       urgent: $('#mt-urgent').checked ? 1 : 0,
       status: 'todo',
-      // ⭐ 0.5.2：绑的网址（`0` = 不绑）
+      // 绑的网址（`0` = 不绑）
       bookmark_id: Number($('#mt-bookmark').value) || 0,
-      // ⭐ 0.4.4：记下「这条任务是从对话里的哪条消息建的」—— 消息下面那枚
+      // 记下「这条任务是从对话里的哪条消息建的」—— 消息下面那枚
       //    「已添加到任务」标记就是靠它反查出来的（只写一次，PUT 改不到它）。
       from_message_id: Number(msg.id),
     };
     try {
       let created = null;
-      // ⭐ 0.7.1：统一走「任务创建」的对外入口 —— 两套字段名（`content` / `description`）它都认。
+      // 统一走「任务创建」的对外入口 —— 两套字段名（`content` / `description`）它都认。
       //    ⚠️ `common` 里带了 `from_message_id`：它**只在创建时能写**，必须这一步给出去
       created = await createTask(
         scope,
@@ -2428,16 +2185,15 @@ export function openMessageTaskModal(msg) {
 }
 
 /**
- * 功能：改「我给某位好友起的备注」（0.4.4，第 4 条）—— 留空 = 取消备注。
- *
+ * 功能：改「我给某位好友起的备注」—— 留空 = 取消备注。
  * 说明：⭐ 文案必须说清「只有你自己看得见」：这是用户唯一的疑问 ——「改了会不会被他发现」。
  *      ⚠️ 保存成功后 `loadTeamworkOverview()` 重取一次（服务端的 `remark` 才是真值），
  *      不就地改内存：左栏与对话头都从那一份数据画，改内存就又多一处「谁知道对方是否也是这个名」。
- *
  * @param {number} friendId - 对方账号 id
+ * @param {string} [draftKey] - 重载恢复时带回来的原草稿键（有它就优先用，⛔ 别重算）
  * @returns {void}
  */
-export function openRemarkModal(friendId) {
+export function openRemarkModal(friendId, draftKey) {
   const fid = Number(friendId);
   const f =
     teamworkState.friends.find((x) => x.user && Number(x.user.id) === fid) ||
@@ -2451,6 +2207,11 @@ export function openRemarkModal(friendId) {
     <p class="set-note">⭐ 备注只写在你自己的账号里 —— <b>对方那边一切照旧</b>：他看不到你给他起的名字，
     你给他发的消息、你们的会话也不受任何影响。它只是把你列表里的名字换成一个你更好认的称呼。</p>
     <p class="set-note">留空 = 取消备注，名字回到「${esc(real)}」。</p>`,
+    {
+      // 每位好友各存各的：给 A 改到一半又去改 B，两份草稿不该串到一起
+      draft: draftKey || `tw-remark:${fid}`,
+      resume: { kind: 'tw-remark', payload: { friendId: fid } },
+    },
   );
   const inp = $('#rm-input');
   if (inp) inp.focus();
@@ -2498,7 +2259,7 @@ function onTeamworkMessageEvent(ev) {
     applyMessageToConversations(msg);
     renderTeamworkSide();
   }
-  // ⭐ 0.5.2：通道常驻之后，`activeConvId` 在人离开对话视图后仍留着 ——
+  // 通道常驻之后，`activeConvId` 在人离开对话视图后仍留着 ——
   //    必须同时要求 `state.view === 'teamwork'` 才算「正开着这个会话」：
   //    否则人在首页看板也会替他把新消息标成已读（回对话屏时未读数永远是 0）。
   if (state.view === 'teamwork' && cid === Number(teamworkState.activeConvId)) {
@@ -2511,24 +2272,14 @@ function onTeamworkMessageEvent(ev) {
 
 /**
  * 功能：需要补齐增量时调用 —— 降级轮询的每一拍、在线对账的每一拍、以及长连接重连成功的那一刻。
- *
  * ⭐ **必须幂等**：`modules/teamwork/teamwork-stream.js` 从任何非在线状态切回在线时会先调一次它，
  *    与轮询那一拍可能挨得很近；`mergeById()` 按 id 去重，重复拉不会出现重复气泡。
- *
- * ⭐ 0.5.2：⭐ 不在这一屏就**一个请求都不发** —— 电脑版侧栏没有全局未读红点，
+ * ⭐ 不在这一屏就**一个请求都不发** —— 电脑版侧栏没有全局未读红点，
  *    通道常驻只为「停在对话这一屏时是活的」；数据在 `openTeamwork()` 进屏时本来就现取，
- *    后台对账纯属浪费。（手机版不同：红点挂在底部标签上，后台每 30 秒对账一次，
- *    见 `modules/teamwork/mobile.js` 的 `teamworkPoll()`。）
- * ⭐ 0.5.2：会话消息**不再按 `after` 游标追增量，而是直接拉最近一页** ——
- *    「已添加到任务」标记睡在消息行里，按游标追永远只拿新消息，旧消息上的标记
- *    就再也不会变（在另一台设备上把消息落成任务，这一台看不到）。一页 50 条成本很低。
- *
  * @returns {void}
  */
 /**
  * 后台静默对账的最小间隔（毫秒）—— 与手机端 `teamworkPoll()` 的 `TEAMWORK_BG_POLL_MS` **同一个数、
- * 同一条理由**：人不在对话视图时，未读与红点至多每 30 秒对一次账（别为红点每 3 秒打一次接口）；
- * 前台（真的停在这一屏）照旧全速刷。
  * @type {number}
  */
 const TEAMWORK_BG_POLL_MS = 30000;
@@ -2538,14 +2289,10 @@ let teamworkBgAt = 0;
 
 /**
  * 功能：补齐增量 —— 降级轮询的每一拍 / 在线对账的每一拍 / 重连成功时各一次；幂等。
- *
- * ⭐ 0.5.5（报的「来消息不实时、需要刷新」）：**本函数第一句以前是
+ * （报的「来消息不实时、需要刷新」）：**本函数第一句以前是
  *    `if (state.view !== 'teamwork') return;`** —— 人在首页看板 / 任务板时，这条轮询的每一拍
  *    全是空转。而 SSE 在真机上假死是常见形态（网关把正文缓冲住 / 空闲长连接被掐），
  *    那时这条轮询就是消息能到的**唯一通路**；它一空转，看板上就永远什么都不会变，
- *    只能手动刷新。现在不在对话视图时改走**节流后的静默对账**（只拉会话列表、
- *    刷新未读与红点，不重画当前屏），与手机端 `teamworkPoll()` 逐字同一口径。
- *
  * @returns {void}
  */
 function onTeamworkPoll() {
@@ -2571,7 +2318,7 @@ function onTeamworkPoll() {
       renderTeamworkSide();
       // ⚠️ 已读游标只在真的前进时才发：整页每拍都会回来，无条件发就是每拍一次无谓写库
       const lastAfter = Number(teamworkState.messages[teamworkState.messages.length - 1].id);
-      // ⭐ 0.7.7：与上面 `onTeamworkMessageEvent()` 那条**同一个口径** —— 内置角色发来的消息也要算
+      // 与上面 `onTeamworkMessageEvent()` 那条**同一个口径** —— 内置角色发来的消息也要算
       //    「有别人的新内容」⇒ 当场标已读。少了 `|| m.senderBuiltin`，提醒助手的未读会一直挂着
       //    （人在这一屏、红点却不消失 —— 一个谁也说不清为什么的小毛病）。
       if (lastAfter > lastBefore && items.some((m) => m.userId !== myUserId() || m.senderBuiltin)) {
@@ -2600,17 +2347,11 @@ function ensureTeamworkStream() {
 
 // ---------- 进出这一屏 ----------
 /**
- * 功能：挂载对话页的**模块插槽**（0.6.0）—— tasks 的「协作项目登记器」从这里借位置进来。
- *
+ * 功能：挂载对话页的**模块插槽**—— tasks 的「协作项目登记器」从这里借位置进来。
  * 说明：⭐ 容器是**左栏里的一个零高度盒子**（`data-slot="teamwork-page"` 是它的唯一标记），
  *      由本函数**动态创建并复用**；挂载逻辑全部在 `core/slots.js`（清单 ∩ 接线表里谁声明了这个槽、
  *      模块开着才画、失败不静默），本文件不认识任何具体模块。
  *      ⚠️⭐ 2h（丁 · 排版）起它**不再放在 `.home-head` 之后整块横跨**：那一块会把左栏与主区一起
- *      往下推（「上下太丑」的根因，方案 §丁-2）。现在它挂在左栏里、`height: 0`、不占位置 ——
- *      片段只当登记器（把协作项目登记进左栏第三组）＋ 弹层宿主，本身没有常驻可见内容。
- *      ⚠️ `state.modules` 还没到手（首屏之前是 null）时 `slotDefs()` 返回空数组 —— 槽为空即隐藏，
- *      不会报错；清单到手后下一次进对话页就会挂上。
- *
  * @returns {void}
  */
 function mountTeamworkSlots() {
@@ -2633,11 +2374,9 @@ function mountTeamworkSlots() {
 
 /**
  * 功能：进入「对话」视图 —— 取一次好友总览、画出左栏，然后接上实时通道。
- *
  * 说明：⭐ 只认「好友总览」一个接口：它顺带返回会话列表（含未读数），
  *      所以开屏只要一个请求（与首屏聚合的思路一致）。
  *      `#teamwork-side-body` 只在**还没有任何数据**时才铺骨架屏 —— 否则每次点进来都闪一下白。
- *
  * @returns {Promise.<void>}
  */
 export async function openTeamwork() {
@@ -2663,12 +2402,10 @@ export async function openTeamwork() {
 
 /**
  * 功能：离开「对话」视图 —— 收起右键菜单、复位翻页标记。
- *
- * 说明：⭐ **0.5.2 起不再关掉实时通道** —— 通道改为应用级常驻（登录后由 `teamworkBoot()` 开一条，
+ * 说明：⭐ **不再关掉实时通道** —— 通道改为应用级常驻（登录后由 `teamworkBoot()` 开一条，
  *      只有「设置里关掉对话模块」才 `teamworkShutdown()`）；`shell.js` 的 `showView()` 在
  *      「上一个视图是 teamwork、新视图不是」时调它，那是所有视图切换的唯一出口。
  *      数据刻意**不清**（好友与会话列表留着），下次点进来不用重新转圈。
- *
  * @returns {void}
  */
 export function teamworkLeave() {
@@ -2679,21 +2416,18 @@ export function teamworkLeave() {
 }
 
 /**
- * 功能：⭐ 0.5.2 应用启动后的常驻通道引导 —— 模块清单确认「对话开着」时由
+ * 功能：应用启动后的常驻通道引导 —— 模块清单确认「对话开着」时由
  *      `shell.js` 的 `applyPrefsVisibility()` 调一次（幂等）。
- *
  * 说明：与手机版同一条道理（见 `modules/teamwork/mobile.js` 的 `teamworkBoot()`）：
  *      通道常驻之后，停留在对话屏的实时性不再依赖「刚从别的屏切过来」的时机，
  *      断线重连、降级轮询都由 `modules/teamwork/teamwork-stream.js` 自己兜住。电脑版没有全局红点，
- *      后台对账（`onTeamworkPoll`）不在这一屏时一个请求都不发，常驻没有额外流量。
- *
  * @returns {void}
  */
 export function teamworkBoot() {
   if (teamworkState.booted) return;
   teamworkState.booted = true;
   ensureTeamworkStream().start();
-  // ⭐⭐ 0.8.17：**预热**「团队协作」那几个插槽片段（含 AI 助手那一片）。
+  // **预热**「团队协作」那几个插槽片段（含 AI 助手那一片）。
   //    为什么必须预热：AI 助手**不是一条会话数据，而是一条插槽条目** —— 它的登记代码住在
   //    `modules/ai/` 的片段里，要等浏览器 `import()` 回来、片段跑完 `render()` 才登记；
   //    而对话模块**先画列表、后等登记**（`mountTeamworkSlots()` 不 await）⇒ 它永远是
@@ -2709,7 +2443,7 @@ export function teamworkBoot() {
 }
 
 /**
- * 功能：⭐ 0.5.2 停掉常驻通道 —— 只有一个调用方：`shell.js` 的 `applyPrefsVisibility()`
+ * 功能：停掉常驻通道 —— 只有一个调用方：`shell.js` 的 `applyPrefsVisibility()`
  *      在「设置里关掉了对话模块（或模块被整目录删掉）」时调。
  *      ⚠️ 切视图**不许**调它（那是 `teamworkLeave()` 的地盘，它已经不停通道了）。
  * @returns {void}
@@ -2722,12 +2456,10 @@ export function teamworkShutdown() {
 // ---------- 事件 ----------
 /**
  * 功能：打开「对话设置」—— ⭐ **懒加载**真正的面板（`desktop-settings.js`）。
- *
  * 说明：⚠️ 用 `import()` 字面量而不是顶层 `import`：设置面板对绝大多数人一辈子只打开一次，
  *      放进静态依赖图里会让**每一次**打进对话页的首屏都多下一个文件
  *      （`modulepreload` 清单也必须跟着加一条，见 `frontend-modules.test.js` 那一关）。
  *      ⚠️ 加载失败要说出来：否则表现是「点了没反应」。
- *
  * @returns {Promise.<void>}
  */
 async function openTeamworkSettingsPanel() {
@@ -2742,18 +2474,9 @@ async function openTeamworkSettingsPanel() {
 /**
  * 功能：给「对话」这一屏挂**一次性**事件委托 —— 左栏的打开会话 / 会话区折叠 / 两颗入口按钮、
  *      右上角的备注与删好友、发送按钮、加好友按钮，以及两个输入框的回车。
- *
  * 说明：⚠️ 左栏每次刷新都是整块 `innerHTML` 重画，逐个绑按钮必然漏（漏的那处表现是
  *      「点了没反应」，本项目最忌讳的一类缺陷）。
  *      ⚠️ 顶栏那颗常驻连接状态徽标（`#teamwork-status`）已于 整颗移除——
- *      `#teamwork-friend-name` / `#teamwork-input` 是**静态骨架**（不进重画范围），所以可以直接绑 ——
- *      它们若进了重画范围，表现就是「只能打进去一个字」。
- *      ⭐ 0.4.4 起：折叠（`data-teamwork-fold`）、对话头的「✎ 备注」（`data-teamwork-remark`）、
- *      两处 `contextmenu`（右键消息 / 右键好友行）。
- *      ⚠️⭐ 0.7.6：好友 / 申请搬进弹窗之后，「右键好友行」与弹窗内那批动作（拉黑 / 删好友 /
- *      同意 / 拒绝…）都**收不到**这里给 `#teamwork-view` 挂的委托（弹窗挂在 `body` 下、不在屏内）
- *      ⇒ 多了**第二条委托**（`#modal-body` 的 click + contextmenu，见函数末尾）。
- *
  * @returns {void}
  */
 export function bindTeamworkEvents() {
@@ -2765,12 +2488,12 @@ export function bindTeamworkEvents() {
     // ⚠️ 顺序：**先判行内的按钮、再判整行/整块**（按钮都在行里面，先判外面会把点击吃掉）
     const fold = t.closest('[data-teamwork-fold]');
     if (fold) return void toggleTeamworkFold(fold.dataset.teamworkFold);
-    // ⭐ 0.6.4（任务联动）：任务卡片里的动作按钮（「收进我的任务板」等）。
+    // （任务联动）：任务卡片里的动作按钮（「收进我的任务板」等）。
     //    ⚠️ 必须排在所有「整块 / 整行」判定**之前** —— 它长在消息卡片里面（与下面那枚
     //    「已添加到任务」标记同一条理由）。
     const cardAct = t.closest('[data-card-act]');
     if (cardAct) return void onTeamworkCardAct(cardAct);
-    // ⭐ 0.4.4：气泡下面那枚「已添加到任务」标记 → 跳到那条任务（进任务板 + 弹出详情）。
+    // 气泡下面那枚「已添加到任务」标记 → 跳到那条任务（进任务板 + 弹出详情）。
     //    ⚠️ 必须排在别的判定**之前**：它在消息气泡里面，而气泡自己不带任何动作，
     //    但将来若给气泡加了动作，顺序反了这里就永远收不到点击（本项目的老坑）。
     const taskChip = t.closest('[data-teamwork-task-id]');
@@ -2797,7 +2520,7 @@ export function bindTeamworkEvents() {
       document.dispatchEvent(new CustomEvent('zx:teamwork-collab-add'));
       return;
     }
-    // ⭐⭐ 0.8.53（团队协作的项目中也要有 + 图标可以新建任务）：项目行右侧那颗 ＋
+    // （团队协作的项目中也要有 + 图标可以新建任务）：项目行右侧那颗 ＋
     //    要先于整行判 —— 它就在**行按钮内部**，冒泡到行上会被当成「点开项目」。
     //    动作是「打开这个项目的看板 + 立刻摆出新建任务弹层」（`openNew` 随挂载上下文传下去）。
     const newRow = t.closest('[data-teamwork-collab-new]');
@@ -2814,12 +2537,12 @@ export function bindTeamworkEvents() {
     if (fr) return void openTeamworkWithFriend(Number(fr.dataset.teamworkFriend));
     if (t.closest('#teamwork-add-btn')) return void addTeamworkFriend();
     if (t.closest('#teamwork-send')) return void sendTeamworkMessage();
-    // ⭐ 0.8.54：输入框左边那颗 ＋ —— 三选一（图片 / 协作项目任务 / 普通任务）
+    // 输入框左边那颗 ＋ —— 三选一（图片 / 协作项目任务 / 普通任务）
     if (t.closest('#teamwork-plus')) return void openSendMenu();
-    // ⭐ 0.6.x：对话自己的设置（提醒时刻等）—— 面板是**懒加载**的（`import()` 字面量，
+    // .x：对话自己的设置（提醒时刻等）—— 面板是**懒加载**的（`import()` 字面量，
     //    所以孤岛检查认它、而 `modulepreload` 清单里不该有它，见开发）。
     if (t.closest('#teamwork-settings-btn')) return void openTeamworkSettingsPanel();
-    // ⭐ 0.7.6：左栏顶部那两颗入口按钮 —— 好友 / 申请的全部管理都搬进了弹窗
+    // 左栏顶部那两颗入口按钮 —— 好友 / 申请的全部管理都搬进了弹窗
     if (t.closest('#teamwork-friends-btn')) return void openTeamworkFriendsModal();
     if (t.closest('#teamwork-req-btn')) return void openTeamworkRequestsModal();
   });
@@ -2827,11 +2550,11 @@ export function bindTeamworkEvents() {
   const body = $('#teamwork-body');
   if (body) {
     body.addEventListener('scroll', onTeamworkScroll);
-    // ⭐ 右键一条消息 → 添加到任务 / 复制文本（0.4.4）
+    // ⭐ 右键一条消息 → 添加到任务 / 复制文本
     body.addEventListener('contextmenu', onTeamworkMessageMenu);
   }
 
-  // ⭐ 0.8.54：发图片 —— 选中文件就上传（⛔ 不上传 `files[0]` 之外的东西，也不允许一次多选）
+  // 发图片 —— 选中文件就上传（⛔ 不上传 `files[0]` 之外的东西，也不允许一次多选）
   const imgFile = $('#teamwork-img-file');
   if (imgFile) {
     imgFile.addEventListener('change', () => {
@@ -2841,13 +2564,13 @@ export function bindTeamworkEvents() {
       if (f) uploadImageAndSend(f);
     });
   }
-  // ⭐ 0.8.54：点图片看大图（判定在 `shared.js`，怎么展示归本端 —— 电脑端画一层浮层）
+  // 点图片看大图（判定在 `shared.js`，怎么展示归本端 —— 电脑端画一层浮层）
   bindImageZoom(openTeamworkImageBox);
-  // ⭐ 0.8.55：把「挑一条任务」借给 AI 会话（`zx:ai-pick-task` 留白事件）——
+  // 把「挑一条任务」借给 AI 会话（`zx:ai-pick-task` 留白事件）——
   //    AI 那边要能像好友聊天一样从 ＋ 里挑任务发给它，但选择器只该有一份。
   bindChatPickTask();
 
-  // ⭐ 右键一位好友 → 改备注（0.4.4）。⚠️⭐ 0.7.6：好友行搬进了**弹窗** ⇒ 这条委托跟着从
+  // ⭐ 右键一位好友 → 改备注。好友行搬进了**弹窗** ⇒ 这条委托跟着从
   //    `#teamwork-side-body` 挪到 `#modal-body`（左栏现在只剩会话行，右键它们没有任何菜单）。
   //    ⚠️ `#modal-body` 是长期存在的节点（`openModal()` 只换它的 `innerHTML`），挂一次就够；
   //    委托里靠 `closest('[data-teamwork-friend]')` 认行 —— 别的模块的弹窗里没有这个属性，不会误命中。
@@ -2857,7 +2580,7 @@ export function bindTeamworkEvents() {
     // ⚠️⭐⭐ 弹窗挂在 `body` 下、**不在 `#teamwork-view` 里面** ⇒ 上面那条 click 委托收不到它里的点击，
     //    所以弹窗内的动作（拉黑 / 删好友 / 同意 / 拒绝 / 取消拉黑 / 开会话）必须单独挂一条。
     modalBody.addEventListener('click', onTeamworkModalClick);
-    // ⭐ 0.8.54：任务选择弹窗里的搜索框 —— `input`（要边打边滤），只重画列表区
+    // 任务选择弹窗里的搜索框 —— `input`（要边打边滤），只重画列表区
     modalBody.addEventListener('input', (e) => {
       const q = e.target && e.target.closest ? e.target.closest('[data-pick-q]') : null;
       if (!q) return;
@@ -2883,20 +2606,17 @@ export function bindTeamworkEvents() {
       e.preventDefault();
       sendTeamworkMessage();
     });
-    // ⭐ 0.7.7：输入即自增高（拖拽手柄已由 CSS 的 `resize: none` 去掉 —— 要手动拖才变高
+    // 输入即自增高（拖拽手柄已由 CSS 的 `resize: none` 去掉 —— 要手动拖才变高
     //    的发送框，在聊天里等于没有）。封顶交给 CSS 的 `max-height`（超出就内部滚动，不顶破布局）。
     msgInp.addEventListener('input', () => autoGrow(msgInp));
   }
 }
 
 /**
- * 功能：让一个 textarea **跟着内容变高**（0.7.7，两端同一个写法）—— 先归零再按 `scrollHeight` 设回去。
- *
+ * 功能：让一个 textarea **跟着内容变高**—— 先归零再按 `scrollHeight` 设回去。
  * 说明：⚠️ `height='auto'` 这一步不能省：不先归零，`scrollHeight` 在内容变少时不会变小
  *      （它给的是「当前高度与内容高度的较大者」）⇒ 删掉几行之后输入框**不会缩回去**。
  *      ⚠️ 上限由 CSS 的 `max-height` 兜住（`max-height` 优先于 `height`）⇒ 这里不必知道封顶多少，
- *      两端也不用各写一个数（各写一个就会出现「电脑端 6 行、手机端 8 行」这种没人要的差异）。
- *
  * @param {HTMLTextAreaElement} el - 输入框（静态骨架里的那个，从头到尾都在）
  * @returns {void}
  */
@@ -2905,3 +2625,13 @@ function autoGrow(el) {
   el.style.height = 'auto';
   el.style.height = `${el.scrollHeight}px`;
 }
+
+// 重载恢复：消息转任务 / 改备注各自登记「用同样的参数再打开一次」（草稿由 `openModal()` 自动回填）
+registerResume('tw-msg-task', (p, key) => {
+  const m = p && p.msg;
+  if (m && Number(m.id)) openMessageTaskModal(m, key);
+});
+registerResume('tw-remark', (p, key) => {
+  const fid = Number(p && p.friendId) || 0;
+  if (fid) openRemarkModal(fid, key);
+});

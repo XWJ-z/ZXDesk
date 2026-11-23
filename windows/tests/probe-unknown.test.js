@@ -1,10 +1,5 @@
 /**
- * 探针「UNKNOWN 也要回调」（0.1.6 收尾修复 P0）。
- *
- * 现场：ZXDesk 应用根 `/app/zxdesk/` 是 SPA，`did-finish-load` 时 `innerText` 还没渲染 ⇒
- * `classifyGatewayBody('')` 给 `UNKNOWN`。0.1.6 初版 `runProbe()` 写成「非 UNKNOWN 才回调」，
- * 于是 `Controller.onProbe()` 一次都没被调用 ⇒ `captureWebSession()` 从没跑过 ⇒
- * `session.bin` 里没有 `zxdesk_sid` ⇒ 完全退出重开仍要登录。**这条用例在旧代码上必须失败。**
+ * 探针「UNKNOWN 也要回调」。
  */
 
 import assert from 'node:assert/strict';
@@ -106,12 +101,8 @@ test('探针认出登录页时同样回调（原来的行为没被改坏）', as
 });
 
 /**
- * 0.2.6：**兜底标签不能是 `APP`**（照 Android `PageProbeJs` 的定论）。
+ * **兜底标签不能是 `APP`**（照 Android `PageProbeJs` 的定论）。
  *
- * 旧脚本最后一行 `return 'APP'` ⇒ 任何「有正文但不认识」的页面都算应用页：
- * 中继空白壳、Chromium 错误页、网关的「正在校验」过渡页都会命中。
- * 而 `onProbe()` 把 `APP` 当成「这一轮真的进过应用」⇒ 随后的 `invalid token` 被当成
- * 「用着用着掉线」⇒ 走静默恢复、不切屏 ⇒ 用户停在一张没有任何按钮的白页上。
  */
 test('「有正文但不是应用页」⇒ UNKNOWN，⛔ 不能判成 APP', async () => {
   const { view, probes } = makeView('OTHER');
@@ -146,12 +137,10 @@ test('快捷键只在主进程截一次（同段代码写两遍会让 F5 触发�
   assert.equal(assigns.length, 1, '构造函数里 onShortcut 赋一次就够');
 });
 
-// ---------------------------------------------------------------- 子资源 401（0.2.6）
 
 /**
  * 网页收到 401 时先弹红气泡「登录已过期」，**700ms 后**才跳登录页。
  * 在那之前这批 `fetch` 的 401 只发生在网络层、不产生导航 —— 只拦 `will-navigate` 的话无人处理。
- * 照 Android 0.3.1 第十二条：子资源 401 就地发起静默重连，2 秒去重。
  */
 test('子资源 401 ⇒ 立刻上报（不等页面跳登录页）', () => {
   const { unauthorized, emitHeaders } = makeView('');
@@ -192,12 +181,8 @@ test('webRequest 监听只挂一次（Electron 一个 session 只有一个 liste
 });
 
 /**
- * 0.2.6：「ZXDesk 工作台的登录没有记住，每次都要重新登录」。
+ * 「ZXDesk 工作台的登录没有记住，每次都要重新登录」。
  *
- * 真因：ZXDesk 账号的登录是页面里的一个 XHR，成功后前端只切屏、**不做整页导航**
- * ⇒ 没有 `did-finish-load` ⇒ `onProbe` 不跑 ⇒ `captureWebSession` 永远等不到第二次机会
- * ⇒ `session.bin` 里没有 `zxdesk_sid`。所以必须在响应头出现 `Set-Cookie: zxdesk_sid=…`
- * 的**当场**触发一次抓取。
  */
 test('响应头下发 zxdesk_sid ⇒ 立刻通知上层保存网页会话', () => {
   const { webSessions, emitHeaders } = makeView('');

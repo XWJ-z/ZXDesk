@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：SecureStore.kt
- * 职责：Android Keystore AES-256-GCM 的加解密封装
  */
 
 package com.zxdesk.app.store
@@ -20,14 +18,6 @@ import javax.crypto.spec.GCMParameterSpec
 /**
  * 私密小仓库：用 Android Keystore 里的 AES-256-GCM 密钥加密后落盘。
  *
- * 存的是「长期登录凭据」（`longToken` / `secret` / 会话 Cookie）。这些值一旦泄漏就等于账号被人接管，
- * 所以 ⛔ 不进普通 SharedPreferences 明文。
- *
- * 为什么不用 `androidx.security:security-crypto`：那套要额外拉 Tink（编译期依赖重，本机 4GB 内存吃紧），
- * 而这里只需要「一个 key + AES/GCM」，Keystore 原生就够，代码也更少。
- *
- * 密钥在 Keystore 里，卸载 App 或用户清数据即失效；[get] 解密失败（密钥被系统作废）时返回 null 并自清，
- * 让上层回登录页 —— ⛔ 不要让解密异常冒到界面。
  */
 class SecureStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(NAME, Context.MODE_PRIVATE)

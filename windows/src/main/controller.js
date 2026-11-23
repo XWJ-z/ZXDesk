@@ -1,13 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：controller.js
- * 职责：壳的状态机（主进程侧）
- *
- * 一句话：**所有网络与凭据都在这里**，壳只负责显示与转发动作。
- *
- * 四步引导（F1）：mode → connect →（twofa）→（access）→ browsing。
- * 证书确认（F7）、连接面板（F10）、错误页（F16）都是「隐藏远程视图 → 壳整窗显示」，
- * ⛔ 不做浮层（`WebContentsView` 永远画在 DOM 之上，浮层盖不住它）。
  */
 
 import { pickGatewayCookies, pickWebSession, webSessionSpec, mergeCookieHeader } from './browser/cookies.js';
@@ -54,14 +46,6 @@ const COOLDOWN_HINT = '连接太频繁';
  * @param {object} deps
  * @param {object} deps.prefs - `PrefsStore`
  * @param {object} deps.sessions - `SessionStore`
- * @param {object} deps.credentials - `CredentialStore`
- * @param {object} deps.tofu - `TofuStore`
- * @param {object} deps.view - `RemoteView`
- * @param {object} deps.cookies - `{apply(session, target), clear()}`
- * @param {object} deps.logger
- * @param {Function} deps.notify - `(state) => void`（推给壳）
- * @param {Function} [deps.fetcher]
- * @param {Function} [deps.rpcFactory]
  */
 export class Controller {
   constructor(deps) {
@@ -75,8 +59,8 @@ export class Controller {
     this.tofu = deps.tofu;
     this.view = deps.view;
     this.cookies = deps.cookies;
-    // ⚠️ logger 有两种传法：函数 `(msg) => void`，或 Logger 实例（有 .info/.warn/.error）。
-    // 0.1.2 就是这里没归一：生产传的是 Logger 实例，而代码里写 `this.log('…')` ⇒
+    // logger 有两种传法：函数 `(msg) => void`，或 Logger 实例（有 .info/.warn/.error）。
+    // 就是这里没归一：生产传的是 Logger 实例，而代码里写 `this.log('…')` ⇒
     // 点第一步就 TypeError: this.logger is not a function。现在统一收成两个函数，内部只用它们。
     const rawLogger = deps.logger;
     this.log =
@@ -90,10 +74,6 @@ export class Controller {
     /**
      * 探测网关专用的 fetch：绑定**远程视图那个分区**（`persist:zxdesk`），Cookie 由浏览器自己带。
      *
-     * ⚠️ `net.fetch` 用的是**默认 session**：既拿不到分区里的访问码凭据，自签证书也不走 TOFU。
-     * 0.2.4 第一版就是拿它探网关 —— 开了访问码的 NAS 上探测结果永远是「要访问码」，
-     * 于是登录成功后又被送回第 ④ 步，来回几次才进得去。
-     * 注入后用 `ses.fetch`：访问码凭据、新会话、证书判定都与页面完全一致（Android 用 CookieManager 同义）。
      */
     this.probeFetcher = deps.probeFetcher || null;
     this.rpcFactory = deps.rpcFactory;
@@ -103,7 +83,7 @@ export class Controller {
     this.notices = deps.notices || null;
     /**
      * 打开「更新 / 公告」窗口（主进程实现）。
-     * ⛔ 不用原生消息框：更新要展示进度与按钮切换，公告要能滚动看历史，都不是一次性问答能表达的。
+     * 不用原生消息框：更新要展示进度与按钮切换，公告要能滚动看历史，都不是一次性问答能表达的。
      */
     this.openUpdateWindow = deps.openUpdateWindow || null;
     this.openNoticeWindow = deps.openNoticeWindow || null;
@@ -136,18 +116,11 @@ export class Controller {
     /**
      * 「登录结果」的世代号：退出登录 / 换个地址时 +1。
      *
-     * ⚠️ 静默重连是异步的（longToken → 密码重登 → 落盘 → 探网关，几百毫秒到几秒）。
-     * 这期间用户完全可能点了「退出登录」：旧逻辑会在恢复成功后再 `enterBrowsing` 一次、
-     * 并把 `signedOut` 改回 false —— 等于「退出」被撤销，人又被送回主界面。
-     * 所以登录结果落地前必须核对世代号，不是同一代就整份丢弃。
      */
     this.authEpoch = 0;
     /**
      * 这一轮浏览有没有**真的进过应用**（探针判过一次 `APP`）。
      *
-     * 用途只有一个：区分「用着用着会话过期了」（该静默续，别打断）与「一进来就是
-     * `invalid token` 白屏」（静默失败会把用户钉在一张没有按钮的纯文本页上，必须回登录页）。
-     * 0.2.4 的冷启动会话失效就是后者：静默重连失败后只剩菜单栏一行小字，用户找不到出口。
      */
     this.enteredApp = false;
     /** 回前台探活是否正在进行。 */
@@ -168,7 +141,7 @@ export class Controller {
     this.cooldownTimer = null;
     /**
      * 访问码已经来回几轮 + 自动判定是否已经用过一次（照 Android `onAccessCodeDone` 的两道闸）。
-     * ⚠️ 「访问码通过后自动重登」属于同一串磋商的继续，重登时**不清零** —— 清了上限就形同虚设。
+     * 「访问码通过后自动重登」属于同一串磋商的继续，重登时**不清零** —— 清了上限就形同虚设。
      */
     this.accessCodeRounds = 0;
     this.accessCodeAutoPassed = false;
@@ -202,8 +175,7 @@ export class Controller {
       error: null,
       panel: null,
       /**
-       * 「切换账号」弹窗（0.2.6）。非 null = 弹窗开着，内容见 `openAccounts()`。
-       * ⚠️ 它在网页之上：打开时必须先把远程视图藏起来 —— `WebContentsView` 永远画在 DOM 之上。
+       * 它在网页之上：打开时必须先把远程视图藏起来 —— `WebContentsView` 永远画在 DOM 之上。
        */
       accounts: null,
       browsing: null,
@@ -246,7 +218,7 @@ export class Controller {
   snapshot() {
     const base = JSON.parse(JSON.stringify(this.state));
     base.update = this.updateUi();
-    // ⚠️ 字段名必须是 notices（复数）：state.notice 是「一次性提示文案」，两者不能同名
+    // 字段名必须是 notices（复数）：state.notice 是「一次性提示文案」，两者不能同名
     base.notices = this.noticeUi();
     return base;
   }
@@ -274,10 +246,8 @@ export class Controller {
   // ---------------------------------------------------------------- 启动
 
   /**
-   * 冷启动，三条路（照 Android 0.2.17 的静默启动）：
    * ① 有加密快照 → 直接进 ZXDesk（Cookie 已随快照带进去，多数情况连 WS 都不用建）；
    * ② 没有快照、但本机记着这台设备的密码 → 在「正在启动…」里自己登一次；
-   * ③ 都不行 → 第 ① 步（地址 / 账号预填）。
    */
   async boot() {
     this.scheduleUpdateCheck();
@@ -298,9 +268,8 @@ export class Controller {
         this.showConnect('自动登录已关闭（可在「设置」里打开）');
         return;
       }
-      // ⚠️ 0.1.5 曾在这里「从 FNID 结果里挑 ipv4 当局域网地址、优先连 64999」，那是自创机制：
+      // 曾在这里「从 FNID 结果里挑 ipv4 当局域网地址、优先连 64999」，那是自创机制：
       // Android 的 `NasDataSource.fromFnId` **只走中继**，`fn/con` 里的 `ipv4` 也未必是 NAS 的内网地址
-      // （实测拼出 `10.1.2.4:64999` 根本连不上）。0.1.6 收尾整段回退，快照里存什么就连什么。
       this.log(`发现上次会话，直接进入浏览模式（${saved.baseUrl}）`);
       this.showStarting('正在恢复上次连接…');
       await this.enterBrowsing(saved, null);
@@ -326,10 +295,6 @@ export class Controller {
   /**
    * 启动时的静默自动登录：用「上次的地址 ＋ 账号 ＋ 记住的密码」直接走一遍原生登录。
    *
-   * 三条判据，缺一条都不登（⛔ 不能为了「看起来快」去撞风控，Android 同口径）：
-   * ① 本机存着这一对地址 / 账号的密码；② 上次不是用户主动「退出登录」；③ 自动登录开关没关。
-   *
-   * @returns {Promise<boolean>} true = 已经接手（成功进应用 / 要 2FA、访问码就转对应屏 / 失败回登录页）
    */
   async autoLoginOnBoot() {
     const prefs = this.prefs.get();
@@ -437,7 +402,7 @@ export class Controller {
     this.state = { ...this.state, screen: 'connect', connect: this.connectFormState(notice), twofa: null, cert: null, error: null, accounts: null };
     this.push();
     this.view.setVisible(false);
-    // ⚠️ 0.1.3 只在 next() 里预填 ⇒ 「换个地址 / 退出登录 / 会话失效 / 错误页返回」全都拿到空密码。
+    // 只在 next() 里预填 ⇒ 「换个地址 / 退出登录 / 会话失效 / 错误页返回」全都拿到空密码。
     // 现在所有回连接页的路径都走这里，统一触发一次（不阻塞渲染）。
     void this.prefillPassword();
   }
@@ -458,7 +423,7 @@ export class Controller {
     }
     // 多账号：只填「这台设备 + 这个账号」那一条，⛔ 别张冠李戴
     const saved = await this.credentialFor(form.address, form.user);
-    // ⛔ 只记「有/无」和地址账号，绝不记密码值
+    // 只记「有/无」和地址账号，绝不记密码值
     this.log(`密码预填：${saved ? '命中' : '未命中'}（地址=${form.address}，账号=${form.user}）`);
     if (saved) this.patchConnect({ password: saved.password, hasSavedPassword: true });
   }
@@ -466,7 +431,6 @@ export class Controller {
   // ---------------------------------------------------------------- 动作入口
 
   async action(type, payload = {}) {
-    // 入口先记一行：下次 boot.log 能直接看到「点了什么」——0.1.1 的 2FA 空操作就是因为一条动作日志都没有
     this.log(`动作：${type}`);
     try {
       switch (type) {
@@ -535,7 +499,6 @@ export class Controller {
           this.closePanel();
           return this.view.reload();
         case 'panel.changeAddress':
-          // 换地址只是换个目标，**记住的密码要留着**（0.1.4 把它一起清了，于是预填永远未命中）
           return this.logout({ keepSession: false, keepCredentials: true, note: '换个地址重连' });
         case 'panel.logout':
           // 只清会话 / Cookie / webSession；**记住的密码留着**（要彻底清走连接页的「清除」或取消勾选）
@@ -615,7 +578,7 @@ export class Controller {
     this.prefs.patch({ rememberPassword: Boolean(value) });
     this.patchConnect({ rememberPassword: Boolean(value), hasSavedPassword: value ? this.state.connect.hasSavedPassword : false });
     // 取消勾选 ⇒ 立刻清除已存密码（不等下次保存）。
-    // ⚠️ 只清当前表单这一对：多账号下把别的账号的密码一起清掉是数据事故。
+    // 只清当前表单这一对：多账号下把别的账号的密码一起清掉是数据事故。
     if (!value) {
       const form = this.state.connect || {};
       void this.credentials.clear(form.address, form.user);
@@ -627,8 +590,6 @@ export class Controller {
   /**
    * 取「这台设备 + 这个账号」的记住密码。
    *
-   * 优先用凭据存储的 `loadFor`（多条存储的精确检索）；注入的是一个只实现了单条接口的旧装配时，
-   * 退回 `load()` ＋ 比对 —— ⛔ 不让「少一个方法」变成登录链上的 TypeError。
    */
   async credentialFor(address, user) {
     if (typeof this.credentials.loadFor === 'function') return this.credentials.loadFor(address, user);
@@ -668,12 +629,6 @@ export class Controller {
   /**
    * 打开「切换账号」弹窗。
    *
-   * 一个弹窗两个入口：
-   * ① 连接页「飞牛账号」输入框右侧的切换按钮；② 菜单 文件 → 切换账号。
-   * 里面既能**挑一个已有账号切过去**，也能**新增账号**（填完直接登录）。
-   *
-   * ⚠️ 打开时必须先把远程视图藏起来：`WebContentsView` 永远画在 DOM 之上，
-   *    不藏的话弹窗会被网页整个盖住 —— 远程视图永远画在窗口 DOM 之上。
    */
   openAccounts({ adding = false } = {}) {
     const items = this.menuAccounts();
@@ -714,7 +669,6 @@ export class Controller {
       accounts: {
         ...this.state.accounts,
         form: { ...this.state.accounts.form, ...partial },
-        // 一改输入就把上一条错误抹掉，否则「请把地址、账号、密码都填上」会一直挂着
         error: null,
       },
     };
@@ -731,7 +685,6 @@ export class Controller {
   /**
    * 新增账号并登录。
    *
-   * ⚠️ 表单不完整时**留在弹窗里**报错 —— 这里不是登录失败，是把人送回连接页毫无意义。
    */
   async addAccount(form = {}) {
     const merged = { ...(this.state.accounts?.form || {}), ...form };
@@ -756,9 +709,6 @@ export class Controller {
   /**
    * 切换账号：清掉当前会话与 Cookie（**保留**记住的密码），用目标账号重新登一次。
    *
-   * 为什么不是「同时开两个会话」：ZXDesk 的一个窗口对应一条飞牛会话（Cookie 只有一份），
-   * 两个账号并存要两套分区、两个视图 —— 那是另一个产品形态。这里做的是「换人」：
-   * 干净地退出 A，用 B 的凭据重新登进去。
    */
   async switchAccount({ address, user, https } = {}) {
     const target = { address: String(address || '').trim(), user: String(user || '').trim() };
@@ -786,8 +736,6 @@ export class Controller {
   /**
    * 「用这个账号登进去」的唯一出口（切换已有账号 / 新增账号都走它）。
    *
-   * ⚠️ 不走 `logout({signedOut:true})`：那是「用户主动退出」，会把下次启动的静默登录关掉；
-   * 切账号是「换个人继续用」，下次启动当然该自动登进 B。
    */
   async useAccount({ address, user, https = true, password = '', remember = null }) {
     const target = { address: String(address || '').trim(), user: String(user || '').trim() };
@@ -844,8 +792,6 @@ export class Controller {
   /**
    * 把「连接太频繁，请 N 秒后再试」做成会自己走完的提示（照 Android `showCooldown`）。
    *
-   * 静态文案不能这样用：它不会自己刷新 —— 用户盯着「请 15 秒后再试」等半分钟，
-   * 屏幕上还是同一句，几秒之后就成了假话；冷却结束后那条错误也还留在界面上。
    */
   showCooldown() {
     this.stopCooldownNotice();
@@ -878,8 +824,6 @@ export class Controller {
   /**
    * 这次失败算不算「网络环境」造成的（DNS / 连不上 / 超时 / 证书没过）。
    *
-   * ⚠️ 这类失败**不进冷却**：换个网就能好，按「密码错」罚冷却只会让用户白等 60 秒。
-   * 判据与 Android `isNetworkFailure` 同口径 —— 看整条 cause 链，⛔ 只看最外层会漏。
    */
   isNetworkFailure(error) {
     let current = error;
@@ -906,7 +850,7 @@ export class Controller {
     const merged = { ...this.state.connect, ...form };
     if (merged.busy) return;
     // 新一轮连接：访问码的轮次与「自动判定」重新计。
-    // ⚠️ 例外：「访问码通过后自动重登」属于同一串磋商的继续，清了上限就形同虚设。
+    // 例外：「访问码通过后自动重登」属于同一串磋商的继续，清了上限就形同虚设。
     if (!this.reloginFromAccessCode) {
       this.accessCodeRounds = 0;
       this.accessCodeAutoPassed = false;
@@ -950,21 +894,18 @@ export class Controller {
         this.patchConnect({ busy: false, progress: null, error: plan.error });
         return;
       }
-      // 同一台设备的「访问码凭据 / 网页会话」接回来（否则重启后又要重输一次码）
       await this.inheritDeviceState(plan.entry);
-      // 先回注网关凭据，再问「要不要访问码」—— 否则刚过完码的设备会白进一屏访问码页
       await this.applySessionCookies(plan.entry);
 
       // 8990 直连：只有「显式填 IP:8990」或「关掉 HTTPS」才会走到这里（不需要飞牛账号）
       if (plan.entry.flow === 'DIRECT') {
-        // ⚠️ 必须 await：enterBrowsing 里有建视图 / 写 Cookie / 加载页面三步 async。
-        // 漏掉 await 时它抛的错会变成 unhandledRejection ⇒ 主进程的全局兜底会弹框并 exit(1)
+        // 必须 await：enterBrowsing 里有建视图 / 写 Cookie / 加载页面三步 async。
         //（用户看到的是「点连接，程序直接退出」）。
         await this.enterBrowsing(plan.entry, `已直连 8990（不走飞牛网关）`);
         return;
       }
 
-      // 0.1.2 起：局域网也要飞牛账号（网关会校验）。⛔ 不再「没填账号就自动走 8990」
+      // 起：局域网也要飞牛账号（网关会校验）。⛔ 不再「没填账号就自动走 8990」
       const hasCredentials = this.pendingCredential.user && this.pendingCredential.password;
       if (!hasCredentials) {
         this.log('连接被拒：没填飞牛账号（局域网也要登录飞牛）');
@@ -976,10 +917,9 @@ export class Controller {
         return;
       }
 
-      // ⭐ fnOS 的顺序：**先访问码、后密码**。
+      // fnOS 的顺序：**先访问码、后密码**。
       // 开访问码的 NAS 上，原生 WS 登录不一定回 401 —— 也可能直接回登录错误，
       // 那会被界面说成「飞牛账号或密码不正确」，用户怎么输都进不去。
-      // 所以先用页面问网关一句「要不要访问码」，要就先把码过掉，再验证密码。
       if (await this.gatewayNeedsAccessCode(plan.entry)) {
         this.log('网关要访问码：先过码，再验证密码（fnOS 顺序）');
         await this.showAccessCode(plan.entry, '先输入访问码，通过后再验证飞牛账号');
@@ -988,11 +928,9 @@ export class Controller {
 
       await this.runLogin(plan.entry);
     } catch (e) {
-      // ⭐ 握手被网关 401/403：这台 NAS 开了「访问码」，不是账号密码错（Android 0.2.18 同口径）。
-      // ⛔ 不能走 failLogin：那会把用户钉在「登录失败」上，怎么输都进不去。
+      // 不能走 failLogin：那会把用户钉在「登录失败」上，怎么输都进不去。
       if (e instanceof AccessCodeRequiredError) {
         this.log(`登录前被网关拦下（HTTP ${e.status || '401/403'}），进第 ④ 步`);
-        // 这不是账号问题：记进节流只会让人越试越久（Android 同口径，⛔ 不给访问码闸门加惩罚）
         this.guard.reset();
         await this.showAccessCode(plan?.entry || null, '登录前被网关拦下：先输入访问码');
         return;
@@ -1005,7 +943,7 @@ export class Controller {
   async resolvePlan(parsed, form) {
     if (parsed.kind === 'fnid') {
       // 照 Android `NasDataSource.fromFnId` 逐行来：FNID → **只**中继 `https://<relay>`。
-      // ⛔ 不读 `lanIpv4` / `publicIpv4`，⛔ 不拼 `https://<ip>:64999`，也不留回落项。
+      // 不读 `lanIpv4` / `publicIpv4`，⛔ 不拼 `https://<ip>:64999`，也不留回落项。
       const addresses = await resolveFnId(parsed.id, { fetchImpl: this.fetcher });
       const relayHost = addresses.relay[0];
       if (!relayHost) return { error: '这个 FNID 没有中继地址（设备可能离线）' };
@@ -1027,7 +965,6 @@ export class Controller {
 
     const isLanIp = parsed.target === TARGET_KIND.IP && !parsed.port && isPrivateAddress(parsed.host);
     if (isLanIp) {
-      // 局域网口径（0.1.2 起）：默认走网关 64999，**必须登录飞牛**；
       // 只有用户主动把「HTTPS 安全访问」关掉，才按 8990 直连（那是显式意图，⛔ 不再自动回落）。
       if (form.https === false) {
         return { entry: this.directEntry(parsed.host), lanHost: parsed.host };
@@ -1076,14 +1013,6 @@ export class Controller {
   /**
    * 把上次快照里「跨会话有效」的东西接到这次新造出来的入口上。
    *
-   * 为什么要接：`resolvePlan` 每次都造一个**全新的** `SavedSession`，里面只有地址与链路；
-   * 而 `webSession`（`zxdesk_sid`）是「这台设备的状态」，不是「这次连接的参数」——
-   * 不接回去，每次手动连接都要再走一次网页登录。
-   *
-   * ⚠️ 只在**同一台设备**（baseUrl 一致）时接：换了 NAS 还把上一台的凭据带过去，
-   * 等于拿 A 的钥匙开 B 的门（0.2.5 修过一次同族问题，见 `afterAuth` 的 sameHost）。
-   * ⚠️ 网关凭据（访问码 Cookie）**不走这里**：它按 baseUrl 存在 `gateway.bin`，
-   *    由 `applySessionCookies()` 自己查 —— 那条路与是否登录无关（只过码没登录也要记住）。
    */
   async inheritDeviceState(entry) {
     if (!entry) return entry;
@@ -1101,9 +1030,6 @@ export class Controller {
   /**
    * 走原生 WS 登录（单入口，与 Android `FnLoginClient` 一致）。
    *
-   * ⚠️ 走过的两条歪路都别回来：
-   * - 0.1.1 的「网关连不上就自动回落 8990」—— 那是绕过飞牛登录；
-   * - 0.1.5 的「FNID 先试局域网网关、失败再回中继」—— 地址是猜的，实测根本连不上。
    */
   async runLogin(entry) {
     this.pendingEntry = entry;
@@ -1123,18 +1049,12 @@ export class Controller {
       password: this.pendingCredential.password,
       deviceId: this.prefs.get().deviceId,
       deviceName: 'Windows-ZXDesk',
-      // ⭐ 每次 WS 握手现取远程视图分区里的 Cookie（访问码过了，网关凭据就在那儿）。
-      // 不传这一项，开了访问码的 NAS 上原生登录永远 401 —— Android 0.2.18 修的就是这件事。
+      // 每次 WS 握手现取远程视图分区里的 Cookie（访问码过了，网关凭据就在那儿）。
       gatewayCookie: () => this.handshakeCookie(entry, 'WS 握手 Cookie'),
       rpcFactory: this.rpcFactory || ((url, cookie) => new WsClient({ url, cookie, onSelfSigned: (host, info) => this.requestTrust(host, info) })),
       /**
-       * ⭐ `POST /app/ticket` 必须走**分区**的 fetch（`persist:zxdesk`），⛔ 不能用 `net.fetch`。
+       * `POST /app/ticket` 必须走**分区**的 fetch（`persist:zxdesk`），⛔ 不能用 `net.fetch`。
        *
-       * `net.fetch` 跑在默认 session 上：既没有访问码凭据，也**不走分区的 TOFU 判定** ——
-       * 局域网自签证书的 NAS 上这一步会因为证书不受信直接失败。而它是「fnOS 新版 ticket-cookie
-       * 模式」唯一能把会话种成 Cookie 的地方：认领失败就没有 `fnos-token`，页面拿到的只是
-       * WS 的令牌（网关不认）⇒ 回纯文本 `invalid token` ⇒ 界面白屏。
-       * Android 的 `claimTicket` 是独立 HTTP 客户端、走系统信任库，同一段逻辑在桌面端必须绑分区。
        */
       fetcher: this.probeFetcher || this.fetcher,
       onStep: (label) => this.patchConnect({ progress: label }),
@@ -1145,8 +1065,6 @@ export class Controller {
   /**
    * 远程视图分区里的 Cookie 头（`name=value; …`）。
    *
-   * 访问码是在视图里过的，凭据由网关种在 `persist:zxdesk`；原生 WS / 原生探测不在那个浏览器里，
-   * 必须显式取一次（Android 用 `CookieManager.getCookie()`，这里用 `session.cookies.get`）。
    */
   async gatewayCookieHeader(entry) {
     if (!entry?.baseUrl || typeof this.cookies?.header !== 'function') return '';
@@ -1179,13 +1097,6 @@ export class Controller {
   /**
    * 手拼探测 Cookie（只在没有分区 fetch 的单测 / 旧装配里用）。
    *
-   * 同名谁说了算，取决于场景：
-   * - 刚登录完：**会话对象**是新的，分区里可能还是上一个会话的 token ⇒ `preferSession: true`；
-   * - 回前台探活：视图里的 Cookie 可能被服务端续期过，比登录快照新 ⇒ 默认让视图那份赢。
-   *
-   * @param {object} entry
-   * @param {object} session
-   * @param {{preferSession?: boolean}} [options]
    */
   async probeCookieHeader(entry, session, { preferSession = false } = {}) {
     const fromSession = session?.cookieHeader ? session.cookieHeader(entry.relayHost) : '';
@@ -1224,10 +1135,6 @@ export class Controller {
   /**
    * 登录失败 → **留在登录页**，按钮下方一行红字「登录失败」。
    *
-   * ⚠️ 0.1.6 初版把登录失败也走整页错误屏 —— 那是「页面打不开」的画法，
-   * 结果表单、密码、用户刚敲的地址一起没了，用户会以为客户端崩了。
-   * 现在：连不上 / 账号错 / 2FA 错 都留在屏上，具体原因只进日志与「复制诊断」。
-   * 整页错误只留给**页面加载 / 导航失败 / 未知异常**（`loadSafely`、`index.js` 的 onLoadFail）。
    */
   failLogin(e, { auto = false } = {}) {
     const step = e instanceof LoginError ? e.step : LOGIN_STEP.WS_CONNECT;
@@ -1239,9 +1146,7 @@ export class Controller {
     };
     /**
      * 连接节流（照 Android `connectGuard.registerFailure()`）：
-     * - **静默自动登录失败不记账** —— 那不是用户手动发起的，罚他没有意义，还会让人下次打不开应用；
      * - **网络类失败不记账** —— DNS / 连不上 / 超时换个网就能好（见 `isNetworkFailure`）；
-     * - 账号密码错、2FA 错、票据错都要记：那才会真的把账号推进风控。
      */
     if (!auto && !this.isNetworkFailure(e)) {
       const cooldown = this.guard.registerFailure();
@@ -1253,7 +1158,7 @@ export class Controller {
     this.flow = null;
     this.pendingEntry = null;
 
-    // ⚠️ 表单值要「原样留住」：地址 / 账号 / 密码都在 `lastForm` 里（connect() 开头就存了）
+    // 表单值要「原样留住」：地址 / 账号 / 密码都在 `lastForm` 里（connect() 开头就存了）
     const form = this.lastForm || this.state.connect;
     this.state = {
       ...this.state,
@@ -1273,7 +1178,6 @@ export class Controller {
     };
     this.push();
     // 访问码屏 / 静默重连的视图这时可能还开着：回到连接页就必须藏起来，
-    // 否则表单被 WebContentsView 盖住，用户看到的是「点了连接没反应」。
     this.view.setVisible(false);
     this.log(`登录失败（${step}）：${e?.message || e || ''}`);
     // 不清 pendingCredential、不动 credential.bin —— 用户改个密码就能再试
@@ -1284,9 +1188,6 @@ export class Controller {
   /**
    * 提交验证器 6 位码。
    *
-   * ⚠️ 0.1.1 的坑：壳只把验证码存在自己内存里，主进程拿到的永远是 `''` ⇒ `totp.length !== 6`
-   * 直接**静默 return**（不置 busy、不报错、不写日志）⇒ 用户看到的就是「点了没反应」。
-   * 现在：参数由壳带过来，任何人早退都必须**给出可见错误 + 写日志**。
    */
   async submitTotp(code) {
     const twofa = this.state.twofa;
@@ -1424,21 +1325,15 @@ export class Controller {
 
   /**
    * 拿到会话：落盘 → 探一次网关 → 决定去第 ④ 步（访问码）还是浏览模式。
-   *
    * @param {object} session
-   * @param {object} [options]
-   * @param {boolean} [options.silent] - 静默重连：**不切屏**，续上就直接重载页面
    */
   async afterAuth(session, { silent = false } = {}) {
-    // 从这一刻起，任何「退出登录 / 换个地址」都会让本世代作废（见 authEpoch）。
-    // ⚠️ 用**发起登录时**记下的世代，⛔ 不能在这里现取：握手（含 `/app/ticket` 认领）是秒级的，
-    //    期间点了退出的话，现取到的已经是新世代，「作废」就永远判不出来 —— 人还是会被送回主界面。
+    // 用**发起登录时**记下的世代，⛔ 不能在这里现取：握手（含 `/app/ticket` 认领）是秒级的，
+    // 期间点了退出的话，现取到的已经是新世代，「作废」就永远判不出来 —— 人还是会被送回主界面。
     const epoch = this.flowEpoch ?? this.authEpoch;
     /**
-     * ⚠️ 世代核对必须放在最前面，⛔ 不能先要 `pendingEntry`：
+     * 世代核对必须放在最前面，⛔ 不能先要 `pendingEntry`：
      * 退出登录会把 `pendingEntry` 置空（那是它的职责），先要 entry 的话这里会报
-     * 「内部错误：连接信息丢了」，而真正发生的事是「这次登录已经被用户取消」——
-     * 两者在日志里必须能分清，否则真机排查会往完全错误的方向走。
      */
     if (epoch !== this.authEpoch) {
       this.log('登录结果已作废（期间用户退出登录 / 换了地址），整份丢弃');
@@ -1469,13 +1364,10 @@ export class Controller {
       return;
     }
 
-    // longToken / secret 一旦拿到就别丢：tokenLogin 换来的会话不一定再返回它们
     const previous = await this.sessions.load();
     /**
-     * ⚠️ 只继承**同一台设备**的长期凭据。
+     * 只继承**同一台设备**的长期凭据。
      * 换了地址（A 号 NAS → B 号 NAS）还把上一台的 `secret` / `longToken` 拼进新会话的话：
-     * ① 签名与免密登录会拿 A 的凭据去打 B（必然失败，还会让 B 侧看到脏请求）；
-     * ② 下次「静默重连」先试 longToken 就会白等一轮才走密码。
      */
     const sameHost = Boolean(previous) && normalizeAddress(previous.baseUrl) === normalizeAddress(entry.baseUrl);
     const keep = new FnSession({
@@ -1489,16 +1381,11 @@ export class Controller {
 
     entry.session = keep;
     /**
-     * ⭐ 把「这次登录用的是哪个账号」写进快照。
+     * 把「这次登录用的是哪个账号」写进快照。
      *
-     * ⚠️ 0.2.4 以前 `SavedSession.user` 一直是空串（`resolvePlan` 造快照时没带 user）：
-     * 于是重启后 `recoverWithPassword()` 的「凭据账号 == 快照账号」永远不成立 ⇒
-     * **记住的密码从来没被用来自动重连**（longToken 又本就没打通）⇒ 会话一过期就只能靠人重登。
-     * 这里补上；加号前的旧快照由 `recoverWithPassword()` 兼容（快照没账号时按地址匹配）。
      */
     if (credential?.user) entry.user = String(credential.user).trim();
     await this.sessions.save(entry);
-    // 落盘也是异步的：这期间退出登录的话，⛔ 不能把「主动退出」改写回 false（否则下次开机又自动登进去）
     if (epoch !== this.authEpoch) {
       this.log('登录结果已作废（落盘期间用户退出登录 / 换了地址），不改「主动退出」标记');
       return;
@@ -1508,9 +1395,6 @@ export class Controller {
     /**
      * 登录成功 ⇒ 记进账号清单（「文件 → 切换账号」的数据来源）。
      *
-     * ⚠️ 只记**成功**的登录：失败不记，列表里只留真正用过的账号。
-     * 地址用 `entry.address`（用户输入的那份，FNID 就是 FNID），不是 baseUrl —— 中继域名
-     * 换一次就变，拿它当账号标识会让同一台设备在列表里出现好几条。
      */
     if (this.accounts) {
       this.accounts.remember({ address: entry.address, user: entry.user || this.prefs.get().lastUser, https: entry.https !== false });
@@ -1524,9 +1408,8 @@ export class Controller {
     const settleLine = `登录收尾：ticket 换到 ${keep.setCookies.length} 条 Cookie；entry-token ${keep.entryToken ? '有' : '无'}${keep.note ? `（${keep.note}）` : ''}`;
     if (keep.setCookies.length === 0 && !keep.entryToken) {
       /**
-       * ⚠️ 这一行是「登录成功但页面 invalid token」的唯一线索，所以用 WARN 而不是 info。
+       * 这一行是「登录成功但页面 invalid token」的唯一线索，所以用 WARN 而不是 info。
        * 两个都没换到的意思是：手里只有一个 WS 令牌，网关不认它 —— 进浏览模式后页面必然回
-       * 纯文本 `invalid token`。根因通常是 `/app/ticket` 没走通（自签证书 / 网关拦了）。
        */
       this.logError(`WARN ${settleLine} —— 没有会话 Cookie，页面会回 invalid token`);
     } else {
@@ -1538,11 +1421,9 @@ export class Controller {
 
     let page = GATEWAY_PAGE.APP;
     if (entry.flow === 'GATEWAY' && (this.probeFetcher || this.fetcher)) {
-      // ⭐ 先把 Cookie 落进分区，再用**分区自己的 fetch** 探：
+      // 先把 Cookie 落进分区，再用**分区自己的 fetch** 探：
       // 访问码凭据 + 刚换到的新会话都由浏览器带，和页面看到的完全一致。
       // 早先拿 `net.fetch`（默认 session）探，既没有访问码凭据也不走 TOFU ⇒
-      // 每次都判成「还要访问码」，登录成功又被送回第 ④ 步（真机「好几次才进入」）。
-      // 只有走分区 fetch 时才需要提前落 Cookie；手拼 Cookie 那条路仍由 enterBrowsing 统一注入。
       if (this.probeFetcher) await this.applySessionCookies(entry);
       page = await probeGateway({
         baseUrl: entry.baseUrl,
@@ -1572,12 +1453,6 @@ export class Controller {
   /**
    * 网关要不要先过访问码 —— **在验证密码之前**问一次。
    *
-   * fnOS 的顺序是「访问码 → 密码」，而开码的 NAS 上原生 WS 不一定回 401：
-   * 有的部署会直接回登录错误，界面就会误报「账号或密码不正确」，用户怎么输都进不去。
-   * 页面探针是唯一能提前问清顺序的信号：是访问码页 → 先过码；其余（含 `invalid token`）→ 继续登录。
-   *
-   * ⚠️ 探测走分区 `session.fetch`（若可用），会自动带上已有的访问码凭据；
-   *    已过过码的机器这一步会直接返回登录页 / invalid token，不会多弹一次访问码。
    */
   async gatewayNeedsAccessCode(entry) {
     if (!entry || entry.flow !== 'GATEWAY') return false;
@@ -1603,20 +1478,12 @@ export class Controller {
   /**
    * 第 ④ 步：远程视图直接显示网关自己的访问码页（⛔ 不自造校验）。
    *
-   * ⚠️ 地址用 `<base><gatewayPath>/login.html`（Android `zxDeskLoginUrl` 同口径）：
-   * 还没有会话时 `startUrl()` 会退回 `baseUrl/`（飞牛桌面空壳），那不是我们要过的访问码页。
-   *
-   * @param {object|null} entry
-   * @param {string|null} note - 屏上那句「为什么到这里」
    */
   async showAccessCode(entry, note = null) {
     if (!entry) return this.showConnect('登录信息丢了，请重新连接');
     /**
-     * ⭐ 往返轮次上限（照 Android `MAX_ACCESS_CODE_ROUNDS`）。
+     * 往返轮次上限（照 Android `MAX_ACCESS_CODE_ROUNDS`）。
      *
-     * 「访问码 → 重登 → 又被 401 → 再回访问码」是可以无限转的：网关要么是码没真的过、
-     * 要么对这条来源限制更严。再自动跳回去只会让界面一直转圈，人什么也做不了。
-     * 第三轮停下、回连接页，把「下一步该干什么」写清楚。
      */
     this.accessCodeRounds += 1;
     if (this.accessCodeRounds > MAX_ACCESS_CODE_ROUNDS) {
@@ -1667,7 +1534,7 @@ export class Controller {
     const timer = setInterval(() => {
       void this.pollAccessPage();
     }, ACCESS_POLL_MS);
-    // ⛔ 不 unref 会把进程留在后台（测试进程也退不掉）
+    // 不 unref 会把进程留在后台（测试进程也退不掉）
     if (typeof timer.unref === 'function') timer.unref();
     this.accessPollTimer = timer;
   }
@@ -1681,8 +1548,6 @@ export class Controller {
   /**
    * 轮询一次访问码页。
    *
-   * ⚠️ 这是 **Android 0.2.17 的关键一环**：过了访问码之后网关回纯文本 `invalid token`，
-   * 那一页不会再有 `did-finish-load` —— 只靠加载事件永远等不到「已经不是访问码页」的第二次判断。
    */
   async pollAccessPage() {
     if (this.state.screen !== 'access') {
@@ -1716,8 +1581,6 @@ export class Controller {
   /**
    * 访问码页的判定（加载事件与轮询共用）。
    *
-   * 判据照 Android：`ACCESS_CODE` / `UNKNOWN` 不算离开，**其余**（含 `invalid token` 的
-   * `LOGIN_REQUIRED`、应用页 `APP`）都算离开；连续 `ACCESS_CONFIRM_TIMES` 次才继续。
    */
   async handleAccessProbe(page) {
     if (page === GATEWAY_PAGE.ACCESS_CODE || page === GATEWAY_PAGE.UNKNOWN) {
@@ -1731,11 +1594,8 @@ export class Controller {
     }
     this.accessProbeHits = 0;
     /**
-     * ⭐ ⓐ 自动判定整轮只准用一次（照 Android `onAccessCodeDone` 的第一道闸）。
+     * ⓐ 自动判定整轮只准用一次（照 Android `onAccessCodeDone` 的第一道闸）。
      *
-     * 判据看的是页面长相：中继空壳、网关的「正在校验」过渡页都可能让它攒够次数。
-     * 如果每次都接手，就是「跳走 → 401 → 回来 → 再跳走」的死循环 ——
-     * 用户看到的是加载圈一直在转、访问码永远输不进去。第二次起只认人点「已输入完成」。
      */
     if (this.accessCodeAutoPassed) {
       this.log(`访问码页：自动判定本轮已用过一次（${page}），改为等人工确认`);
@@ -1744,7 +1604,7 @@ export class Controller {
     this.accessCodeAutoPassed = true;
     this.stopAccessPoll();
     this.log(`访问码页：连续 ${ACCESS_CONFIRM_TIMES} 次不是访问码页（${page}），自动继续`);
-    // ⭐ 过完码先把凭据存下来：用户可能这就不登了（或接下来输错密码），下次启动不该再要一次码
+    // 过完码先把凭据存下来：用户可能这就不登了（或接下来输错密码），下次启动不该再要一次码
     await this.captureGatewayCookies(this.pendingEntry || this.entry);
     await this.onAccessCodeDone({ auto: true });
   }
@@ -1752,11 +1612,6 @@ export class Controller {
   /**
    * 「已输入完成」/ 探针发现已经进了应用。
    *
-   * 分两种（Android `onAccessCodeDone` 同口径）：
-   * - **已有会话**（登录后被网关再拦一次）⇒ 直接进应用；
-   * - **还没有会话**（登录前就被 WS 401 挡回来）⇒ 网关凭据这时已种进分区，回连接页把登录重走一遍。
-   *
-   * @param {{auto?: boolean}} [options] - `auto: true` = 探针自动判定（只准用一次）；默认 = 人点的
    */
   async onAccessCodeDone({ auto = false } = {}) {
     this.stopAccessPoll();
@@ -1770,7 +1625,6 @@ export class Controller {
     this.state = { ...this.state, screen: 'connect', notice: '访问码已通过，正在重新登录…' };
     this.push();
     /**
-     * ⚠️ 这次重登**不能**把访问码轮次清零（那是同一串磋商的继续），否则上限形同虚设。
      * 见 `connect()` 开头对 `reloginFromAccessCode` 的判断。
      */
     this.reloginFromAccessCode = true;
@@ -1810,17 +1664,15 @@ export class Controller {
     };
     this.push();
     this.view.setContext({ baseUrl: entry.baseUrl, relayHost: entry.relayHost, gatewayPath: entry.gatewayPath });
-    // ⚠️ 顺序不能变：**先建视图，再写 Cookie**。
-    // 0.1.3 是先写 Cookie 后建视图 ⇒ 第一次写进了壳窗口的默认会话，而远程视图用的是 persist:zxdesk 分区，
+    // 顺序不能变：**先建视图，再写 Cookie**。
+    // 是先写 Cookie 后建视图 ⇒ 第一次写进了壳窗口的默认会话，而远程视图用的是 persist:zxdesk 分区，
     // 分区里一条都没有 ⇒ 页面按未登录处理，用户被迫再登一次（第二次视图已在，Cookie 才写对）。
     this.view.ensure();
     await this.applySessionCookies(entry);
     this.view.setVisible(true);
     const ok = await this.loadSafely(entry.startUrl());
     if (ok) await this.captureWebSession(entry);
-    // 加载失败不再「换一条路再试」（0.1.5 的 LAN→中继双入口已随 FNID 回退删掉）；
     // 但**页面打不开是整页错误**（与登录失败区分：那个留在登录页），这里必须报出来，
-    // 否则就是「进了浏览模式却一直白屏」。
     if (!ok) {
       this.notifyError('打不开页面', '页面没有加载出来，检查网络后点「重试」。', { url: entry.startUrl() });
     }
@@ -1828,19 +1680,14 @@ export class Controller {
 
   /**
    * 写 Cookie 到**远程视图的分区**，并把结果记进日志（⛔ 不打印 Cookie 值）。
-   * N = 0 时给 WARN —— 0.1.3 的「登两次」如果复现，这行会直接指出「分区里没有会话 Cookie」。
    */
   async applySessionCookies(entry) {
     if (!entry?.baseUrl) return;
     const target = { baseUrl: entry.baseUrl, relayHost: entry.relayHost };
 
     /**
-     * ⭐ 网关凭据（访问码 Cookie）**先写**，而且不跟登录会话绑在一起。
+     * 网关凭据（访问码 Cookie）**先写**，而且不跟登录会话绑在一起。
      *
-     * 两件事决定了它必须排在最前、且不受 `session.token` 的早退影响：
-     * ① Electron 的 persist 分区不落会话级 Cookie ⇒ 不回注就「每次启动重输访问码」；
-     * ② 「过完码但没登录成功」的情况一样要回注 —— 那时 `session.token` 还是空的，
-     *    排在早退之后等于这条路径直接失效。
      */
     if (this.gatewayCookies?.load && this.cookies.applyGateway) {
       try {
@@ -1855,12 +1702,8 @@ export class Controller {
     }
 
     /**
-     * ⭐ ZXDesk 网页会话（`zxdesk_sid`）也要**排在早退之前**。
+     * ZXDesk 网页会话（`zxdesk_sid`）也要**排在早退之前**。
      *
-     * 服务端刻意把它做成会话级 Cookie —— 飞牛账号与 ZXDesk 账号是两套，
-     * 本机只加密保存并回注。但「没有飞牛会话」的那几种入口（8990 直连、只过码没登录）
-     * `session.token` 是空的 —— 排在早退之后的话，直连模式下**每次启动都要重登 ZXDesk 账号**
-     * （与「抓不到 `zxdesk_sid`」叠加，就是用户看到的「每次都要重新登录」）。
      */
     const spec = webSessionSpec(entry.webSession, { baseUrl: entry.baseUrl });
     if (spec) {
@@ -1900,13 +1743,6 @@ export class Controller {
   /**
    * 抓一次网关凭据（访问码 Cookie）并落盘。
    *
-   * 时机有两个，缺一不可：
-   * ① **刚过完访问码**（`handleAccessProbe` 判到已离开时）—— 用户可能过了码却没登录成功
-   *    （密码打错、只是来试一下），下一次启动依然不该重输访问码；
-   * ② 登录成功进入浏览模式后（`captureWebSession`）—— 网关可能在这时续期 / 补种。
-   *
-   * @param {object} entry
-   * @param {Array<object>|null} [list] - 已经取到的 Cookie 列表（省一次读取）
    */
   async captureGatewayCookies(entry, list = null) {
     if (!entry?.baseUrl || !this.gatewayCookies?.save || !this.cookies?.get) return;
@@ -1917,7 +1753,7 @@ export class Controller {
       const before = await this.gatewayCookies.load(entry.baseUrl);
       if (JSON.stringify(before) === JSON.stringify(picked)) return;
       const ok = await this.gatewayCookies.save(entry.baseUrl, picked);
-      // ⛔ 只记条数与名字 —— 值等于「这台设备已经过码」的准入凭据
+      // 只记条数与名字 —— 值等于「这台设备已经过码」的准入凭据
       if (ok) this.log(`网关凭据捕获：${picked.length} 条（${picked.map((c) => c.name).join('、')}），下次启动不用重输访问码`);
     } catch (e) {
       this.logError(`捕获网关凭据失败：${e.message}`);
@@ -1926,23 +1762,15 @@ export class Controller {
 
   /**
    * 把 `zxdesk_sid` 读出来存进快照（只这一条，⛔ 其它 Cookie 不落盘）。
-   * 会话失效（`session_epoch` 变了）时服务端会让页面回登录页，用户登一次即可 —— 不是 bug。
    *
-   * ⚠️ 调用点有三个，缺一个都会「每次启动重新登录 ZXDesk 账号」：
-   * ① 页面加载完的探针（`onProbe`）；② 进入浏览模式后；③ **响应头下发 `zxdesk_sid` 的当场**
-   * （`RemoteView.onWebSession`）—— ZXDesk 的账号登录是页面里的 XHR，成功后不整页导航，
-   * ①② 两条都等不到，只有 ③ 能接住。
    */
   async captureWebSession(entry = this.entry) {
     if (!entry || !this.cookies.get) return;
     try {
       const list = await this.cookies.get(entry.baseUrl);
       /**
-       * ⭐ 顺手把**网关凭据**（访问码 Cookie）也抓下来。
+       * 顺手把**网关凭据**（访问码 Cookie）也抓下来。
        *
-       * 它必须落盘：Electron 的 persist 分区只持久化带有效期的 Cookie，网关访问码那条是
-       * 会话级 ⇒ 应用一关就没 ⇒ 用户每次启动都要重新输码。
-       * 存的是独立文件（`gateway.bin`），不是 session.bin —— 退出登录不该把访问码也忘掉。
        */
       await this.captureGatewayCookies(entry, list);
       const picked = pickWebSession(list, entry.baseUrl);
@@ -1967,7 +1795,7 @@ export class Controller {
       return true;
     } catch (e) {
       this.logError(`加载页面失败：${url}`, e);
-      // ⚠️ `e.message` 里带 `ERR_… loading 'https://…'` ⇒ 会直接把内部地址露在界面上。
+      // `e.message` 里带 `ERR_… loading 'https://…'` ⇒ 会直接把内部地址露在界面上。
       // 界面上只留人话，地址与错误码进 detail（「复制诊断」里才有）。
       this.notifyError('打不开页面', '页面没有加载出来，检查网络后点「重试」。', { url, error: e.message || String(e) });
       return false;
@@ -2003,18 +1831,14 @@ export class Controller {
   /**
    * 退出登录 / 换个地址。
    *
-   * `keepCredentials`：**换地址**时保留记住的密码（只清会话与 Cookie），
-   * 只有真正的「退出登录」才连凭据一起清。TOFU 与偏好两者都不动（与 Android 一致）。
    */
   async logout({ keepSession = false, keepCredentials = true, note = null, signedOut = false } = {}) {
     this.stopAccessPoll();
-    // 让所有在飞的登录 / 恢复结果作废（否则它们回来后会把人重新送回主界面，见 authEpoch）
     this.authEpoch += 1;
     this.enteredApp = false;
     this.flow?.close();
     this.flow = null;
     if (signedOut) {
-      // 明确记下「是他自己退出的」：否则下次冷启动的静默登录会把他直接送回主界面
       this.prefs.patch({ signedOut: true });
       this.log('已记为「主动退出」，下次启动不再自动登录');
     }
@@ -2041,24 +1865,19 @@ export class Controller {
     this.view.setVisible(false);
     this.state = { ...this.state, panel: null, browsing: null, twofa: null, accounts: null, screen: 'connect', connect: this.connectFormState(note) };
     this.push();
-    // ⚠️ 这条路自己拼了 state（没走 showConnect）⇒ 预填要显式触发，
-    // 否则「退出登录 / 换个地址 → 回连接页」密码框是空的（0.1.6 出现过）
+    // 这条路自己拼了 state（没走 showConnect）⇒ 预填要显式触发，
     void this.prefillPassword();
   }
 
   /**
    * 远程视图探针回调。
    *
-   * ⚠️ **捕获放在最前面、且不看 `page`**：ZXDesk 应用根是 SPA，探针常给 `UNKNOWN`；
-   * 0.1.6 初版写成 `page === APP 才捕获`，结果一次都没捕获过 ⇒ 自动登录形同不存在。
-   * `captureWebSession()` 自己「没 Cookie 就返回」，登录前调用没有副作用。
    */
   async onProbe(page) {
     if (this.entry) void this.captureWebSession(this.entry);
     if (this.state.screen === 'access') {
       // 离开访问码页（用户输入完成 / 网关自己跳走）⇒ 自动继续。
-      // ⚠️ 判据要**连续两次**「不是访问码页」：网关从访问码页往下跳会经过中间页，
-      // 单次判定会把它当成「已经进去了」⇒ 重登又吃 401、又弹回这一页（Android 0.2.17 真机踩过）。
+      // 判据要**连续两次**「不是访问码页」：网关从访问码页往下跳会经过中间页，
       // 另：过码后网关回的是纯文本 `invalid token`，所以 LOGIN_REQUIRED 也算「已经离开」。
       await this.handleAccessProbe(page);
       return;
@@ -2069,7 +1888,7 @@ export class Controller {
     if (page === GATEWAY_PAGE.ACCESS_CODE) {
       const entry = this.entry;
       if (!entry) return;
-      // ⚠️ 防抖：这句判据是「按正文猜的」，同一次加载里可能连触发几次；判定一抖界面就来回跳
+      // 防抖：这句判据是「按正文猜的」，同一次加载里可能连触发几次；判定一抖界面就来回跳
       const now = Date.now();
       if (now - this.lastAccessCodeSwitchAt < ACCESS_CODE_SWITCH_MS) {
         this.log('访问码页判定重复出现，已忽略');
@@ -2086,22 +1905,14 @@ export class Controller {
   /**
    * 页面 401 要跳 `/login.html`：先静默把会话续上，别让人直接看见登录页
    * （Android `onLoginPageBlocked` 同口径）。
-   *
-   * @returns {boolean} true = 已接手（页面不要跳登录页）；false = 30 秒内试过了 / 没凭据，放行
    */
   onLoginPageBlocked() {
     if (this.state.screen !== 'browsing') return false;
     const entry = this.entry;
     if (!entry) return false;
     /**
-     * ⭐ 这里**不再要求** `entry.session.token`（照 Android 0.3.1 第十二条）。
      *
      * 原来那句 `if (!entry?.session?.token) return false` 看着像「没会话就不用续」，
-     * 实际把**最该续的一次**直接放过去了：手里没有会话、页面又被网关要求登录，
-     * 恰恰是该拿本机凭据去换一份回来的时刻。放行之后页面自己跳 `/login.html`，
-     * 用户看到的就是登录页（或者那一页白屏），只会以为「客户端没登录」。
-     * 现在一律交给 `recoverSession` 自己判：有 longToken 走换新，没有就落「记住的密码」，
-     * 两样都没有才 `failRelogin` 提示，⛔ 不会假装成功。
      */
     if (this.recovering) {
       this.log('页面要跳登录页：会话恢复已在进行');
@@ -2119,21 +1930,15 @@ export class Controller {
   /** 会话失效：静默恢复（不切屏）；失败只写菜单栏那一条红字。 */
   async onSessionExpired() {
     /**
-     * ⚠️ `silent` 不能只看「当前是不是浏览屏」：
+     * `silent` 不能只看「当前是不是浏览屏」：
      * 冷启动带的是过期快照时，页面一上来就是纯文本 `invalid token` —— 静默重连再失败，
-     * 用户就停在一张没有按钮的白页上，唯一出口藏在菜单里（0.2.4 真机就是这个观感）。
-     * 判据改成「这一轮真的进过应用」：进过 ⇒ 静默续，别打断；没进过 ⇒ 走正常恢复，
-     * 失败就回连接页并写明「登录状态已失效」（Android 0.2.18 同口径）。
      */
     await this.recoverSession({ silent: this.state.screen === 'browsing' && this.enteredApp });
   }
 
   /**
    * 恢复会话，三段：① longToken 换新会话；② 记住的密码重登；③ 都不行回登录页。
-   *
    * @param {object} [options]
-   * @param {boolean} [options.silent] - true = 回前台 / 页面 401 的自动重连：**不切屏**，
-   *   失败只在菜单栏提示一句（Android `failRelogin(silent)` 同口径）
    */
   async recoverSession({ silent = false } = {}) {
     if (this.recovering) {
@@ -2159,7 +1964,6 @@ export class Controller {
       if (await this.recoverWithPassword(saved, silent)) return;
       if (silent) return this.silentRecoverFailed('自动重连失败，请重新登录');
       // 快照在、但两条路都走不通（没记住密码 / 密码也失效）⇒ 统一说「登录状态已失效」。
-      // 从 0.2.5 起冷启动会话失效也会走到这里（以前是静默失败、人停在 invalid token 白页上），
       // 所以文案不能再叫「自动登录失败」—— 那会被理解成「客户端自己去登了，跟我没关系」。
       return this.backToLogin('登录状态已失效，请重新登录', true);
     } finally {
@@ -2187,7 +1991,6 @@ export class Controller {
       onStep: (label) => this.log(`恢复登录：${label}`),
     });
     /**
-     * ⚠️ 赋新值前先关旧的（照 Android 0.3.1 第四条）：
      * 上一次没走完的 `FnLoginFlow` 带着一条 WS 和一个 20 秒心跳，不关就再没人关得掉 ——
      * 飞牛那边看到的是同一台设备反复建连，而本机每次恢复都多留一条连接。
      */
@@ -2226,14 +2029,11 @@ export class Controller {
     /**
      * 多账号：按「这台设备 + 这个账号」精确取。
      *
-     * ⚠️ 「账号一致」在 0.2.4 及以前的快照上是**永远不成立**的（`saved.user` 是空串，
-     * 见 `afterAuth` 的说明）—— 于是这条恢复路径在这之前从没真正跑过。
-     * 旧快照没有账号时退回「上次登录的账号」（`prefs.lastUser`），否则老用户升级上来依然自动重连不了。
      */
     const wantedUser = saved.user || this.prefs.get().lastUser || '';
     const credential = await this.credentialFor(saved.address, wantedUser);
     if (!credential) {
-      // ⚠️ 这条以前是「没有日志的出口」，真机只能看到一句「自动重连失败」，看不出是没记住还是密码错了
+      // 这条以前是「没有日志的出口」，真机只能看到一句「自动重连失败」，看不出是没记住还是密码错了
       this.log(`密码重登：本机没记住 ${saved.address} / ${wantedUser || '（账号未知）'} 的密码`);
       return false;
     }
@@ -2251,7 +2051,6 @@ export class Controller {
       onStep: (label) => this.log(`密码重登：${label}`),
     });
     /**
-     * ⚠️ 赋新值前先关旧的（照 Android 0.3.1 第四条）：
      * 上一次没走完的 `FnLoginFlow` 带着一条 WS 和一个 20 秒心跳，不关就再没人关得掉 ——
      * 飞牛那边看到的是同一台设备反复建连，而本机每次恢复都多留一条连接。
      */
@@ -2287,8 +2086,6 @@ export class Controller {
   /**
    * 静默重连失败：**只提示、不切屏**。
    *
-   * 探活的判据只是「一次 GET 的正文」，也可能是误判（Cookie 过期、网关抖动）。
-   * 因为一句话就把人踢回登录页，代价远大于让他留在原地再点一次 —— 真失效时页面自己会提示。
    */
   silentRecoverFailed(message) {
     this.log(message);
@@ -2299,10 +2096,6 @@ export class Controller {
   /**
    * 回到前台（窗口获得焦点 / 系统唤醒）：对主界面做一次静默探活。
    *
-   * ⚠️ 探活**只诊断、不重建页面**（Android 0.2.17 的结论：判据只是一次 GET 的正文，
-   * 认错一次的代价是整页重载）。真正发起重连的是两个可靠信号：
-   * ① 页面 401 要跳 `/login.html`（`RemoteView` 的登录页拦截 → `onLoginPageBlocked`）；
-   * ② 页面加载完探针说 `invalid token`（`onProbe` → `onSessionExpired`）。
    */
   async onForeground() {
     if (this.state.screen !== 'browsing') return null;
@@ -2320,8 +2113,6 @@ export class Controller {
     this.lastProbeAt = now;
     this.probing = true;
     try {
-      // ⭐ 优先用分区自己的 fetch：服务端会 Set-Cookie 续期，`ses.fetch` 读的正是那份最新 Cookie；
-      // 手拼会话快照会被旧值覆盖（Android 0.2.17 的「探活必须用 CookieManager 当前值」同一条）。
       const fetchImpl = this.probeFetcher || this.fetcher;
       if (!fetchImpl) return null;
       const page = await probeGateway({
@@ -2337,10 +2128,8 @@ export class Controller {
         this.log('回前台探活：网关要访问码，等页面自己弹');
       } else if (page === GATEWAY_PAGE.LOGIN_REQUIRED) {
         /**
-         * ⚠️ 以前这里只写日志（「等页面 401 再兜」）—— 但 `invalid token` 那一页是**纯文本**，
+         * 以前这里只写日志（「等页面 401 再兜」）—— 但 `invalid token` 那一页是**纯文本**，
          * 它根本不会再跳 401 / 登录页，等于在等一个永远不会来的信号。
-         * 这一轮进过应用 ⇒ 页面自己会重载 / 用户还在操作，保持静默；
-         * 没进过应用 ⇒ 说明开屏就是失效会话，直接走恢复（失败会回连接页，不把人钉在白屏上）。
          */
         this.log(`回前台探活：疑似 invalid token（本轮${this.enteredApp ? '进过' : '没进过'}应用）`);
         if (!this.enteredApp) await this.onSessionExpired();
@@ -2378,11 +2167,8 @@ export class Controller {
     }
     if (verdict.decision === TRUST.REJECT) return Promise.resolve(false);
     /**
-     * ⚠️ 同一台设备的第一次连接会**并发问两次**：页面加载走一遍 `setCertificateVerifyProc`，
+     * 同一台设备的第一次连接会**并发问两次**：页面加载走一遍 `setCertificateVerifyProc`，
      * 登录前的网关探测 / WS 握手又走一遍。每问一次就压一屏确认、多一个等待者 —— 而且第二次
-     * 会把 `screenBeforeCert` 覆盖成 `'cert'`：用户确认完第一屏，界面停在**一张空的证书页**上
-     * （`state.cert` 已被清空），第二个等待者永远不落地，页面就那么卡着。
-     * ⇒ 同一个 host ＋ 同一份指纹只问一次，后来者复用同一个 Promise。
      */
     const pending = this.certWaiters.find((w) => w.host === host && w.sha256 === verdict.sha256);
     if (pending) {
@@ -2419,7 +2205,6 @@ export class Controller {
         previousSha256: waiter.previousSha256,
         rotated: waiter.rotated,
       },
-      // 已经在证书屏时不要把「回到哪」记成 'cert'（否则确认完会停在一张空白证书页上）
       screenBeforeCert: this.state.screen === 'cert' ? this.state.screenBeforeCert || 'connect' : this.state.screen,
       screen: 'cert',
     };
@@ -2473,8 +2258,7 @@ export class Controller {
       skipped,
       /**
        * 错误翻成人话：窗口只负责画，⛔ 不让它自己认 error.kind。
-       * ⚠️ 只有「检查」阶段的错误才走这张表；give-up 是下载停手，它的 message 是
-       * 「哪个源、哪一步不对」，被盖成「检查更新失败」会把排查线索抹掉。
+       * 只有「检查」阶段的错误才走这张表；give-up 是下载停手，它的 message 是
        */
       error: state.error
         ? {
@@ -2512,9 +2296,6 @@ export class Controller {
   /**
    * 「帮助 → 检查更新…」与壳上的提示：打开**独立更新窗口**，检查在后台跑。
    *
-   * 为什么不是 `dialog.showMessageBox`：更新要展示版本号、更新说明、下载进度，下载完按钮还要
-   * 从「下载更新」换成「立即安装」—— 原生消息框是一次性问答，撑不住这个过程；
-   * 画在壳里也不行（`WebContentsView` 永远盖在 DOM 之上，藏视图就白屏）。
    */
   async openUpdate() {
     if (!this.updater) return null;
@@ -2636,17 +2417,11 @@ export class Controller {
   /**
    * 出错时只**提示**，不换屏、不藏视图。
    *
-   * 删掉「打不开页面」那个整页错误屏：一次网络抖动就把整窗刷成白底
-   * ＋三个按钮，比错误本身更吓人，还把正在做的事（浏览 / 连接）全打断了。
-   * 现在的落点：
-   * - 浏览 / 访问码：视图还在，错误写到**菜单栏**右侧那一条（菜单栏在视图之上，看得见），带「重试」；
-   * - 连接 / 模式等屏：写进该屏已有的内联提示（`state.notice`）。
-   * 细节（错误码、地址、原始 message）只进 `state.error`，供「复制诊断」用，⛔ 不上屏。
    */
   notifyError(title, message, detail = null) {
     this.state = {
       ...this.state,
-      // ⚠️ screen 不变：这就是「删掉整页错误」的全部意思
+      // screen 不变：这就是「删掉整页错误」的全部意思
       error: { title, message, detail },
       connect: { ...this.state.connect, busy: false, progress: null },
     };
@@ -2728,7 +2503,6 @@ function downloadFailureText(error) {
   if (String(error?.message || '').includes('SHA256')) return '安装包校验没通过，已删除，请重新下载。';
   switch (error?.kind) {
     // give-up 是「自动下载已经停手」，文案要与更新窗口里那句一致：
-    // 不写「下载失败，稍后再试」——那会让人以为再点一次就好，而这条路的出口是网盘。
     case 'give-up':
       return '自动下载没能完成，可以换网络再试一次，或用网盘地址手动更新。';
     case 'unreachable':

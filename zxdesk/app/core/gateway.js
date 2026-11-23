@@ -2,24 +2,9 @@
  * gateway.js —— 飞牛「统一网关」入口的挂载前缀
  *
  * 功能：把「应用被挂在 `/app/zxdesk` 这样的前缀下」这件事**收敛到一个地方** ——
- *      `GATEWAY_PREFIX`（来自 `cmd/main` 传进来的环境变量，未部署在网关下时为空串）、
- *      `stripGatewayPrefix()`（请求进来时剥掉前缀）、`localUrl()`（我们自己发出去的 URL 再补回前缀）、
- *      `gatewaySlashRedirect()`（把不带结尾斜杠的挂载点补成带斜杠的地址）。
- *
- * ⚠️ **为什么需要它**（内测反馈）：飞牛的端口服务入口是「拿应用端口拼一个 http 地址塞进 iframe」，
- *    飞牛一开强制 HTTPS，桌面是 https 而 iframe 仍是 http ⇒ 浏览器按**混合内容**把整个子框架拦掉，
- *    打开就是一片空白（复现见 `ttt/tools/mixed-content-probe.js`）。统一网关让应用跑在系统访问域名下，
- *    https 天然成立 —— 代价是**请求路径多了一层前缀**，而这个前缀**飞牛不会替我们剥掉**
- *    （飞牛官方《统一网关》的转发示例就是 `GET /app/myapp/list`；官方 Native 示例因此把路由同时挂在
- *    `/` 与 `/app/notepad` 上）。
- *
- * ⚠️ **前缀只在这里读一次**：环境变量是进程级不变的，`cmd/main` 传什么就是什么。
- *    **没设 `GATEWAY_PREFIX` 时本模块全部退化成空操作** —— 局域网直连（`http://<IP>:8990`）、
- *    Windows 版与全部测试走的就是这条路，行为与加这个文件之前**逐字一致**。
- *
- * ⚠️ ⚠️ **这里剥前缀，前端补前缀，两件事必须成对**：光剥不补的话，页面里写 `/core/api.js`
- *    会打到**飞牛系统根目录**而不是应用（404）。前端的处理在 `public/core/api.js`（唯一 `BASE`）
- *    与各 HTML 的**相对路径**里，见开发。
+ * `GATEWAY_PREFIX`（来自 `cmd/main` 传进来的环境变量，未部署在网关下时为空串）、
+ * `stripGatewayPrefix()`（请求进来时剥掉前缀）、`localUrl()`（我们自己发出去的 URL 再补回前缀）、
+ * `gatewaySlashRedirect()`（把不带结尾斜杠的挂载点补成带斜杠的地址）。
  *
  * @author zx
  * @date   2026-09-13
@@ -48,10 +33,8 @@ const GATEWAY_PREFIX = normalizeGatewayPrefix(process.env.GATEWAY_PREFIX);
  * 功能：剥掉请求路径开头的挂载前缀，并把查询串原样带上。
  *
  * 说明：**只在路径等于前缀、或前缀后面紧跟一个 `/` 时才剥** ——
- *      否则 `/app/zxdeskfoo` 这种「前缀只是另一个路径的开头」会被误伤成 `/foo`。
  *
  * @param {string} url - 请求的 URL（含查询串，形如 `/app/zxdesk/api/health?x=1`）
- * @returns {{ path: string, prefixed: boolean }} 剥完之后的 URL；`prefixed` 表示这次请求确实走了网关前缀
  */
 function stripGatewayPrefix(url) {
   const raw = String(url || '/');
@@ -79,12 +62,8 @@ function localUrl(path) {
  * 功能：网关挂载点本身**不带结尾斜杠**时，回一个补斜杠的重定向地址。
  *
  * 说明：⚠️ 这一步是必须的 —— HTML 里的静态资源链接是**相对路径**（这样同一份文件在 `/` 与
- *      `/app/zxdesk/` 下都对），而相对路径要靠 URL 的**结尾斜杠**算基准目录。
- *      飞牛入口配的 `url` 就是 `/app/zxdesk`（不带斜杠），不重定向的话 `/core/tokens.css`
- *      会被算成 `/core/tokens.css`（丢了前缀）⇒ 整页白屏。
- *
- * @param {string} url - 原始的请求 URL
- * @returns {?string} 需要重定向时返回目标地址（含查询串），否则返回 `null`
+ * `/app/zxdesk/` 下都对），而相对路径要靠 URL 的**结尾斜杠**算基准目录。
+ * 飞牛入口配的 `url` 就是 `/app/zxdesk`（不带斜杠），不重定向的话 `/core/tokens.css`
  */
 function gatewaySlashRedirect(url) {
   if (!GATEWAY_PREFIX) return null;
@@ -99,11 +78,8 @@ function gatewaySlashRedirect(url) {
  * 功能：从**网关注入的请求头**里读出当前飞牛用户（没走网关时返回 null）。
  *
  * 说明：⭐⭐ 官方红线：「不要信任客户端传入的用户 ID，请使用网关鉴权 Header」——
- *      所以 uid 只认 `X-Trim-Userid`，⛔ 不接受查询串 / 请求体里的任何 uid。
- *      ⚠️ 局域网直连、Windows / 安卓独立客户端都不经过网关 ⇒ 这里恒为 null。
- *      那些场景**不报错**，只是「不能改授权」（授权状态已经落在库和服务端，附件照用）。
- * @param {import('node:http').IncomingMessage} req - 请求
- * @returns {?{uid: number, username: string, isAdmin: boolean}} 用户；没有网关身份时为 null
+ * 所以 uid 只认 `X-Trim-Userid`，⛔ 不接受查询串 / 请求体里的任何 uid。
+ * 局域网直连、Windows / 安卓独立客户端都不经过网关 ⇒ 这里恒为 null。
  */
 function gatewayUser(req) {
   const h = (req && req.headers) || {};

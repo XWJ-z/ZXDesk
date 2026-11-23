@@ -2,40 +2,9 @@
 
 /**
  * store/methods/grants.js —— **个人授权目录**的业务方法
- *
  * 功能：把「我授权过哪些目录」这件事变成一份**可读、可查状态、可备注**的清单：
- *      `dirGrantList()` 给出清单 ＋ 每一行当前的授权状态；
- *      `dirGrantAuthorize()` 在校验过宿主授权列表之后登记 / 刷新一行；
- *      `dirGrantSetPurpose()` 改用途备注；`dirGrantRemove()` 撤销宿主授权并删掉登记（⛔ 不碰文件）。
- *
- * 两条限制（判据都在本文件，⛔ 别在页面里再写一份）：
- *   · **不能授权已有子目录授权的上级目录** —— 那等于把权限面一次放大到整棵子树，
- *     只能先移除子目录的授权再授权上级（`assertNoParentOfLiveGrant()`）；
- *   · **不能移除放着数据库的目录的授权** —— 撤掉之后应用自己就读不到库了，
- *     只能先把数据位置改到别处（`grantRemoveGuard()`）。
- *
- * ⭐⭐ 为什么需要这一层（卸载重装过后授权也会丢失，必须提醒用户重新授权）：
- *      飞牛的目录授权**只在宿主机上、只在当时可查**，而且**没有历史** —— 应用一重装，
- *      授权就没了，用户看到的只是「原本能用的功能突然说没有目录」。宿主给不了「你曾经授权过什么」，
- *      那就只能由我们自己记一笔（表 `user_dir_grants`），再拿宿主的**当前**列表跟它比对：
- *        · 记过、现在还在 ⇒ `normal`（正常）
- *        · 记过、现在没了 ⇒ `lost`（**需重新授权** —— 授权丢失 / 卸载重装都落在这里）
- *        · 没记过        ⇒ `none`（未授权）
- *      所以「需重新授权」不是一个额外状态，而是**这张表存在的原因**。
- *
- * ⚠️ 状态里的 `none` 本轮不会由界面产生（页面上的新增入口是「选目录授权」，
- *    选完就是 `normal`）。它留给两种真实情况：① 模块**先申请**目录、用户还没给（`pending:true` 的登记）；
- *    ② 历史脏数据（`granted_at` 为空的旧行）。两种都必须显示成「未授权 / 点击授权」而不是崩掉，
- *    所以这个分支要留着 —— 它不是死代码。
- *
- * ⚠️ 本文件自己**不发起**授权，但会**撤销**授权：`dirGrantRemove()` 会调
- *    `trim.file.delUserAccessibleFolder` 真的把宿主那条授权撤掉 —— 「移除」如果只删我们这一行，
- *    用户会看到「清单里没了、飞牛里还在」（2026-11-11 真机反馈），那等于骗人。
- *    ⛔ 撤销之后必须**复核**：宿主那边还在就报错并把登记行留着，⛔ 不许「本地删了、日志说成了」。
- *
- * ⚠️ 本表**不进个人备份**（`exportAll` 只带 users）：它是本机环境状态，不是用户内容。
- *    整体备份会带上（`exportWhole()` 按表名清单遍历，见 core.js 里那张表的说明）。
- *
+ * `dirGrantList()` 给出清单 ＋ 每一行当前的授权状态；
+ * `dirGrantAuthorize()` 在校验过宿主授权列表之后登记 / 刷新一行；
  * @author zx
  * @date   2026-11-09
  * @since 0.9.7
@@ -98,23 +67,48 @@ const STATUS = {
 
 module.exports = {
   /**
+   * 功能：本账号「**当初真的向飞牛核过授权**、现在也确实读得到」的目录 —— 直连端的授权根来源。
+   * 说明：⭐⭐ 为什么需要它：飞牛的授权清单只能拿**网关注入的 uid** 去查（`trim.file.*`），
+   *      而安卓客户端 / 局域网直连 / Windows 版都不经过网关 ⇒ 它们永远查不到清单 ⇒
+   *      「选附件位置」在那些端上变成永远列不出任何目录（真机：飞牛 App 里能看到授权目录，
+   * @param {number} uid - 本应用账号 id
+   * @returns {Array.<string>} 目录绝对路径（已去重）
+   */
+  dirGrantRoots(uid) {
+    let rows;
+    try {
+      rows = this._bk.listDirGrants(Number(uid));
+    } catch (_e) {
+      return []; // 表还没建 / 库不可用：不是「授权丢了」，这里静默给空
+    }
+    const out = [];
+    for (const r of rows || []) {
+      if (!r || !r.granted_at) continue;
+      const p = normPath(String(r.path || ''));
+      if (!p || out.includes(p)) continue;
+      try {
+        if (!fs.statSync(p).isDirectory()) continue;
+        fs.accessSync(p, fs.constants.R_OK | fs.constants.X_OK);
+      } catch (_e) {
+        continue; // 目录不在了 / 读不了：自然从列表里消失，不需要额外的状态字段
+      }
+      out.push(p);
+    }
+    return out;
+  },
+
+  /**
    * 功能：列出该账号的授权目录清单，并给每一行算当前状态。
-   *
    * 说明：⭐⭐ 「算状态」这件事每次**现算**、⛔ 不把结论落库 —— 落库的结论一定过期，
    *      而用户点开设置页的这一刻，正是他想知道「现在到底还能不能用」的那一刻。
-   *      ⚠️ 两组授权列表（应用共享 ＋ 用户个人）都要查：目录可能是管理员在应用级给的，
-   *      也可能用户自己在选择器里给的，只查一组会把另一组误判成 `lost`。
-   *      ⚠️ 两组都查不到 ⇒ 整份清单标 `unknown` ＋ 一句原因：这时候说「需重新授权」是**假消息**
-   *      （人会跑去飞牛里授权，而那里明明配好了）。
    * @param {number} uid - 账号 id
    * @param {?Object} gwUser - 网关身份（`gatewayUser(req)` 的结果，可能为 null）
    * @returns {Promise.<{items: Array.<Object>, reachable: boolean, code: string, message: string, counts: Object}>}
-   *      清单与整体可达性
    */
   async dirGrantList(uid, gwUser) {
     const u = Number(uid);
     const rows = this._bk.listDirGrants(u);
-    const granted = await this.grantedDirsOf(u, gwUser);
+    const granted = await this.grantedDirsOf(u, gwUser, false, rows);
     // ⭐ 旧数据的兜底：加密信息早就配好附件目录、但这张表是后加的 ——
     //    不合成这一条，升级上来的用户会看到「一个授权目录都没有」，而附件其实能用。
     const legacy = this.legacySecretsGrant(u, rows);
@@ -136,17 +130,10 @@ module.exports = {
   },
 
   /**
-   * 功能：登记 / 刷新一个授权目录 —— **先向宿主确认这个路径真的被授权了**，再落库。
-   *
-   * 说明：⭐⭐ 判据永远是宿主的授权列表，⛔ 不是「前端说选过了」。所以这里先 `invalidate()`
-   *      再查一次（选择器刚点的授权会落在 30 秒缓存之外，见 `authorizeRoot()` 里那段事故记录）。
-   *      ⚠️ `granted_at` 只写第一次（业务层判断），`checked_at` 每次都刷新 ——
-   *      前者是「曾经成功授权过」的凭据，后者是「最近一次确认它还有效」的时间。
    * @param {number} uid - 账号 id
    * @param {string} path - 目录绝对路径
    * @param {?Object} gwUser - 网关身份
    * @param {{purpose?: string, source?: string, pending?: boolean}} [opts] - 用途备注 / 申请方 /
-   *      是否只是「先登记，稍后授权」（`pending` 为真时不校验授权列表）
    * @returns {Promise.<Object>} `dirGrantList()` 的结果（省一次往返）
    * @throws {Error} 路径非法（400）、不在授权范围（400）、读不到授权信息（409）
    */
@@ -189,11 +176,6 @@ module.exports = {
   },
 
   /**
-   * 功能：改一条授权目录的**用途备注**（只动这一列，不动路径与授权时间）。
-   *
-   * 说明：⚠️ 备注是给人看的（「加密信息附件」/「相册备份」），⛔ 不参与任何判权。
-   *      只对**已登记**的行生效 —— 路径不存在时抛 404，⛔ 不悄悄新建一行
-   *      （那会让错别字变成一个挂在清单里的空目录）。
    * @param {number} uid - 账号 id
    * @param {string} path - 目录绝对路径
    * @param {string} purpose - 新的用途备注（可为空串 ＝ 清掉）
@@ -222,15 +204,6 @@ module.exports = {
   },
 
   /**
-   * 功能：移除一条授权目录 —— **真的把飞牛里那条授权撤掉**，撤掉了才删登记。
-   *
-   * 说明：⭐⭐ 「移除」如果只删我们这张表的一行，用户会看到「清单里没了、飞牛里还在」，
-   *      而任何绕过本清单直接问宿主的代码仍然读得到那个目录 —— 那就是 2026-11-11 报的缺陷。
-   *      所以顺序是：**数据目录守卫 → 撤销宿主授权 → 复核 → 才删登记**。
-   *      ⚠️ 撤销之后必须**复核**（重新问一次宿主）：平台回了 `suc` 也不等于真撤了；
-   *      复核仍在 ⇒ 报错并把登记留着，⛔ 不许「本地删了、日志说成了」。
-   *      ⚠️⭐ 「复核仍在」还要再分一层：这条登记可能是**靠上级目录**被带着的（它自己从来没被单独授权过）——
-   *      那种情况撤掉的是「本来就没有的那条」，登记可以删，但要回一句 `note` 提醒「上级还授权着」。
    * @param {number} uid - 账号 id
    * @param {string} path - 目录绝对路径
    * @param {?Object} gwUser - 网关身份
@@ -263,7 +236,6 @@ module.exports = {
     }
     if (isGranted(abs, after.paths)) {
       // ⭐⭐ 「还在」要分成两种，否则会把一条**本来就没自己那条授权**的登记（它是靠上级目录被带着的）
-      //    永远报成「撤不掉」：2026-11-11 真机 `/vol1/1000/ZXDesk` 就撞在这上面。
       const exact = after.paths.some((p) => normPath(p) === abs);
       const shared = await this.grantedSharedSafe();
       const byShared = shared.ok && isGranted(abs, shared.paths);
@@ -286,10 +258,8 @@ module.exports = {
 
   /**
    * 功能：判「这个目录的授权能不能移除」—— 放着应用自己的数据目录时 ⛔ 不许撤。
-   *
    * 说明：⭐⭐ 撤销的是**访问权**：把数据目录（数据库所在处）的授权撤掉之后，
    *      应用自己下一次启动就读不到库了 —— 那看起来像「数据没了」，用户唯一的出路是重新授权。
-   *      ⚠️ 判的是**覆盖关系**：目录本身、以及它的**上级**都要拦（撤上级等于连它一起撤）。
    * @param {string} abs - 要撤的目录
    * @param {Array.<string>} dirs - 应用自己的数据目录（当前数据位置 ＋ 安装位置）
    * @returns {{ok: boolean, code: string, message: string}} 结论
@@ -313,16 +283,6 @@ module.exports = {
   },
 
   /**
-   * 功能：拦住「给已有子目录授权的上级目录授权」。
-   *
-   * 说明：⭐⭐ 飞牛的目录授权是**树级**的 —— 授权上级＝把那棵子树里所有目录一起放开。
-   *      所以「先授权了子目录、回头再授权它的上级」等于把权限面一次放大到整棵树，
-   *      而界面上的清单只会多一行，看不出这件事。⇒ 先移除子目录的授权，再授权上级。
-   *      ⚠️ 三道「不拦」的口径（少一条就会误伤）：
-   *      ① 这次选的目录**本来就在**宿主授权列表里 ⇒ 这是「重新授权」，⛔ 不拦、⛔ 更不能撤销它；
-   *      ② 拿不到「点选择器之前」的快照（读不到 / 缓存空）⇒ 放行 —— 失败方向必须安全：
-   *         宁可漏拦一次，也不许误撤一条本来就在的授权（那可能连带撤掉数据位置的访问权）；
-   *      ③ 子目录那一行**宿主那边已经不在了**（`lost`）⇒ 不算「已授权」，不拦。
    * @param {number} uid - 账号 id
    * @param {string} abs - 这次要授权的目录
    * @param {{paths: Array.<string>, reachable: boolean}} before - 点选择器之前的宿主授权列表
@@ -364,19 +324,35 @@ module.exports = {
 
   /**
    * 功能：问一次宿主的授权列表 —— 分成「应用共享」与「用户个人」两组，各自可能查不到。
-   *
    * 说明：⚠️ 两组**分别**返回 `ok`，由调用方决定怎么合并：只有两组都失败才算「问不到」。
-   *      一组失败时按另一组判 —— 把「一组查不到」当成「全都没授权」会造成大批假 `lost`。
    * @param {number} uid - 账号 id（飞牛用户 id，来自网关 Header）
    * @param {?Object} gwUser - 网关身份；为空时用户那一组必然查不到
    * @param {boolean} [fresh] - 是否先作废 30 秒缓存（刚点完选择器时必须为真）
    * @returns {Promise.<{paths: Array.<string>, reachable: boolean, code: string, message: string}>} 合并后的授权目录
    */
-  async grantedDirsOf(uid, gwUser, fresh) {
+  async grantedDirsOf(uid, gwUser, fresh, localRows) {
     const owner = gwUser && Number.isInteger(Number(gwUser.uid)) ? gwUser : null;
     if (fresh) trimApi.invalidate(owner ? Number(owner.uid) : null);
     const shared = await this.grantedSharedSafe();
     const user = owner ? await this.grantedUserSafe(Number(owner.uid)) : { paths: [], ok: false, code: '', message: '' };
+    // ⭐ 直连端（无网关身份）：飞牛的个人授权清单只认 `X-Trim-Userid`，这一路查不到
+    //    ⇒ 用本机已登记的那些补上，否则「飞牛里授过、安卓 App 说失效」。
+    //    ⚠️ 有网关身份时⛔ 不并：并在那里就等于「飞牛撤销了还能浏览」。
+    if (!owner && Array.isArray(localRows)) {
+      const local = localRows
+        .filter((r) => r && r.granted_at)
+        .map((r) => normPath(String(r.path || '')))
+        .filter(Boolean);
+      if (local.length) {
+        return {
+          paths: [...new Set([...(shared.ok ? shared.paths : []), ...local])],
+          reachable: true,
+          code: '',
+          message: '',
+          source: 'local',
+        };
+      }
+    }
     if (!shared.ok && !user.ok) {
       const bad = !shared.ok ? shared : user;
       return {
@@ -454,16 +430,8 @@ module.exports = {
 
   /**
    * 功能：把「加密信息里早就配好的附件目录」合成成一条**登记行**（只在本轮还没登记过它时）。
-   *
    * 说明：⭐⭐ 这张表是后加的，而附件目录早就存在 —— 不合成的话，
    *      升级上来的用户在设置里看到「一个授权目录都没有」，可加密信息照常能用，两处自相矛盾。
-   *      ⚠️ 刻意**不落库**：读接口不该写库（只读模式下会 503）。用户在界面上对它做任何动作
-   *      （改备注 / 重新授权）时自然落库。
-   *      ⚠️ 用**后端原语**读（`this._bk.getSecretRootInfo`）而不是 `store.secretRootInfo()`：
-   *      后者要求密码库已解锁，而设置页打开时通常是锁着的。
-   *      ⚠️ 加密信息模块被整目录删掉时，这个 op 不存在 ⇒ 直接跳过（删模块验收要求这样）。
-   *      ⭐ 返回的是**行**（`granted_at` / `legacy`），不是最终条目 —— 状态由 `grantItemOf()`
-   *      按同一份宿主列表算，⛔ 不在这里另算一套（两处算法必然漂移）。
    * @param {number} uid - 账号 id
    * @param {Array.<Object>} rows - 已登记的清单（用来判重）
    * @returns {?Object} 合成行；不需要合成时返回 null

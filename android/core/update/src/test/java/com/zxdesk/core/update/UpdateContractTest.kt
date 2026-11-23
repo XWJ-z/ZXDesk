@@ -8,8 +8,6 @@ import org.junit.Test
 /**
  * 接口契约的判据：字段不全就整份拒收。
  *
- * 用例里的地址与 hash 都是占位值（RFC 2606 的 example.com + 重复字符），
- * 不代表任何真实发布记录。
  */
 class UpdateContractTest {
 

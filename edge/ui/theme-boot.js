@@ -1,15 +1,7 @@
 /**
  * theme-boot.js —— 主题引导（三屏 `<head>` 里最先跑的同步脚本）
- *
- * 顺序：先按系统偏好同步设 `data-theme`（防闪白）⇒ 异步读 `pref:theme` 覆盖 ⇒
- * 之后 `storage.onChanged` 热更新（设置页切主题，三屏立刻变——）。
- *
- * ⚠️ 本文件是 classic script（⛔ module）：必须在渲染前同步执行，import 会把它变异步。
- * ⚠️ 直接读 `chrome.storage.local` 是**本文件特批的例外**（「设置页写、两个壳读」）；
- *    分层纪律 2 管的是连接数据，偏好（pref:*）不在此列。
- *
  * @author zx
- * @since 0.1.4
+ * @since
  */
 (function () {
   'use strict';

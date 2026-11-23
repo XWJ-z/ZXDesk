@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：DohDnsTest.kt
- * 职责：DohDns 各条分流的回归测试，不碰网络也不碰真实时钟
  */
 
 package com.zxdesk.core.connection
@@ -23,9 +21,6 @@ import org.junit.Test
 /**
  * [DohResolver] 的分流。
  *
- * 两个关键判据：**什么时候才去问公共解析**（多问一次就是一次白花的往返），
- * 以及**什么时候不再问**（缓存与并发合并，问多了首屏就要等）。
- * 系统解析、公共解析、时钟三样全注入，用例不依赖外网。
  */
 class DohDnsTest {
 
@@ -207,7 +202,6 @@ class DohDnsTest {
         val connect = ConnectException("failed to connect")
         assertTrue(shouldRetryWithFreshDns("my-nas.fnos.net", connect, alreadyRetried = false))
         assertTrue(shouldRetryWithFreshDns("my-nas.fnos.net", SocketTimeoutException("timeout"), false))
-        // 已经兜过一次就不再兜，否则连不通的节点会把登录拖成无限重连
         assertFalse(shouldRetryWithFreshDns("my-nas.fnos.net", connect, alreadyRetried = true))
         // 不是中继域名：GeoDNS 那套解释不成立，别乱重试
         assertFalse(shouldRetryWithFreshDns("my-nas.example.com", connect, false))

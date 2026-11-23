@@ -1,8 +1,5 @@
 /**
- * IPC 白名单（0.1.4 新增文字菜单通道）。
- *
- * 菜单栏只允许 `connect / view / help` 三组；动作也必须是登记过的。
- * 这条测试同时守着「来源校验」——远程视图没有 preload，但校验不能省。
+ * IPC 白名单。
  */
 
 import assert from 'node:assert/strict';

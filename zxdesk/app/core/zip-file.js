@@ -1,23 +1,8 @@
 /**
  * ZXDesk工作台 飞牛原生应用
- * 文件：zip-file.js
- * 职责：流式的 ZIP 写入 / 读取 / 解压（数据位置迁移的数据快照归档）
  *
  * 功能：`writeZipFile()` 把「内存字节 + 磁盘文件」混编成一个 ZIP 并**边读边写**；
- *      `readCentral()` / `readManifest()` / `verifyZip()` / `extractZip()` 负责读回校验与还原。
- *
- * ⭐ 为什么不复用 `core/zip.js`：那一对 `buildZip` / `readZip` 是**全内存**实现
- *    （`MAX_MEMBER_USIZE` 256MB，且要求调用方先把每个成员整体读成 Buffer）。
- *    整体备份与导入的文件只有几十 MB 量级，全内存没问题；但数据目录里可能有几百 MB 的
- *    协作聊天图片，整目录进内存会直接把进程打爆。两者用途不同，所以并存：
- *    `zip.js` 语义一字不动，本文件只服务「数据目录归档」。
- *
- * ⚠️ 写盘一律先写 `<目标>.part`，`fsync` 之后 `rename`：中途断电 / 被杀时目标文件
- *    要么不存在、要么是完整的 —— 不会出现「看着有、其实缺一半」的归档。
- * ⚠️ 文件成员用「数据描述符」（标志位 bit 3）：局部头里的 CRC 与尺寸写 0，真实值放在数据后面。
- *    这是流式压缩必须的（压缩前不知道压完多大）。读取侧**只信中央目录**，与本项目 `zip.js` 同一条纪律。
- * ⚠️ 不支持 Zip64：单包与单成员都必须 < 4GB、成员数 < 65535。超了**明确报错**，
- *    ⛔ 不静默截断（截断的归档在恢复时才被发现，那时代价最大）。
+ * `readCentral()` / `readManifest()` / `verifyZip()` / `extractZip()` 负责读回校验与还原。
  *
  * @author zx
  * @date   2026-11-10
@@ -167,11 +152,8 @@ async function writeAll(fh, buf) {
  * 功能：把一条「文件成员」以**流式 deflate** 写进输出句柄，返回它的校验与尺寸。
  *
  * 说明：⚠️ 必须逐成员串行等待：中央目录里的偏移是绝对位置，两个成员同时写会互相踩。
- *      流式三段用 `pipeline` 串起来（读盘 → 记账 → 压缩 → 写盘），任一段出错整条链结算为失败。
+ * 流式三段用 `pipeline` 串起来（读盘 → 记账 → 压缩 → 写盘），任一段出错整条链结算为失败。
  *
- * @param {Object} fh - 输出句柄
- * @param {string} file - 源文件绝对路径
- * @returns {Promise.<{crc: number, csize: number, usize: number, sha256: string}>} 该成员的真实值
  */
 async function writeFileMember(fh, file) {
   const hash = crypto.createHash('sha256');
@@ -200,16 +182,8 @@ async function writeFileMember(fh, file) {
  * 功能：把一个成员清单写成一份 ZIP（先 `.part`，`fsync` 后 `rename`）。
  *
  * 说明：成员两种形态 —— `{name, data}` 是内存字节（小文件、manifest、库快照）；
- *      `{name, file}` 是磁盘文件（边读边压，不进内存）。
- *      ⚠️ `compress: false` 只对内存成员有意义（`manifest.json` 要能被直接切出来读）。
- *
- * @param {string} outPath - 目标 ZIP 路径
- * @param {Array.<{name: string, data?: Buffer, file?: string, compress?: boolean}>} entries - 成员清单（顺序即写入顺序）
- * @returns {Promise.<{members: Array.<{path: string, size: number, sha256: string}>, totalBytes: number}>} 与 manifest 同形的结果
- * @throws {Error} 成员过多 / 单个过大 / 读写失败时抛出（`.part` 会被删掉）
- *
- * ⚠️ 返回的 `members` **含 `manifest.json` 自己**；写进 manifest 的 `files` 必须把它滤掉 ——
- *    `verifyZip()` 按「压缩包成员数 = `files` 条数 + 1」判，多一条就报「成员数不符」。
+ * `{name, file}` 是磁盘文件（边读边压，不进内存）。
+ * `compress: false` 只对内存成员有意义（`manifest.json` 要能被直接切出来读）。
  */
 async function writeZipFile(outPath, entries) {
   const list = Array.isArray(entries) ? entries : [];
@@ -269,8 +243,8 @@ async function writeZipFile(outPath, entries) {
       });
       await writeAll(fh, head);
       await writeAll(fh, nameBuf);
-      // ⚠️ `offset` 本身就是这个成员局部头的落点（它一直在跟踪「已经写了多少字节」），
-      //    再减一次头长度会把偏移指向数据中间，读回时表现为「成员位置无效」。
+      // `offset` 本身就是这个成员局部头的落点（它一直在跟踪「已经写了多少字节」），
+      // 再减一次头长度会把偏移指向数据中间，读回时表现为「成员位置无效」。
       const base = offset;
       const r = await writeFileMember(fh, file);
       const desc = dataDescriptor(r);
@@ -518,12 +492,8 @@ function safeJoin(destDir, name) {
  * 功能：把归档解到某个目录（只写 manifest 里列出的相对路径）。
  *
  * 说明：⚠️ 解压前**先占位拒绝**：目标里若已存在同名文件，直接报错 ——
- *      恢复动作只能写进一个由调用方准备好的空位置，⛔ 不覆盖任何既有数据。
+ * 恢复动作只能写进一个由调用方准备好的空位置，⛔ 不覆盖任何既有数据。
  * @param {string} filePath - ZIP 路径
- * @param {string} destDir - 目标目录（必须存在）
- * @param {Object} manifest - `readManifest()` 的结果
- * @returns {Promise.<number>} 解出的成员数
- * @throws {Error} 成员名不安全 / 目标已存在同名文件 / 写入失败时抛出
  */
 async function extractZip(filePath, destDir, manifest) {
   const listed = new Set((manifest.files || []).map((f) => String(f.path)));
@@ -546,9 +516,8 @@ async function extractZip(filePath, destDir, manifest) {
  * 功能：一次最小自检 —— 写一个 1MB 的归档、读回校验、删掉。
  *
  * 说明：预检要回答「这台机器上这套实现到底能不能用」，靠猜不行。1MB 既能覆盖
- *      「流式写 + deflate + 中央目录 + 读回校验」四条链路，又不会在 NAS 上造成可感知的 IO。
+ * 「流式写 + deflate + 中央目录 + 读回校验」四条链路，又不会在 NAS 上造成可感知的 IO。
  * @param {string} dir - 临时目录（调用方保证可写）
- * @returns {Promise.<{ok: boolean, reason: string}>} 结论
  */
 async function selfTest(dir) {
   const file = path.join(dir, `.zxdesk-zip-selftest-${process.pid}.zip`);

@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：UpdateClient.kt
- * 职责：版本清单接口客户端，请求、超时与结果归类
  */
 
 package com.zxdesk.core.update
@@ -38,9 +36,6 @@ sealed interface FetchResult {
 /**
  * 版本接口客户端：拉 `/api/version/android` 并交给 [UpdateContract] 校验。
  *
- * 失败分两类，处理方式不同：
- * - 「还没有发布记录 / 网络不通 / 接口 5xx」→ 安静收场（客户端不能因为更新服务挂了就打不开）；
- * - 「响应内容不合格」→ 记下来但不打扰用户，界面上仍是「检查失败」。
  */
 class UpdateClient(
     private val http: OkHttpClient = defaultHttpClient(),
@@ -99,8 +94,6 @@ class UpdateClient(
     /**
      * 拉一次 `GET /api/version`（**不带平台**）—— 各端最新版本一起拿，给帮助页用。
      *
-     * 与 [fetchLatest] 共用同一套超时与失败归类；差别只在解析：那个要整份清单
-     * （hash / 下载地址缺一不可），这个只挑版本号。
      */
     fun fetchAllVersions(apiUrl: String): AllVersionsResult {
         val checked = UpdateUrls.check(apiUrl)
@@ -139,8 +132,6 @@ class UpdateClient(
         /**
          * 更新链路共用的 HTTP 客户端。
          *
-         * ⚠️ 不设整体 call 超时，改由每次调用用 `call.timeout()` 定 —— 版本接口 8 秒，
-         * 下载安装包要给足时间（十兆级文件在慢网下远超 10 秒）。
          */
         fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)

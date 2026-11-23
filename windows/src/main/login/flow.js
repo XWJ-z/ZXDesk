@@ -1,15 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：flow.js
- * 职责：一次完整的飞牛登录（移植自 `Project/Android/core/connection/FnLoginClient.kt` 的 `FnLoginFlow`）
- *
- * 同一条 WS 跨步骤复用：`getRSAPub` → 加密 `user.login` →（要 2FA 时）邮箱码 / **加密** `loginVerify`
- * → `POST /app/ticket` 换会话 Cookie。开了 2FA 时 `user.login` **不返回 token，只给 accessToken**。
- *
- * ⚠️ 服务端空闲会关 WS（输验证码那几十秒就可能断）：所以每条 2FA 请求都带恢复策略 ——
- * 断了重连 + 重新 `user.login`；报「凭证过期」(102570109) 重登换 accessToken 再发。
- *
- * 依赖全部注入（rpc 工厂、fetch、时钟）：这样本机（没有显示器 / 不能联网）也能用假 RPC 跑完整编排。
  */
 
 import { mergeCookieHeader } from '../browser/cookies.js';
@@ -100,18 +90,6 @@ export class FnLoginFlow {
    * @param {object} options
    * @param {string} options.baseUrl - `https://host[:port]`
    * @param {boolean} options.relay - 是不是中继（决定 WS 要不要带 `mode=relay`）
-   * @param {string} options.user
-   * @param {string} options.password
-   * @param {string} options.deviceId
-   * @param {string} [options.deviceName]
-   * @param {number} [options.timeoutMs]
-   * @param {string|null} [options.savedSecret] - 上次的 secret，`tokenLogin` 签名要用
-   * @param {Function} [options.rpcFactory] - `(url, cookie) => WsClient`；测试注入假实现
-   * @param {Function} [options.gatewayCookie] - 每次握手**现取**网关 Cookie（可异步）。
-   *   开了访问码的 NAS：握手必须带上过访问码时种下的凭据，否则永远 401（Android 同口径）。
-   * @param {Function} [options.fetcher] - `fetch` 语义；`/app/ticket` 用
-   * @param {Function} [options.onStep] - `(label) => void`
-   * @param {Function} [options.setTimer] - 心跳定时器（测试可关掉）
    */
   constructor(options) {
     this.baseUrl = String(options.baseUrl || '').replace(/\/+$/, '');
@@ -151,7 +129,6 @@ export class FnLoginFlow {
   /**
    * 刷新网关 Cookie。访问码是在远程视图里过的，凭据由网关种在 `persist:zxdesk` 分区；
    * 原生 WS 不在那个浏览器里 —— 不显式取一次，开了访问码的 NAS 上永远 401。
-   * 必须是「每次握手前现取」：用户可能先被挡回去过访问码、再重连。
    */
   async refreshGatewayCookie() {
     if (!this.gatewayCookie) {
@@ -196,7 +173,7 @@ export class FnLoginFlow {
 
   /**
    * longToken 免密（`user.tokenLogin`，明文 + 顶层 si + HMAC 签名）。
-   * ⚠️ 现状**未打通**（Android 侧同样）：失败就回落「记住的密码重登」，⛔ 不装作已登录。
+   * 现状**未打通**（Android 侧同样）：失败就回落「记住的密码重登」，⛔ 不装作已登录。
    */
   async startWithLongToken(longToken) {
     this.step(LOGIN_STEP.WS_CONNECT);
@@ -313,7 +290,7 @@ export class FnLoginFlow {
       si: this.si,
     });
     const body = envelope(inner, this.publicKeyPem, randomAesKey(), randomIv());
-    // ⚠️ 信封**不签名**（照 Android：只有明文请求才加 HMAC 前缀）
+    // 信封**不签名**（照 Android：只有明文请求才加 HMAC 前缀）
     const login = await this.expect({ json: body, reqid, noSign: true }, LOGIN_STEP.LOGIN);
     if (login.result !== 'succ') throw new LoginError(LOGIN_STEP.LOGIN, fnErrnoMessage(login), safeDetail(login));
     this.lastLogin = login;
@@ -370,7 +347,6 @@ export class FnLoginFlow {
   /**
    * 2FA 请求的统一出口（带恢复）：
    * ① 连接断了 → 重连 + 重新 `user.login` 再发一次；
-   * ② `reloginOnExpiry` 且服务端说「凭证过期」→ 重登换 accessToken 再发一次。
    */
   async call2fa(reloginOnExpiry, build) {
     let reconnected = false;
@@ -447,7 +423,6 @@ export class FnLoginFlow {
   /**
    * 收尾：把会话变成「浏览器视图能用的 Cookie」。
    * ① `POST /app/ticket {ticket}` —— 新版登录的真实会话靠这一步种下来（拿不到它的 Cookie 就是 `invalid token`）；
-   * ② `appcgi.sac.entry.v1.exchangeEntryToken` —— 老的入口 token，只有 ① 没拿到才试，失败不致命。
    */
   async finishSession({ token, ticket = null, longToken = null }) {
     let entryToken = null;

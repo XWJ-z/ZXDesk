@@ -1,18 +1,8 @@
 'use strict';
 /**
  * core/store/schema/core.js —— **核心模块**：账号与全局设置。
- *
  * 功能：声明核心模块的两张表 —— `users`（账号：口令散列 / 管理员标志 / 会话世代 / 登录时间 /
- *      个人偏好 `hide_timetable` / `hide_bookmarks` / `hide_hardware` / `hide_ai`）与 `settings`（全局设置的 key-value），并给出它们的建表 DDL、重建顺序、归一化规则、
- *      补列清单与 `_update()` 列白名单等模块契约字段。
- *
- * 它不属于任何业务模块，却是所有模块的前置：任务与课表的数据都挂在 `users` 上。
- * 因此 `users` 必须**最先重建**（外键要求父表先存在）。
- *
- * ⚠️ 模块契约（四个文件都必须满足，见 index.js 的说明，由 `assertModules` 在加载时自检）：
- *   tables / aliases / columnAliases / rebuildOrder / normalize / ensureColumns / allowedCols /
- *   userScoped / legacyIndexes / indexes
- *
+ * 个人偏好 `hide_timetable` / `hide_bookmarks` / `hide_hardware` / `hide_ai`）与 `settings`（全局设置的 key-value），并给出它们的建表 DDL、重建顺序、归一化规则、
  * @author zx
  * @date   2026-09-10
  * @since 0.9.7
@@ -37,22 +27,16 @@ module.exports = {
    * 功能：本模块的表名 → DDL 生成器映射，供 index.js 的 `createAll()` 一次建出全部表。
    *
    * 说明：⭐ `users.password_hash` 是 `NOT NULL` 且**刻意不给 DEFAULT** —— 单用户时代的老库靠
-   *      `_ensureColumn` 补出这一列、老行上是 NULL，于是造出「账号在、是管理员、却任何密码都登不进去」
-   *      （连续把部署者挡在门外三次）；而给了默认值，「忘了传口令」就会从报错变成**静默写入一个空口令**
-   *      （只是从 NULL 换成 ''），同样回到那条老路上。完整经过写在下面 DDL 的注释里。
-   *
-   * @type {Object}
+   * `_ensureColumn` 补出这一列、老行上是 NULL，于是造出「账号在、是管理员、却任何密码都登不进去」
+   * （连续把部署者挡在门外三次）；而给了默认值，「忘了传口令」就会从报错变成**静默写入一个空口令**
    */
   tables: {
     /**
      * 功能：生成 `users` 表的建表语句 —— 账号行的唯一出处（口令散列 / 管理员标志 / 会话世代 / 登录时间）。
      *
      * 说明：⚠️ `password_hash` 为什么 `NOT NULL`、为什么没有 DEFAULT，见上面 `tables` 字段的说明
-     *      与语句内注释（SQL 注释保留原样，是这段事故记录的一手出处）。
+     * 与语句内注释（SQL 注释保留原样，是这段事故记录的一手出处）。
      *
-     * @param {string} n - 表名（重建时是临时名，如 `users__v5`）
-     * @param {boolean} ine - 是否在语句里加 `IF NOT EXISTS`
-     * @returns {string} 该表的 `CREATE TABLE` 语句
      */
     users: (n, ine) => `
       CREATE TABLE ${ine ? 'IF NOT EXISTS ' : ''}${n} (
@@ -213,25 +197,8 @@ module.exports = {
      * 功能：生成 `user_dir_grants` 表的建表语句 —— **个人授权目录登记表**。
      *
      * 说明：⭐⭐ 这张表回答的**不是**「哪个目录能用」（那是飞牛宿主的授权列表说了算），
-     *      而是「**这个人曾经成功授权过哪个目录、它拿来干什么**」。两件事分开的理由：
-     *      · 宿主的授权列表**只在本机、只在当时可查**（卸载重装 / 系统重置后清空，且没有历史）；
-     *      · 用户需要一个**汇总**：`设置 → 账号设置 → 个人授权目录` 里那三行（路径 / 状态 / 用途）。
-     *      ⚠️⭐ `granted_at` **非空**是「成功授权过」的唯一凭据，也是「需重新授权」与「未授权」
-     *      这两种状态的分界线：前者＝这一格有值、但现在宿主列表里查不到；后者＝这一格一直是空。
-     *      ⛔ 别把它写成 `NOT NULL DEFAULT ''`：空串与 NULL 在本项目里必须只表示一种含义
-     *      （与 `users.password_hash` 那条事故同一个道理）。
-     *      ⚠️ `purpose`（用途备注）与 `source`（哪个模块申请的，空串＝用户自己加的）都是**给人看的**，
-     *      不参与任何权限判断 —— 判权永远只认 `path` + 宿主授权列表。
-     *      ⚠️ `UNIQUE(user_id, path)`：同一个目录同一个人只登记一行，重复授权＝原地更新。
-     *      不加外键（与 tasks / bookmarks 同一条规矩：`user_id` 是归属标签不是父节点）。
-     *      ⚠️ 这张表**进整体备份、不进个人备份**：
-     *      · 整体备份是「整机搬家」，`exportWhole()` 按表名清单遍历，本表自动在其中；
-     *      · 个人备份（`exportAll()` + 各模块片段）只带用户内容，本表属于**本机环境状态**
-     *        （与「附件不进备份」同一条理由），不带。
-     *
-     * @param {string} n - 表名（重建时是临时名）
-     * @param {boolean} ine - 是否在语句里加 `IF NOT EXISTS`
-     * @returns {string} 该表的 `CREATE TABLE` 语句
+     * 而是「**这个人曾经成功授权过哪个目录、它拿来干什么**」。两件事分开的理由：
+     * 宿主的授权列表**只在本机、只在当时可查**（卸载重装 / 系统重置后清空，且没有历史）；
      */
     user_dir_grants: (n, ine) => `
       CREATE TABLE ${ine ? 'IF NOT EXISTS ' : ''}${n} (
@@ -252,25 +219,14 @@ module.exports = {
    * 功能：旧表名 → 现表名的映射，供迁移在**建表之前**改名，避免老数据永远搬不过来。
    *
    * 说明：⚠️ 本模块没有改过名 —— 留空是**契约的一部分，不是漏写**：空对象表示「本模块没有改名迁移」，
-   *      与「字段缺失」是两回事，后者会被 `assertModules` 当场判为契约不合格。
+   * 与「字段缺失」是两回事，后者会被 `assertModules` 当场判为契约不合格。
    *
-   * @type {Object}
    */
   aliases: {},
 
   /**
-   * 功能：旧列名 → 现列名的映射（⭐ 0.8.12 新造的「列改名」一档），供迁移在**补列之前**改名。
    *
    * 说明：⭐ `ALTER TABLE … RENAME COLUMN` 与表改名**同性质** —— 只改 `sqlite_master` 里的名字，
-   *      **不动任何一行用户数据**。⚠️⭐ 它**必须**排在 `ensureColumns` 之前：反过来的话，
-   *      补列会先按新 DDL 把 `hide_teamwork` 补出来（默认 0 = 显示），旧列还在 ⇒ 新列撞名，
-   *      而撞名的表现是「开关全被重置成『显示』」且**不报错**（`_applyColumnAliases` 的说明）。
-   *
-   *      本行是 1a 那一批（`chat` → `teamwork`）留下的：`users.hide_teamwork` 是从
-   *      `users.hide_chat` **原地改名**来的（的「路 3」）——
-   *      不新增退役列、数据原地保留，代价是得新造这一档机制。
-   *
-   * @type {Array.<Array.<string>>}
    */
   columnAliases: [['users', 'hide_chat', 'hide_teamwork']],
 
@@ -302,65 +258,47 @@ module.exports = {
     ['users', 'hide_timetable', 'INTEGER NOT NULL DEFAULT 0'],
     ['users', 'hide_bookmarks', 'INTEGER NOT NULL DEFAULT 0'],
     ['users', 'hide_hardware', 'INTEGER NOT NULL DEFAULT 0'],
-    // ⭐ 0.8.10：数码管理的开关列（模块 hardware 改名 digital 之后换的那一列）。
-    //    ⚠️ 老库上**唯一生效的路径**就是这一行 —— DDL 里的新列对已存在的 users 表一个字节都不动。
+    // 数码管理的开关列（模块 hardware 改名 digital 之后换的那一列）。
+    // 老库上**唯一生效的路径**就是这一行 —— DDL 里的新列对已存在的 users 表一个字节都不动。
     ['users', 'hide_digital', 'INTEGER NOT NULL DEFAULT 0'],
     ['users', 'hide_vault', 'INTEGER NOT NULL DEFAULT 0'],
     ['users', 'hide_teamwork', 'INTEGER NOT NULL DEFAULT 0'],
     ['users', 'hide_ai', 'INTEGER NOT NULL DEFAULT 0'],
-    // ⭐ 0.7.1 灵感库（可关模块的第七个实例）：⚠️ 这一行**必须有** ——
-    //    真机上装过 0.6.x 的库里 `users` 早就存在，`CREATE TABLE IF NOT EXISTS` 永远补不上这一列
-    //    （同类事故：0.7.1 的 `teamwork_reminder_prefs.builtin_name` 只写进建表语句、漏登记，
-    //    结果「七个设置项里只有称呼存不进去」，见 11-踩坑与说明.md）。
+    // 灵感库（可关模块的第七个实例）：⚠️ 这一行**必须有** ——
+    // 真机上装过 0.6.x 的库里 `users` 早就存在，`CREATE TABLE IF NOT EXISTS` 永远补不上这一列
+    // 结果「七个设置项里只有称呼存不进去」，见 11-踩坑与说明.md）。
     ['users', 'hide_idea', 'INTEGER NOT NULL DEFAULT 0'],
-    // ⭐ 0.7.5 番茄钟（可关模块的第八个实例）：⚠️ 与上面那条**同一条理由** ——
-    //    真机上装过 ≤0.7.2 的库里 `users` 早就存在，`CREATE TABLE IF NOT EXISTS` 永远补不上这一列
-    //    （同类事故：0.7.1 的 `teamwork_reminder_prefs.builtin_name` 只写进建表语句、漏登记，
-    //    结果「七个设置项里只有称呼存不进去」，见 11-踩坑与说明.md）。
-    //    「拿不准就登记」：幂等补列零成本，漏了就是「真机上开关怎么点都不生效」。
+    // 番茄钟（可关模块的第八个实例）：⚠️ 与上面那条**同一条理由** ——
+    // 结果「七个设置项里只有称呼存不进去」，见 11-踩坑与说明.md）。
+    // 「拿不准就登记」：幂等补列零成本，漏了就是「真机上开关怎么点都不生效」。
     ['users', 'hide_pomodoro', 'INTEGER NOT NULL DEFAULT 0'],
-    // ⭐ 0.7.5 日历（可关模块的第九个实例）：⚠️ 与上面那条**同一条理由** ——
-    //    真机上装过 ≤0.7.4 的库里 `users` 早就存在，`CREATE TABLE IF NOT EXISTS` 永远补不上这一列
-    //    （同类事故：0.7.1 的 `teamwork_reminder_prefs.builtin_name` 只写进建表语句、漏登记，
-    //    结果「七个设置项里只有称呼存不进去」，见 11-踩坑与说明.md）。
-    //    「拿不准就登记」：幂等补列零成本，漏了就是「真机上开关怎么点都不生效」。
+    // 日历（可关模块的第九个实例）：⚠️ 与上面那条**同一条理由** ——
+    // 结果「七个设置项里只有称呼存不进去」，见 11-踩坑与说明.md）。
+    // 「拿不准就登记」：幂等补列零成本，漏了就是「真机上开关怎么点都不生效」。
     ['users', 'hide_calendar', 'INTEGER NOT NULL DEFAULT 0'],
-    // ⭐ 0.8.0 记账（可关模块的第十个实例）：⚠️ 与上面那条**同一条理由** ——
-    //    真机上装过 ≤0.7.9 的库里 `users` 早就存在，`CREATE TABLE IF NOT EXISTS` 永远补不上这一列
-    //    （同类事故：0.7.1 的 `teamwork_reminder_prefs.builtin_name` 只写进建表语句、漏登记，
-    //    结果「七个设置项里只有称呼存不进去」，见 11-踩坑与说明.md）。
-    //    「拿不准就登记」：幂等补列零成本，漏了就是「真机上开关怎么点都不生效」。
+    // 记账（可关模块的第十个实例）：⚠️ 与上面那条**同一条理由** ——
+    // 结果「七个设置项里只有称呼存不进去」，见 11-踩坑与说明.md）。
+    // 「拿不准就登记」：幂等补列零成本，漏了就是「真机上开关怎么点都不生效」。
     ['users', 'hide_ledger', 'INTEGER NOT NULL DEFAULT 0'],
-    // ⭐ 0.8.6 行程（可关模块的第十一个实例）：⚠️ 与上面那条**同一条理由** ——
-    //    真机上装过 ≤0.8.5 的库里 `users` 早就存在，`CREATE TABLE IF NOT EXISTS` 永远补不上这一列
-    //    （同类事故：0.7.1 的 `teamwork_reminder_prefs.builtin_name` 只写进建表语句、漏登记，
-    //    结果「七个设置项里只有称呼存不进去」，见 11-踩坑与说明.md）。
-    //    「拿不准就登记」：幂等补列零成本，漏了就是「真机上开关怎么点都不生效」。
+    // 行程（可关模块的第十一个实例）：⚠️ 与上面那条**同一条理由** ——
+    // 结果「七个设置项里只有称呼存不进去」，见 11-踩坑与说明.md）。
+    // 「拿不准就登记」：幂等补列零成本，漏了就是「真机上开关怎么点都不生效」。
     ['users', 'hide_trip', 'INTEGER NOT NULL DEFAULT 0'],
-    // ⭐ 0.8.21 记账的眼睛初值（「隐藏要具有记忆功能…并且手机端和电脑端同步」）：
-    //    ⚠️ 与上面那条**同一条理由** —— 真机上装过 ≤0.8.20 的库里 `users` 早就存在，
-    //    `CREATE TABLE IF NOT EXISTS` 永远补不上这一列（同类事故见 11-踩坑与说明.md）。
-    //    「拿不准就登记」：幂等补列零成本，漏了就是「真机上眼睛怎么点都记不住」。
+    // 记账的眼睛初值（「隐藏要具有记忆功能…并且手机端和电脑端同步」）：
+    // `CREATE TABLE IF NOT EXISTS` 永远补不上这一列（同类事故见 11-踩坑与说明.md）。
+    // 「拿不准就登记」：幂等补列零成本，漏了就是「真机上眼睛怎么点都记不住」。
     ['users', 'hide_ledger_amount', 'INTEGER NOT NULL DEFAULT 0'],
-    // ⭐ 0.9.8 zx 实验室（可关模块的第十三个实例）：⚠️ 与上面那条**同一条理由** ——
-    //    真机上装过 ≤0.9.7 的库里 `users` 早就存在，`CREATE TABLE IF NOT EXISTS` 永远补不上这一列
-    //    （漏了的表现是「设置页那颗开关怎么点都自动弹回来」，而**不报错**）。
-    //    「拿不准就登记」：幂等补列零成本。
+    // zx 实验室（可关模块的第十三个实例）：⚠️ 与上面那条**同一条理由** ——
+    // （漏了的表现是「设置页那颗开关怎么点都自动弹回来」，而**不报错**）。
+    // 「拿不准就登记」：幂等补列零成本。
     ['users', 'hide_lab', 'INTEGER NOT NULL DEFAULT 0'],
-    // ⭐ 「zx 实验室使用须知已同意」：
-    //    ⚠️ 与上面几条**同一条理由** —— 真机上装过 ≤0.9.7 的库里 `users` 早就存在，
-    //    `CREATE TABLE IF NOT EXISTS` 永远补不上这一列（漏了的表现是「以后每次进实验室都再问一遍」，
-    //    而且**不报错**）。「拿不准就登记」：幂等补列零成本。
-    //    ⚠️ 默认 0 = 「还没同意」：老账号升上来第一件事就是读一遍须知 —— 这是安全的方向。
+    // 「zx 实验室使用须知已同意」：
+    // `CREATE TABLE IF NOT EXISTS` 永远补不上这一列（漏了的表现是「以后每次进实验室都再问一遍」，
+    // 而且**不报错**）。「拿不准就登记」：幂等补列零成本。
     ['users', 'lab_agreed', 'INTEGER NOT NULL DEFAULT 0'],
-    // ⭐ 0.8.5 导航排序（`nav_order` / `nav_tabs` 两列，语义见建表语句里那一段）：
-    //    ⚠️ 与上面几条**同一条理由** —— 真机上装过 ≤0.8.4 的库里 `users` 早就存在，
-    //    `CREATE TABLE IF NOT EXISTS` 永远补不上这两列
-    //    （同类事故：0.7.1 的 `teamwork_reminder_prefs.builtin_name` 只写进建表语句、漏登记，
-    //    结果「七个设置项里只有称呼存不进去」，见 11-踩坑与说明.md）。
-    //    「拿不准就登记」：幂等补列零成本，漏了就是「真机上拖完顺序、刷新又回去了」。
-    //    ⚠️ 刻意**不给 DEFAULT**：补出来的老行是 NULL = 「没排过」⇒ 前端走清单默认顺序
-    //    ——这与 `hide_*` 那几条「补列默认 0 = 显示入口」是同一个思路，只是这里默认值的载体是 NULL。
+    // 导航排序（`nav_order` / `nav_tabs` 两列，语义见建表语句里那一段）：
+    // `CREATE TABLE IF NOT EXISTS` 永远补不上这两列
+    // 结果「七个设置项里只有称呼存不进去」，见 11-踩坑与说明.md）。
     ['users', 'nav_order', 'TEXT'],
     ['users', 'nav_tabs', 'TEXT'],
     ['users', 'vault_lock_minutes', 'INTEGER NOT NULL DEFAULT 10'],
@@ -372,12 +310,8 @@ module.exports = {
    * 功能：通用 `_update()` 允许写入的列（白名单）—— 本模块**故意留空**。
    *
    * 说明：⚠️ `users` / `settings` 从不走通用 `_update()` ——
-   *      账号有专用方法（`setPassword` 要递增 `session_epoch` 踢会话、`setPasswordHash` 不能踢、
-   *      `setAdminFlag` 只改权限、`touchLastLogin` 只写时间），设置是整体 key-value。
-   *      把这些列交给通用 `_update()` 等于绕过那几处语义（尤其「重置密码必须踢会话」）。
-   *      留空是契约的一部分，不是漏写：**没有 case = 该表不可通用更新**，与 `default: return []` 同义。
-   *
-   * @type {Object}
+   * 账号有专用方法（`setPassword` 要递增 `session_epoch` 踢会话、`setPasswordHash` 不能踢、
+   * `setAdminFlag` 只改权限、`touchLastLogin` 只写时间），设置是整体 key-value。
    */
   allowedCols: {},
 
@@ -385,13 +319,8 @@ module.exports = {
    * 功能：带 `user_id` 的表 —— 「删账号要清空哪些表」的**唯一出处**。
    *
    * 说明：⚠️ 核心模块**只带一张**（`user_dir_grants`）：它是跨模块的基础设施
-   *      （加密信息现在用它，将来别的模块申请目录也用它），不属于任何一个业务模块，
-   *      所以不能挂在某个 `modules/<name>/schema.js` 下面。
-   *      ⚠️ 登记在这里的意思只有一件：**删账号时它要被清掉**。漏登记的表现是
-   *      「账号删了、授权目录还留着」（数据残留，且界面上再也看不到它）。
-   *      `users` 行不在此列 —— 它自己就是账号。
-   *
-   * @type {Array.<string>}
+   * （加密信息现在用它，将来别的模块申请目录也用它），不属于任何一个业务模块，
+   * 所以不能挂在某个 `modules/<name>/schema.js` 下面。
    */
   userScoped: ['user_dir_grants'],
 
@@ -405,11 +334,8 @@ module.exports = {
    * 功能：本模块的索引语句；核心模块不外挂任何索引。
    *
    * 说明：⚠️ `idx_users_username` 是**唯一索引**，有独立的 try/catch 降级逻辑（见 storage.js 的 `_createIndexes`），
-   *      所以不在这里声明 —— 声明了反而会绕过那层保护。
-   *      唯一例外是那张 `user_dir_grants`：它是普通索引（按账号取整份清单），
-   *      走同一条 `CREATE INDEX IF NOT EXISTS`，没有降级诉求。
-   *
-   * @type {Array.<string>}
+   * 所以不在这里声明 —— 声明了反而会绕过那层保护。
+   * 唯一例外是那张 `user_dir_grants`：它是普通索引（按账号取整份清单），
    */
   indexes: ['CREATE INDEX IF NOT EXISTS idx_user_dir_grants_user ON user_dir_grants(user_id)'],
 };

@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：SavedSession.kt
- * 职责：「上次登录」快照的模型与加解密读写
  */
 
 package com.zxdesk.app.store
@@ -16,8 +14,6 @@ import com.zxdesk.core.datasource.EntryFlow
 /**
  * 「上次登录」快照 —— 杀进程重开时用它直接回到 ZXDesk，不必再输密码/验证码。
  *
- * 存的内容都算凭据（`longToken`、`secret`、会话 Cookie），因此整段 JSON 交给 [SecureStore] 加密，
- * ⛔ 明文不落盘、⛔ 密码永不存。
  */
 data class SavedSession(
     /** 用户当时输入的地址，用于登录页预填（不是连接用的 baseUrl）。 */

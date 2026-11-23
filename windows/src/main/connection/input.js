@@ -1,15 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：input.js
- * 职责：输入识别（移植自 `Project/Android/core/connection/InputParser.kt`）
- *
- * 判定顺序**不可改**（改了就会把域名当 FNID、把端口当主机）：
- * 完整 URL → `[v6]:port` → `host:port` → 裸 IPv6 → IPv4 → 含 `.` 的域名 → FNID → 认不出。
- *
- * ⚠️ 已知取舍（照抄 Android）：`localhost` / `nas` 这类不带点也不带端口的名字会命中 FNID 形状，
- *    ⇒ 按 FNID 处理；界面文案里提示「局域网请填 IP 或带端口」。
- *
- * 纯函数、不碰 Electron —— 主进程与测试共用这一份。
  */
 
 /** FNID 形状：字母开头、总长 5~32、只含字母数字与 `-`、⛔ 不以 `-` 结尾。 */

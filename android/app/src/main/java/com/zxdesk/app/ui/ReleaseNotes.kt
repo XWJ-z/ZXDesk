@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：ReleaseNotes.kt
- * 职责：更新日志的数据，本端各版本做了什么
  */
 
 package com.zxdesk.app.ui
@@ -9,9 +7,6 @@ package com.zxdesk.app.ui
 /**
  * 一个版本的更新要点。
  *
- * ⚠️ 这里是**手写**的，不是从 CHANGELOG.json 生成的：那份是飞牛端的版本账本，
- *    安卓有独立的版本节奏（见 `Project/Android/README.md` §二）。
- *    每个版本发出去之前把这一条补上，顺序永远最新的在最上面。
  */
 internal data class ReleaseNote(
     val version: String,
@@ -22,8 +17,6 @@ internal data class ReleaseNote(
 /**
  * 安卓端更新日志，按版本倒序。
  *
- * 判据：只写**用户能感知到的事**。内部重构、注释整理、构建脚本调整不进来，
- * 那不是他会读的东西，写满反而把真正的变化埋掉。
  */
 internal val ANDROID_RELEASES: List<ReleaseNote> = listOf(
     ReleaseNote(

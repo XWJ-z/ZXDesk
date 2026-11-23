@@ -1,26 +1,12 @@
 /**
- * zip.js —— 最小 ZIP 编解码（0.2.1）
+ * zip.js —— 最小 ZIP 编解码
  *
  * 功能：`buildZip(entries)` 把若干「名字 + 字节」打成一份 ZIP；`readZip(buf)` 按**中央目录**
- *      把 ZIP 读回成 `Map<名字, Buffer>`。整体备份压缩包（`ZXDesk-数据备份-*.zip`）用这一对。
- *
- * ⭐ 为什么自己写，而不是引库 / spawn `zip`：铁律 5 要求零运行时依赖，而且 `zip` 命令在 NAS 上
- *    未必存在、受限环境下 spawn 还会撞上命名管道限制 —— 与「自己解析 tar，不 spawn `tar.exe`」
- *    是同一个理由。压缩直接用内置 `node:zlib` 的 `deflateRawSync` / `inflateRawSync`
- *    （ZIP 的 method 8 就是**裸** deflate，没有 zlib 头），CRC32 自带一张 256 项查表。
- *
- * ⚠️ 读的时候**只信中央目录**里的尺寸与偏移，绝不信局部文件头 —— 被 Windows 资源管理器
- *    「解压再压缩」过的 ZIP 会写 data descriptor（局部头里的尺寸是 0），信局部头就会读出空文件。
- * ⚠️ 不支持 Zip64（>4GB 或成员数 ≥ 65535）：遇到就明确报错，不要静默读出半个文件。
- *    ⚠️ 反过来说：成员名一律写 ASCII（我们只放 `manifest.json` / `zxdesk.db` / `zxdesk.json` /
- *    `backup.json`）—— 非 ASCII 名字要不要带 UTF-8 标志位（bit 11）各家实现不一致，绕开这个坑。
- * ⚠️ `manifest.json` 由调用方以**不压缩**方式存入（`compress: false`）：前端的「恢复前预览」
- *    要在浏览器里直接读出它，而浏览器里没有解压手段（`DecompressionStream` 老内核没有），
- *    未压缩 = 切一段字节就能 `JSON.parse`。这是刻意的取舍，改动时别顺手把它压掉。
+ * 把 ZIP 读回成 `Map<名字, Buffer>`。整体备份压缩包（`ZXDesk-数据备份-*.zip`）用这一对。
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.7.2
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/03-数据安全.md
  */
 'use strict';
@@ -37,10 +23,8 @@ const METHOD_STORE = 0;
 const METHOD_DEFLATE = 8;
 
 /**
- * ⭐ 单个成员**解压后**的尺寸上限（256MB）—— 009 报告 S8。
- *    `usize` 取自**中央目录**（声明值，可被伪造），这里只当「解压炸弹」的第一道闸：
- *    原实现是 `inflateRawSync` 之后才比对 `usize`，一个 64MB 的压缩包可以先膨胀出几 GB 再被拒（OOM 面）。
- *    ⚠️ 声明值不可信没关系 —— 真值仍由随后的「长度 === usize」+ CRC32 双重校验兜底，这里只是别先炸。
+ * 单个成员**解压后**的尺寸上限（256MB）—— 009 报告 S8。
+ * `usize` 取自**中央目录**（声明值，可被伪造），这里只当「解压炸弹」的第一道闸：
  */
 const MAX_MEMBER_USIZE = 256 * 1024 * 1024;
 
@@ -83,10 +67,8 @@ function dosDateTime(d) {
  * 功能：把若干「名字 + 字节」打成一整份 ZIP 字节流（局部头 + 中央目录 + 结尾标记）。
  *
  * 说明：默认逐个 deflate；**压完比原文还大就改存不压缩**（`manifest.json` 这种小文件几乎必然
- *      如此，硬压只会白白多一层壳）。写 `compress: false` 则强制不压 —— 前端要直接读它。
+ * 如此，硬压只会白白多一层壳）。写 `compress: false` 则强制不压 —— 前端要直接读它。
  *
- * @param {Array.<{name: string, data: Buffer|string, compress?: boolean}>} entries - 成员清单，顺序即写入顺序
- * @returns {Buffer} 完整的 ZIP 字节
  */
 function buildZip(entries) {
   const list = Array.isArray(entries) ? entries : [];
@@ -176,11 +158,8 @@ function findEocd(buf) {
  * 功能：把一份 ZIP 读成「成员名 → 字节」的 Map（只认原样存放与 deflate 两种方式）。
  *
  * 说明：⭐ 尺寸与数据位置**全部取自中央目录**（理由见文件头）；每一项都会核对解出来的长度
- *      与 CRC —— 文件被截断或改坏时**抛错**，而不是把半份数据交出去。
+ * 与 CRC —— 文件被截断或改坏时**抛错**，而不是把半份数据交出去。
  *
- * @param {Buffer} buf - 整个 ZIP 字节
- * @returns {Map.<string, Buffer>} 成员名 → 该成员的原始字节
- * @throws {Error} 不是 ZIP、文件被截断 / 损坏、或用了 Zip64 / 不支持的压缩方式时抛出
  */
 function readZip(buf) {
   if (!Buffer.isBuffer(buf) || buf.length < 22) throw new Error('文件太小，不是一个压缩包');
@@ -214,8 +193,8 @@ function readZip(buf) {
     if (start + csize > buf.length) throw new Error(`压缩包成员「${name}」的数据越界，文件可能已损坏`);
     const body = buf.subarray(start, start + csize);
     let data;
-    // ⭐ 009 报告 S8：**先校验、后膨胀** —— 按中央目录声明的解压尺寸拦一道（
-    //    原来是 `inflateRawSync` 之后才比对 `usize`，解压炸弹能先吃满内存再被拒）
+    // 009 报告 S8：**先校验、后膨胀** —— 按中央目录声明的解压尺寸拦一道（
+    // 原来是 `inflateRawSync` 之后才比对 `usize`，解压炸弹能先吃满内存再被拒）
     if (method === METHOD_DEFLATE && usize > MAX_MEMBER_USIZE) {
       throw new Error(`压缩包成员「${name}」解压后过大，已拒绝（可能是异常文件）`);
     }

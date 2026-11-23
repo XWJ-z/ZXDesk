@@ -1,15 +1,12 @@
 /**
-sheet/biff8.js —— BIFF8 记录流解析（网格化）
+ * sheet/biff8.js —— BIFF8 记录流解析（网格化）
  *
  * 功能：把 OLE2 里取出的 `Workbook` 流按 BIFF8 记录逐条解出来并网格化成字符串二维数组
- *      （`readBiff8`），含共享字符串表、合并单元格与行/列上限。
- *
- * ⚠️ 这是**用户上传字节**的主解析路径，所有记录长度与循环都必须有上限；
- *    畸形记录一律经 `fail()` 明确报错，不许静默产出半张表。
+ * （`readBiff8`），含共享字符串表、合并单元格与行/列上限。
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.5.3
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/06-课表.md
  */
 'use strict';
@@ -21,14 +18,8 @@ const { MAX_RECORDS, decodeRk, fmtNum } = require('./ole2.js');
  * 功能：解析 BIFF8 Workbook 流，逐子流还原出每张工作表的网格与合并区。
  *
  * 说明：实现的记录见；`sheet-parser.js` 只认「格子」，不认语义。
- * ⚠️ 三条硬要求（真实样本上都踩到过）：
- *   ① 尾部有 `0x0000 len=0` 的填充记录，要能安全跳过；
- *   ② 每条记录校验 `off+4+len <= 流长`，越界**立即中止**（错位会静默解析出一张错课表）；
- *   ③ `SST` 可能跨 `CONTINUE`，**不能先拼接字节再解析**（新块首字节是新的 grbit）。
- *
- * @param {Buffer} stream - Workbook 工作簿流的字节
- * @returns {Array.<{ name: string, rows: Array.<Array.<string>>, merges: Array.<Object> }>} 每张工作表的网格
- * @throws {Error} 记录长度越界 / 记录数超上限 / SST 下标越界时抛出
+ * 三条硬要求（真实样本上都踩到过）：
+ * ① 尾部有 `0x0000 len=0` 的填充记录，要能安全跳过；
  */
 function readBiff8(stream) {
   // ---- 先切成记录（带边界校验） ----
@@ -47,10 +38,8 @@ function readBiff8(stream) {
   /**
    * 功能：解析 SST（共享字符串表），按顺序还原出全部共享字符串。
    * 说明：字符串可能被 `CONTINUE` 切断，新块第 1 字节是新的 grbit（编码可能从压缩变 UTF-16），
-   *      所以必须逐字符跨段读取，不能先把所有段拼成一整块字节。
+   * 所以必须逐字符跨段读取，不能先把所有段拼成一整块字节。
    *
-   * @returns {Array.<string>} 共享字符串数组，下标即 LABELSST 记录引用的索引
-   * @throws {Error} 字符串数据或字符越界时抛出
    */
   const parseSst = () => {
     const idx = recs.findIndex((r) => r.type === 0x00fc);

@@ -1,8 +1,5 @@
 /**
- * 启动顺序的单测（0.1.0 首跑必崩的根因回归）。
- *
- * 关键：这条测试**在 0.1.0 的代码上必须失败**。0.1.0 的顺序是
- * `createWindow()` → `buildController()`，而 `prefs` 在 buildController 里才创建 ⇒ 窗口第一行 `prefs.get()` 就炸。
+ * 启动顺序的单测。
  */
 
 import assert from 'node:assert/strict';

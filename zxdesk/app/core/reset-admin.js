@@ -1,53 +1,8 @@
 'use strict';
 /**
  * core/reset-admin.js —— 离线重置账号密码（由 `cmd/reset-admin` 调用，也可直接 `node` 跑）
- *
  * 功能：一个顶层直接执行的离线运维脚本（不是模块），负责在 NAS 上以 root / 应用用户身份自救：
- *      `--list` 列出全部账号及各自的数据条数与口令可用性；`<用户名>` 重置指定账号的密码；
- *      `--make-admin <用户名>` 只提权、不改密码；不带参数则重置**唯一的管理员**。
- *      新密码一律从 stdin 读入；写入前先确认数据目录真实存在、数据层不是只读降级。
- *
- * 为什么必须有这个工具：
- *   本应用的管理员 = **出厂内置的 `admin` 账号**（见 server.js 的 `ensureBuiltinAdmin`）。
- *   ⚠️ 0.2.1 起**登录名可以改**（管理员的也能改），所以**不要靠「叫 `admin` 的账号」认人** ——
- *      用 `--list`，它按 `is_admin` 标记管理员；不带参数时重置的是**唯一的管理员**，与它叫什么名字无关。
- *   界面上**没有**、也不应该有一个「找回管理员密码」的入口 —— 那等于给所有人开后门。
- *   可管理员一旦忘了密码（或者库里的账号状态不对），整个应用就没人管得了（加不了成员、关不掉注册）。
- *   所以留一条**只能在 NAS 上、以 root/应用用户身份**执行的自救通道，就是这里。
- *   自定规矩（AGENTS.md §八）：凡涉及「第一次使用 / 找回入口」的功能，除了自动兜底，
- *   **必须再有一个人工命令能覆盖任意状态**，并在同一处把用法打出来 —— 就是本脚本。
- *
- * 用法：
- *   node reset-admin.js --list                  # 列出所有账号（忘了用户名时先看这个）
- *   node reset-admin.js <用户名>                # 重置指定账号
- *   node reset-admin.js                         # 不指定则重置**唯一的管理员**
- *   node reset-admin.js --make-admin <用户名>   # 只提权、不改密码（不需要输密码）
- *   新密码从 **stdin** 读入（shell 侧用 `read -s` 关掉回显再管道进来）。
- *
- * `--list` 会额外显示每个账号名下的**数据条数**与「没有可用口令」的账号：
- *   · 单用户时代的数据一律是 `user_id=1` ⇒ **数据不为零的那个账号就是能看到老数据的人**；
- *   · 散列为空/损坏的账号谁都登不进去（内置 admin 遇到这种情况会在启动时自动重写初始口令）。
- *   ⚠️ 这里显示条数是**故意**的，与需求 2 不冲突：那条红线管的是**界面**（管理员不该看到成员的任务数），
- *      而本脚本只能在 NAS 上以 root/应用用户身份跑 —— 有那个权限的人本来就能直接读库。
- *
- * ⚠️ 刻意**不用命令行参数**传密码：那会让明文出现在 `ps` 与 shell 历史里。
- * ⚠️ 走 `Store` 而不是直接写 SQL：SQLite 与 JSON 两种后端自动都支持，也不必在 bash 里解析库文件。
- * ⚠️ 本脚本**不做版本/环境判断之外的任何写入**，除了目标账号的 `password_hash` 与 `session_epoch`。
- *
- * ⭐ 0.8.1（记账 2 期）＋ 0.9.8（zx 实验室）：数据层同时开着**三个**库（主库 + 记账库 + 实验室库），
- *    所以本工具要认得**六个**数据文件名（`zxdesk.db` / `zxdesk.json` / `zxdesk-ledger.db` /
- *    `zxdesk-ledger.json` / `zxdesk-lab.db` / `zxdesk-lab.json`）。
- *    ⚠️ 分库打不开**不拦**本脚本：它只写账号行（住在主库），把人挡在门外解决不了任何问题 ——
- *    但会**如实告警一行**，免得「记账功能整天 503」被当成另一件事去查。
- *
- * 环境变量：
- *   DATA_DIR     数据目录（**唯一**来源，由 `cmd/reset-admin` 算好传进来）
- *
- * ⚠️⚠️ 0.9.1 修：**不再拿 `TRIM_PKGVAR` 兜底**。它是「当前进程所属应用」的运行时目录
- *    （只放 `app.log` / `app.pid`）；在飞牛的 Web 终端（fntermx）里执行本脚本时，
- *    TRIM_PKGVAR 指向的是**那个终端应用** ⇒ 兜过去＝拿别人的目录当数据目录，报「这里没有
- *    zxdesk.db」，而且看起来像「库丢了」，最难查。⛔ 别加回兜底链。
- *
+ * `--list` 列出全部账号及各自的数据条数与口令可用性；`<用户名>` 重置指定账号的密码；
  * @author zx
  * @date   2026-09-10
  * @since 0.9.7
@@ -57,8 +12,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { Store, dbStatusOf } = require('./storage.js');
-// ⭐ 数据位置索引：搬过家之后 `DATA_DIR`（安装位置）里已经没有库，得跟着索引走到真实位置
-const dl = require('./data-location.js');
 const { hashPassword, hashUsable, MIN_PASSWORD_LENGTH } = require('./auth.js');
 
 /**
@@ -71,7 +24,7 @@ function die(msg) {
   process.exit(1);
 }
 
-let dataDir = String(process.env.DATA_DIR || '').trim();
+const dataDir = String(process.env.DATA_DIR || '').trim();
 const wanted = String(process.argv[2] || '').trim();
 
 if (!dataDir) {
@@ -90,37 +43,15 @@ if (!fs.existsSync(dataDir)) {
   );
 }
 
-// ⭐ 跟随索引：`DATA_DIR` 是**安装位置**，而数据可能已经被搬到别处（设置 →「修改位置」）。
-//    判据刻意是「这里没有主库才跟」—— 显式给了一个真有库的目录时以它为准，不去覆盖人的指定。
-//    ⚠️ 索引指向的位置不可用时**报错退出**，⛔ 不回默认目录去改（那会在错的地方建库）。
-if (!dl.hasMainDb(dataDir)) {
-  // ⚠️ 只读 `DATA_DIR` 这一处索引，⛔ 不拿 `TRIM_PKGVAR` 兜底 —— 在飞牛 Web 终端里它指向
-  //    当前那个终端应用自己的目录，兜过去等于拿别人的目录当数据目录。
-  const idx = dl.readIndex(dataDir, dataDir).index;
-  if (idx && path.resolve(idx.current) !== path.resolve(dataDir)) {
-    if (!dl.hasMainDb(idx.current)) {
-      die(
-        `索引里记的数据位置（${idx.current}）里没有主库，不能在那里重置密码。\n` +
-          '     请先修好数据位置（应用里的恢复引导页，或 cmd/data-location-reset）。',
-      );
-    }
-    console.log(`（数据位置在 ${idx.current}，已按索引跟随过去）`);
-    dataDir = idx.current;
-  }
-}
 // 先确认这里真的是数据目录 —— `new Store()` 会 mkdir，指错了地方就会**凭空造一个空库**，
 // 然后告诉你「没有账号」，用户还以为数据丢了。宁可在这里停下。
-// ⭐ 0.8.1 / 0.9.8：数据层现在是**三个库**（主库 + 记账库 + 实验室库）⇒ 认得的数据文件有**六个**。
-//    ⚠️ 但判据不是「有任意一个就算」：只认到**分库**那几个文件时必须停下 ——
-//    那种情况下主库文件是真的不见了，而放行会让 `new Store()` 凭空建一个空的主库，
-//    接着 `--list` 告诉你「还没有任何账号」，把一个「主库丢了」的事故说成「你还没注册」
-//    （本脚本最容易骗人的一种失败）。所以这里把两件事分开说清楚。
+// 但判据不是「有任意一个就算」：只认到**分库**那几个文件时必须停下 ——
 const DATA_FILES = [
   'zxdesk.db',
   'zxdesk.json',
   'zxdesk-ledger.db',
   'zxdesk-ledger.json',
-  // ⭐ 0.9.8：第三个库（`database: "lab"` 的模块的表）
+  // 第三个库（`database: "lab"` 的模块的表）
   'zxdesk-lab.db',
   'zxdesk-lab.json',
 ];
@@ -154,8 +85,7 @@ if (info.readOnly) {
   );
 }
 
-// ⭐ 0.8.1：记账库（第二个库）不可用**不拦**本脚本 —— 它只写账号行（住在主库），
-// 把人挡在门外解决不了任何问题。但必须**说出来**：否则用户会把「记账功能整天 503」
+// 记账库（第二个库）不可用**不拦**本脚本 —— 它只写账号行（住在主库），
 // 当成另一件事去查，而真正的原因（那个文件打不开）一个字都没人告诉他。
 const ledgerStatus = dbStatusOf(store).ledger;
 if (ledgerStatus && !ledgerStatus.ok) {
@@ -181,7 +111,7 @@ if (wanted === '--list' || wanted === '-l') {
     const data = total
       ? ` · 数据: 项目 ${c.projects} / 项目任务 ${c.projectTasks} / 日常 ${c.dailyTasks}`
       : ' · 数据: 无';
-    // ⭐ 单用户时代的老数据一律 user_id=1 —— 直接标出来，省得用户猜「我原来的任务去哪了」
+    // 单用户时代的老数据一律 user_id=1 —— 直接标出来，省得用户猜「我原来的任务去哪了」
     const legacy = u.id === 1 && total ? ' ← 单用户时代的老数据（user_id=1）挂在它名下' : '';
     // `listUsers()` 走的是 sanitizeUser（不含口令哈希），这里按名字再取一次原始行来判断口令可用性
     const raw = store.findUserByName(u.username);
@@ -211,10 +141,7 @@ if (wanted === '--list' || wanted === '-l') {
 
 // ---- --make-admin <用户名>：把某个账号提升为管理员（**不需要密码**） ----
 //
-// ⭐ 这是「不管库里是什么状态，你都能拿回管理员」的最后一道保险：
-//    忘了管理员密码、或者压根不知道哪个账号是管理员时，用你**知道密码**的那个账号执行它，
-//    重启应用后它就有「成员管理」了。启动时的 `ensureBuiltinAdmin()` 覆盖不了「admin 这个名字被占、
-//    而占它的账号你也不想用」这类情况。
+// 这是「不管库里是什么状态，你都能拿回管理员」的最后一道保险：
 if (wanted === '--make-admin' || wanted === '-a') {
   const name = String(process.argv[3] || '').trim();
   if (!name) {
@@ -268,7 +195,6 @@ if (password.length < MIN_PASSWORD_LENGTH) die(`新密码至少 ${MIN_PASSWORD_L
 if (password.length > 200) die('新密码过长（最多 200 位）');
 
 // setPassword 会同时把 session_epoch +1 → 该账号**所有**已登录设备立刻失效。
-// 这正是我们要的：密码换了，旧会话不能还留着。
 if (!store.setPassword(target.id, hashPassword(password))) {
   die('写入失败：账号可能刚被删除，请重试。');
 }

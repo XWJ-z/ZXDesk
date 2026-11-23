@@ -1,20 +1,12 @@
 /**
  * 测试用的最小 HTTP/1.1（裸 `net` 实现）。
- *
- * ⚠️ 为什么不直接用 `node:http`：本机的 Node 22 一旦 import `node:http`，
- * 测试进程收尾时会抛 `WebAssembly.instantiate(): Out of memory`（与用例无关，
- * 只是 import 就会触发）⇒ 整份测试文件永远红。裸 net 没有这个问题，
- * 拿到的也确实是真实 socket 与真实字节流。
- *
- * 只实现下载模块用得到的部分：一个请求一连接、`Connection: close`、
- * 状态行 / 响应头 / body、`Range` 透传。
  */
 
 import net from 'node:net';
 import { PassThrough } from 'node:stream';
 
 /**
- * 起一个只在 127.0.0.1 监听的服务，端口由系统分配。
+ * 起一个只在 .1 监听的服务，端口由系统分配。
  * @param {(req:{method:string,url:string,headers:Record<string,string>}, res:{writeHead:Function,end:Function})=>void} handler
  */
 export function startRawServer(handler) {

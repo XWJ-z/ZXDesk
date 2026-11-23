@@ -2,27 +2,9 @@
  * desktop/views/admin.js —— 成员管理（仅管理员）
  *
  * 功能：成员管理面板的取数、渲染与四个弹窗。
- *      `loadAdmin()` 取两个接口（成员列表 + 自主注册开关）并渲染；
- *      `renderAdmin()` 画「添加成员」、自主注册开关、成员账号列表与底部说明，
- *      并接好添加 / 开关 / 改名 / 重置密码 / 删除成员的事件；
- *      `openAddMemberModal()` / `openRenameModal()` / `openResetPwModal()` / `confirmDeleteMember()`
- *      分别是添加、改名、重置密码、删除成员的弹窗；
- *      `roleText()` / `rolePill()` / `initialOf()` / `shortStamp()` / `lastLoginText()` 是账号元信息的展示小工具。
- *
- * ⭐ **0.4.1（第二轮）起它是「设置 → 成员管理」那一栏的内容**（指令：
- *    「设置中-成员管理独立出来放到账号管理后面」）：以前它是独立的一整屏（`#admin-view` + 「返回设置」），
- *    入口藏在「账号设置」栏里一行「›」上 —— 而左右结构里别的栏都是**就地换屏**，只有它整页跳走。
- *    现在这一栏由 `views/settings.js` 提供容器 `#admin-body`，本文件把内容画进去；
- *    `#admin-view` / `VIEW_NODES.admin` / `openAdmin()` 已整段撤掉（少一个视图，也少一次跳页）。
- *
- * ⭐ **0.4.1 把「数据位置」面板从这里搬走了**（「设置界面分为左右结构」）——
- *    它展示的是「我的数据存在哪」，与成员列表本无关系，只是当年「管理员专属信息」都堆在这一页。
- *    现在它在**设置 → 数据来源**那一栏里（`views/settings.js` 的 `dataPaneHtml()`），
- *    本页因此**不再取 `/api/admin/storage`**（少一次请求），也不再画那个面板。
- *    ⚠️ 它仍然是**仅管理员**的：接口本身就要管理员权限，非管理员那一栏只显示版本与后端。
- *
- * 说明：⭐ **管理面板不显示成员的任务条数**（需求红线：管理员也看不到成员的数据）——
- *      「有几条任务」已经属于统计泄露，所以这个面板里不要加任何「进度 / 条数 / 完成率」字段。
+ * `loadAdmin()` 取两个接口（成员列表 + 自主注册开关）并渲染；
+ * `renderAdmin()` 画「添加成员」、自主注册开关、成员账号列表与底部说明，
+ * 并接好添加 / 开关 / 改名 / 重置密码 / 删除成员的事件…
  *
  * @author zx
  * @date   2026-09-11
@@ -39,14 +21,8 @@ import { closeModal, openConfirmModal, openModal, setModalSave, toast } from '..
  * 功能：并取成员列表与自主注册开关两个接口，写进 `state` 后渲染成员管理面板。
  *
  * 说明：两个接口用 `Promise.all` 并取而不是串行 —— 首屏少一个网络往返。
- *      ⚠️ 只在**用户还停在设置页的「成员管理」栏**时才有容器可画（`#admin-body` 由那一栏提供）；
- *      不在时直接返回，不必为一个看不见的面板付费。
- *      ⚠️ 0.4.1 起这里**不再取 `/api/admin/storage`**：「数据位置」已经搬去设置页的「数据来源」栏，
- *      由那一栏按需拉（见 `views/settings.js` 的 `ensureStorage()`）—— 不进那一栏就不花这次请求。
- *      ⚠️ 取数失败要**说话**：手里还没有成员数据时把原因写进面板，别留一片空白；
- *      已经有数据（刷新失败）就保留那一版，只弹提示。
- *
- * @returns {Promise.<void>}
+ * 只在**用户还停在设置页的「成员管理」栏**时才有容器可画（`#admin-body` 由那一栏提供）；
+ * 不在时直接返回，不必为一个看不见的面板付费。
  */
 export async function loadAdmin() {
   const box = $('#admin-body');
@@ -102,25 +78,15 @@ export const shortStamp = (s, n) => (s ? String(s).slice(0, n) : '');
  * 说明：从未登录过要写清「从未登录」，别显示成空 —— 空着会被当成没加载出来。
  *
  * @param {?string} s - 账号的 `last_login_at`；为空即从未登录
- * @returns {string} 展示文案
  */
 export const lastLoginText = (s) => (s ? shortStamp(s, 16) : '从未登录');
 
 /**
  * 功能：渲染成员管理面板 —— 「添加成员」、自主注册开关、成员账号列表（头像 / 显示名 / 角色 / 创建时间 / 上次登录）
- *      与底部说明，并接好添加、开关、改名、重置密码与删除成员的事件。
+ * 与底部说明，并接好添加、开关、改名、重置密码与删除成员的事件。
  *
  * 说明：⚠️ 这里渲染的**只有账号元信息**（用户名 / 显示名 / 角色 / 创建时间 / 上次登录）。
- *      按需求 2，管理员看不到成员的任务，**连任务条数都不显示** —— 那是统计泄露。
- *      所以这个面板里不要加任何「进度 / 条数 / 完成率」字段。
- *      ⭐ 「添加成员」原来是页头右上角的按钮（那时本页是一整屏）；0.4.1（第二轮）起本页是设置里的一栏，
- *      它变成**列表上方的一行**（与设置页其它行同一套 `set-row` 写法），位置更靠近它要改的那份列表。
- *      「改名」每一行都有（**含管理员自己那一行**）：改名不踢会话、不动口令，没有副作用；
- *      而「重置密码」管理员自己那一行刻意不给 —— 重置会让人下线，而「自己的账号」那条路径
- *      会给本机续上新会话（重置自己等于把自己登出），改自己的密码请走「设置 → 账号设置」。
- *      ⚠️ 「数据位置」面板 0.4.1 起在**设置 → 数据来源**那一栏，别再加回本页（见文件头）。
- *
- * @returns {void}
+ * 按需求 2，管理员看不到成员的任务，**连任务条数都不显示** —— 那是统计泄露。
  */
 export function renderAdmin() {
   const box = $('#admin-body');
@@ -218,6 +184,8 @@ export function openAddMemberModal() {
     <div class="sec-note" style="font-size: 12px; color: var(--text-2); line-height: 1.7">
       初始密码在这里是明文显示，方便你抄给成员 —— 请通过私下渠道告诉他，他登录后可以在「设置 → 账号设置」里自己改。
     </div>`,
+    // 初始密码是明文输入框 ⇒ 整张不存草稿
+    { draft: false },
   );
   setModalSave('创建', false);
   $('#modal-save').onclick = async () => {
@@ -240,12 +208,8 @@ export function openAddMemberModal() {
  * 功能：打开「改名」弹窗 —— 改的是目标的**登录名**，提交后关闭弹窗并重新载入成员列表。
  *
  * 说明：⭐ 与「重置密码」不同，这里**对管理员账号一样可用**（内置 `admin` 改成自己的名字就是主要用例）：
- *      改名不踢会话、不动口令，不存在「重置自己会把自己登出」那个坑，所以不必像重置密码那样挡在门外。
- *      ⚠️ 旧名字**立刻不能登录**，但对方**已登录的设备不会被踢下线** —— 弹窗里要两件事都说清，
- *      否则用户会以为「改了名对方就掉线了」或反过来「改完还得重新登录才对」。
- *
- * @param {number} id - 目标账号 id；成员列表里找不到时直接返回
- * @returns {void}
+ * 改名不踢会话、不动口令，不存在「重置自己会把自己登出」那个坑，所以不必像重置密码那样挡在门外。
+ * 旧名字**立刻不能登录**，但对方**已登录的设备不会被踢下线** —— 弹窗里要两件事都说清，
  */
 export function openRenameModal(id) {
   const u = (state.adminUsers || []).find((x) => x.id === id);
@@ -283,7 +247,6 @@ export function openRenameModal(id) {
  * 说明：原密码无法查看、也无法找回，只能这样重置；成员列表里找不到该 id 时直接返回。
  *
  * @param {number} id - 目标账号 id
- * @returns {void}
  */
 export function openResetPwModal(id) {
   const u = (state.adminUsers || []).find((x) => x.id === id);
@@ -296,6 +259,8 @@ export function openResetPwModal(id) {
       重置后，<b>「${esc(u.username)}」所有设备上的登录会立即失效</b>，需要用新密码重新登录。
       原密码无法查看、也无法找回，只能这样重置。
     </div>`,
+    // 新密码是明文输入框 ⇒ 整张不存草稿
+    { draft: false },
   );
   setModalSave('重置', false);
   $('#modal-save').onclick = async () => {
@@ -313,10 +278,8 @@ export function openResetPwModal(id) {
  * 功能：删除成员前先弹二次确认，确认后调 `DELETE /api/admin/users/<id>` 并重新载入成员列表。
  *
  * 说明：⚠️ 删除会**连数据一起删且不可恢复**，所以这里必须二次确认（与删任务不同，撤销不了）——
- *      删任务不弹确认框、只给 toast 里的「撤销」，删成员没有那条退路。
+ * 删任务不弹确认框、只给 toast 里的「撤销」，删成员没有那条退路。
  *
- * @param {number} id - 目标账号 id；成员列表里找不到时直接返回
- * @returns {void}
  */
 export function confirmDeleteMember(id) {
   const u = (state.adminUsers || []).find((x) => x.id === id);

@@ -2,52 +2,14 @@
  * mobile/views/more.js —— 「更多」页 + 「设置」页（两块界面都在这个文件里）
  *
  * 功能：手机版「更多 / 设置」两页的全部渲染与表单逻辑 ——
- *      `renderMore()` 画「更多」页：**底部放不下、又要「点进去用」的那几个模块入口**
- *      ＋ ⭐ 0.8.5 起末尾那块「**首页导航栏**」（挑哪几个模块摆到底部标签栏、长按 ⠿ 拖动排序；
- *      配套的 `navTabToggle()` / `saveNavTabs()` / `bindNavDrag()` 也在这个文件里）；
- *      `renderSettings()` 画「设置」页：**数据来源 / 模块功能 / 账号设置 / 备份与恢复 / 整体备份**
- *      （管理员另有「成员管理」），顺序与内容跟电脑版一一对应；
- *      `dataSectionHtml()`、`modulesSectionHtml()`、`acctSectionHtml()`、`adminSectionHtml()`、
- *      `backupSectionHtml()`、`orgSectionHtml()` 各渲染一块，`toggleSec()` 收起 / 展开某一块，
- *      `changeNameForm()`、`changePwForm()`、`memberAddForm()`、`memberRenameForm()`、`memberResetForm()`
- *      是五个底部弹层表单，
- *      `roleText()`、`initialOf()`、`lastLoginText()` 是账号信息的格式化小工具，
- *      `doLogout()` 负责退出登录，`ensureAdminData()` 负责管理员数据的按需加载。
- *
- * ⭐ **0.4.1 的两次改动（指令）**：
- *    ① 底部标签栏固定 6 个 —— 今天 / 任务板 / 项目 / 课表 / **更多** / **设置**
- *      （收藏夹与对话原来是各自的标签，现在搬进「更多」；「设置」此前占着内部 id `more`，界面上叫「设置」）；
- *      ⭐ 0.5.2 更新：项目删掉了，「对话」又升回底部标签顶替它的位置 —— 现在六颗是
- *      今天 / 任务板 / **对话** / 课表 / **更多** / **设置**，「更多」页剩三个入口；
- *    ② 设置页的分块顺序与内容**跟电脑版对齐**，并且**「模块功能」里每一行都带介绍 + 开关**。
- *    ⚠️ 所以「开关」与「入口」现在是**两处**，别合到一起：
- *       **设置 → 模块功能** = 要不要这个功能（每行一句介绍 + 一个开关）；
- *       **更多** = 进去用它（`进入 ›`）。
- *    ⚠️ 判据仍然是「这一行是开关还是入口」，只是入口从设置页搬到了「更多」。
- *    ⚠️ 折叠：`state.foldSecs`（只放内存、不落 localStorage），设置页各块都能折叠。
- *      ⭐ 0.5.5：**默认只有「数据来源」展开，其余一律收起**（
- *      「进入设置，除了数据来源展开，其余全部折叠」）—— 默认值住在 `isFolded()`，是**三态**
- *      （没动过 / 手动收起 / 手动展开），所以手点开的块不会在下次重画时自己收回去。
- *
- * ⭐ **0.5.0 模块化重构：这两块都不再手写「有哪几个模块」** ——
- *    改造成前是 `HUB_ITEMS`（四个入口）与 `MODULES`（五个开关）两张写死的表，所以删掉一个模块目录，
- *    入口与开关照样在（点了会 400）。现在两者都由「服务端 `bootstrap.modules` 清单 ×
- *    本端接线表 `mobile/modules.js`」生成，顺序取 `module.json` 的 `order`。
- *    ⚠️ 那一行点下去要做什么**不在这里**：`mobile/app.js` 的 `onAction()` 处理两个**通用动作**
- *    `mod-open`（切到那一屏）与 `mod-toggle`（翻这个模块的开关），模块名走 `data-mod`——
- *    「每加一个模块就多一个 case」正是这次重构要消灭的东西。
- *
- * ⭐ **0.8.1：记账数据迁移的入口挂在「整体备份」那一栏**（与「恢复整体备份」并排）——
- *    它与电脑版 `desktop/views/settings.js` 是同一条口径、同一套待遇（危险红行 ＋ 说明 ＋
- *    手打「迁移」二字），只是搬到手机端的底部弹层里（版式各写一份，**文案逐字一致**）。
- *    ⚠️ 和那边一样，⛔ 不新开一栏、⛔ 不并进「恢复整体备份」那颗：它动的是**文件的存放位置**
- *    （数据一条不少），不是「恢复」——并进去会让用户在两个后果之间点错。
+ * `renderMore()` 画「更多」页：**底部放不下、又要「点进去用」的那几个模块入口**
+ * ＋ 起末尾那块「**首页导航栏**」（挑哪几个模块摆到底部标签栏、长按 ⠿ 拖动排序；
+ * 配套的 `navTabToggle()` / `saveNavTabs()` / `bindNavDrag()` 也在这个文件里）…
  *
  * @author zx
  * @date   2026-09-11
  * @since 0.9.7
  * 相关：docs/公共/架构文档/04-多用户与账号.md、07-前端-电脑版与手机版.md、13-决策记录.md（决策 67 / 76）、
- *      docs/公共/开发方案/21-记账2期-记账.md（§7.6 /）
  */
 
 import { api, BASE } from '../../core/api.js';
@@ -62,11 +24,10 @@ import { MAX_NAV_TABS, entryOn, moduleItems, navTabItems, navTabsWire } from '..
 import { mountModuleSlot, slotPaneDefs } from '../../core/slots.js';
 // ⭐ 0.9.8 第 11 轮：个人授权目录（与电脑端**共用同一个渲染**，见 core/grants.js）
 // ⚠️ `gotoAuth()`：模块不能反向 import 外壳，两端的跳转都由外壳注册（见 `setGotoAuthHandler`）
-import { GRANT_TEXT, gotoAuth, mountGrants } from '../../core/grants.js';
+import { GRANT_TEXT, mountGrants } from '../../core/grants.js';
 // ⭐ 数据位置那一块与电脑端**同源**（文案、三行库、红字都在那里），⛔ 别各写一份
-import { LOC_TEXT, archivesLineHtml, dbRowsHtml, mountBusy, redNoteHtml, tailOf, walNoteHtml } from '../../core/data-location.js';
+import { LOC_TEXT, dbRowsHtml, walNoteHtml } from '../../core/data-location.js';
 // ⭐ 已授权目录的**逐层浏览**（与电脑端、加密信息附件位置共用一处渲染与判据）
-import { mountDirTree } from '../../core/dir-tree.js';
 import { loadAdminData, refresh } from '../data.js';
 import { uiOf } from '../modules.js';
 import { state } from '../state.js';
@@ -215,6 +176,11 @@ export function acctSectionHtml(me) {
           <small>@${esc(me.username)} · ${roleText(me)}</small>
         </span>
       </div>
+      ${
+        me.username === 'admin'
+          ? '<div style="font-size:12px;line-height:1.6;color:var(--ink-3);margin:8px 2px 0">登录名还是 admin —— 这是公开的初始标识，建议改成只有你知道的名字（可选）。</div>'
+          : ''
+      }
       <button class="mrow" type="button" data-act="change-name" style="width:100%;font:inherit;text-align:left;margin-top:9px">
         <span class="mtxt">修改用户名<small>改的是登录用的名字，旧名字立刻登不上</small></span>
       </button>
@@ -441,11 +407,9 @@ export function dataSectionHtml() {
                  <div class="path-acts">
                    ${s.location && s.location.custom ? `<span class="loc-badge">${esc(LOC_TEXT.CUSTOM)}</span>` : ''}
                    <button class="btn sm" type="button" data-act="copy-path">复制路径</button>
-                   <button class="btn sm" type="button" data-act="move-data">${esc(LOC_TEXT.MOVE)}</button>
                  </div>
                </div>
-               ${redNoteHtml(s.location && s.location.custom)}
-               ${archivesLineHtml(s.location)}
+               <div class="loc-note">${esc(LOC_TEXT.MOVE_DISABLED)}</div>
                <div class="loc-lead">${esc(LOC_TEXT.LEAD)}</div>
                ${dbRowsHtml(s.databases, { compact: true })}
                ${walNoteHtml()}`
@@ -481,6 +445,8 @@ export function changePwForm() {
      <div class="sec-note" style="line-height:1.6">改完之后，你在<b>其他设备</b>上的登录会立即失效；这台手机不受影响。</div>`,
     `<button class="btn" type="button" data-act="sheet-close">取消</button>
      <button class="btn primary" type="button" data-act="sheet-save">保存</button>`,
+    // 口令不存草稿（「怕丢」不能成为多存一份明文的理由）
+    { draft: false },
   );
   /**
    * 功能：保存新密码 —— 校验长度与两次输入一致后提交给服务端，成功后关闭弹层并提示其他设备已下线。
@@ -515,6 +481,8 @@ export function memberAddForm() {
      <div class="sec-note" style="line-height:1.6">初始密码在这里明文显示，方便你抄给成员 —— 请私下告诉他；他登录后可以在「设置 → 账号设置」里自己改。</div>`,
     `<button class="btn" type="button" data-act="sheet-close">取消</button>
      <button class="btn primary" type="button" data-act="sheet-save">创建</button>`,
+    // ⚠️ 这张表单里那格初始密码是**明文输入框**（刻意方便抄给成员）⇒ 整张不存草稿
+    { draft: false },
   );
   /**
    * 功能：创建成员 —— 把用户名、显示名与初始密码提交给管理员接口，成功后关闭弹层、刷新数据并提示用户名。
@@ -553,6 +521,8 @@ export function memberResetForm(id) {
      )}」所有设备上的登录会立即失效，需要用新密码重新登录。原密码无法查看、也无法找回。</div>`,
     `<button class="btn" type="button" data-act="sheet-close">取消</button>
      <button class="btn primary" type="button" data-act="sheet-save">重置</button>`,
+    // ⚠️ 新密码是明文输入框（方便抄给对方）⇒ 整张不存草稿
+    { draft: false },
   );
   /**
    * 功能：重置成员密码 —— 把新密码提交给管理员接口，成功后关闭弹层并提示目标用户名。
@@ -1906,6 +1876,8 @@ export function orgRestoreFlow() {
        </label>`,
       `<button class="btn" type="button" data-act="sheet-close">取消</button>
        <button class="btn danger" type="button" data-act="rst-go" style="flex:1.4">确认恢复</button>`,
+      // ⚠️ 这里要用户亲手打「恢复」两个字 —— 存草稿等于下次打开自动替他打好，护栏就白设了
+      { draft: false },
     );
   });
 }
@@ -1985,6 +1957,8 @@ export function migrateLedgerFlow() {
      </label>`,
     `<button class="btn" type="button" data-act="sheet-close">取消</button>
      <button class="btn danger" type="button" data-act="mig-go" style="flex:1.4">开始迁移</button>`,
+    // 同「确认恢复」：要用户亲手打「迁移」两个字，存草稿等于替他打好了
+    { draft: false },
   );
 }
 
@@ -2046,113 +2020,8 @@ export async function migrateGo() {
   }
 }
 
-/**
- * 功能：手机端「修改数据位置」—— 先列出**已授权目录**让用户挑，再预检 / 确认 / 搬迁。
- *
- * 说明：⚠️ 候选只能来自服务端（`GET /api/admin/data-location/dirs`，与预检同一来源）：
- *      位置必须已经授权给本应用，否则应用账号连读都读不了。⛔ 不再弹飞牛选择器 ——
- *      选择器是「新授权」的通道，这里要的是「在已授权的里面挑」。
- *      ⚠️ 搬迁完成后必须到应用中心重启 —— 应用不会热切换数据库。
- * @returns {Promise.<void>} 无返回值
+/*
+ * 应用内**不再提供**修改数据位置（手机端入口与整条搬迁流程在这一版下线）。
+ * 文案唯一出处是 `core/data-location.js` 的 `LOC_TEXT.MOVE_DISABLED`；后端
+ * `/api/admin/data-location/{dirs,check,apply,mkdir}` 一并拒绝。
  */
-export async function moveDataFlow() {
-  // ⚠️ 骨架先摆好再挂树：`mountDirTree()` 会自己拉授权根并往这个容器里画，
-  //    而抽屉的 body 是 `openSheet()` 之后才存在的。
-  openSheet(
-    LOC_TEXT.DIALOG_TITLE,
-    '<div id="m-dir-tree" class="dt-host"></div>',
-    '<button class="btn" type="button" data-act="sheet-close">取消</button>' +
-      '<button class="btn primary" type="button" id="m-dir-use" data-act="move-data-pick" data-path="" disabled style="flex:1.4">用这个目录</button>',
-  );
-
-  const useBtn = document.getElementById('m-dir-use');
-  return mountDirTree(document.getElementById('m-dir-tree'), {
-    // 展开某一级时取它的子目录（`dir` 为空 ＝ 授权根那一层）
-    fetchDirs: (dir) => api('GET', `/api/admin/data-location/dirs?dir=${encodeURIComponent(dir || '')}`),
-    // ⭐ 直接在选中的文件夹里建一个空目录（数据位置要求空目录）
-    mkdir: (parent, name) => api('POST', '/api/admin/data-location/mkdir', { parent, name }),
-    onSelect: (p) => {
-      const v = String(p || '');
-      if (useBtn) {
-        useBtn.dataset.path = v;
-        useBtn.disabled = !v;
-      }
-    },
-    onGoto: () => {
-      closeSheet();
-      gotoAuth();
-    },
-  });
-}
-
-/**
- * 功能：选定某个已授权目录之后的那一半流程 —— 预检 → 二次确认 → 搬迁 → 轮询结果。
- * @param {string} path - 目录绝对路径
- * @returns {Promise.<void>} 无返回值
- */
-export async function moveDataPick(path) {
-  const target = String(path || '');
-  if (!target) return;
-  closeSheet();
-  let info;
-  try {
-    const c = await api('POST', '/api/admin/data-location/check', { path: target });
-    info = c && c.info;
-  } catch (e) {
-    toast(e.message || '预检没通过', true);
-    return;
-  }
-  const yes = await askConfirm({
-    title: '确认搬迁数据',
-    text:
-      `要搬 ${info ? info.files : '?'} 个文件，共 ${info ? formatBytes(info.bytes) : '—'}。\n` +
-      `${LOC_TEXT.LINE_READONLY}\n${LOC_TEXT.LINE_ARCHIVE}\n⚠️ ${LOC_TEXT.RED}`,
-    ok: '开始搬迁',
-    danger: true,
-  });
-  if (!yes) return;
-  // ⭐⭐ 与电脑端同一套「看得见的迁移」：全屏遮罩（相位 ＋ 进度）＋ 完成态停在遮罩上。
-  //    ⚠️ 以前这里只弹一句 toast，服务端几十毫秒就搬完了 ⇒ 用户只看到 toast 闪一下，
-  //    以为「没反应」，其实已经完成（2026-11-10 真机反馈）。
-  // ⚠️ 完成态**不可关闭**（重启前一直显示）：所以这里没有 `onClose` 了 ——
-  //    面板不刷新也没关系，用户必须去应用中心重启，重启后页面重载自然会拿到新位置。
-  const busy = mountBusy();
-  busy.update('preparing');
-  try {
-    await api('POST', '/api/admin/data-location/apply', { path: target });
-  } catch (e) {
-    busy.fail((e && e.message) || '原因未知');
-    return;
-  }
-  const ACTIVE = ['preparing', 'dumping', 'copying', 'verifying', 'deploying', 'packaging', 'index'];
-  let tries = 0;
-  const poll = async () => {
-    let st;
-    try {
-      st = await api('GET', '/api/admin/data-location/status');
-    } catch (_e) {
-      // 迁移中的请求偶尔会被冻结闸门挡回来（503）⇒ 继续问，别让遮罩卡死
-      if (tries < 600) {
-        tries += 1;
-        setTimeout(() => void poll(), 400);
-      } else {
-        busy.fail('等不到搬迁结果（状态接口一直失败），请退出后重进确认');
-      }
-      return;
-    }
-    const job = st && st.job;
-    if (job && ACTIVE.includes(String(job.phase))) {
-      busy.update(job.phase, job.bytesDone, job.bytesTotal);
-      tries += 1;
-      if (tries < 900) setTimeout(() => void poll(), 400);
-      else busy.fail('搬迁时间过长，请退出后重进确认');
-      return;
-    }
-    if (job && job.phase === 'pendingRestart') {
-      busy.done(tailOf(target));
-      return;
-    }
-    busy.fail((job && job.error) || '原因未知');
-  };
-  void poll();
-}

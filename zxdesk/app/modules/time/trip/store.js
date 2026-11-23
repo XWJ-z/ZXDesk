@@ -1,33 +1,11 @@
 'use strict';
 /**
- * modules/trip/store.js —— 行程业务方法（0.8.6）
- *
+ * modules/trip/store.js —— 行程业务方法
  * 功能：本模块的业务方法 —— `tripState`（一屏所需的全部：服务端「今天」＋ 三档开关 ＋
- *      下一张待出发的票 ＋ 行程列表（每条带票数与点数）＋ 区间车票）、行程 CRUD、车票 CRUD、
- *      三档提醒开关。轨迹点与打卡随、提醒候选与 AI 读方法随/。
- *
- * ⚠️ **方法名一律带 `trip` 前缀，绝不用 `list` / `get` / `state` 这种通用名**：
- *    `store/index.js` 把全部业务模块平铺到**同一个原型**上 —— 两个模块各写一个 `list()`，
- *    后来者会**静默覆盖**前者（0.5.0 起另有装配期护栏 `assertNoMethodClash()` 兜住，撞名即抛）。
- *    （`listTrips` / `getTrip` / `deleteTrip` 与同名 op 重名是**惯例**：业务方法住原型、
- *    原语住 `_bk`，两个对象互不干扰。）
- *
- * ⭐ 这里的方法**一律不出现 `this.backend`**：凡是要分后端的地方都走 `this._bk.<op>(...)`。
- *
- * ⭐⭐ **车票的「当地时刻字符串」口径**（方案 §三）：`depart_at` / `arrive_at` 是
- *    `YYYY-MM-DD HH:MM`（**定长两位**，字典序即时间序）—— ⛔ 不存 epoch、⛔ 不转 `Date` 比较。
- *    越是「减 3 天 / 加 3 天」这种算术，越要交给 `lib/depart.js`（唯一那份实现）。
- *
- * ⭐ **「现在」由调用方传进来**（`nowMs`，epoch 毫秒）：路由层取一次 `Date.now()` 传下来 ——
- *    本文件**不读 `Date.now()`**，测试才能喂假时间，而且一个请求内的「今天」「倒计时」共享同一个现在。
- *
- * ⚠️⚠️ **跨列校验判的是「改完之后整行长什么样」**（照 `calendar/store.js` 的 `assertEventRow`）：
- *    `kind` 枚举 / `depart_at` 与 `arrive_at` 的格式 / `lat` `lng` 范围 —— 一律 **400**，
- *    ⛔ 不静默清空、⛔ 不静默截断。`PUT` 只带一个键时，坏数据是**合并之后**才产生的。
- *
+ * 下一张待出发的票 ＋ 行程列表（每条带票数与点数）＋ 区间车票）、行程 CRUD、车票 CRUD、
  * @author zx
  * @date   2026-09-28
- * @since 0.8.33
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/24-行程.md、docs/公共/开发方案/25-行程-1期.md
  */
 
@@ -36,38 +14,27 @@ const { addMinutesKey, TRIP_STAGES, tripFireAt, tripReminderBody } = require('./
 
 /**
  * 三档提醒开关的**缺省值** —— ⭐ 全项目**唯一一处**。
- *
- * 说明：⚠️ 两个后端与建表语句都**不兜默认值**（`getTripPrefs()` 取不到就回 null）：
- *      默认值分散在多处时，表现是「换了后端行为就变了」，而且查起来毫无线索
- *      （与 `PREF_DEFAULT` / `REMINDER_PREFS_DEFAULT` 同一条理由）。
- *      ⭐ 三档都默认**开**：提醒是这一期的卖点，默认关掉等于把这个功能藏起来。
  * @type {Object.<string, number>}
  */
 const TRIP_PREF_DEFAULT = { remind_d3: 1, remind_d1: 1, remind_h3: 1 };
 
 /**
  * 三档开关里**允许被写**的键 —— 与 `upsertTripPrefs` 的几个列一一对应（多一个都没有去处）。
- *
- * 说明：⚠️ 请求体里多出来的键一律丢弃，⛔ 绝不让它顺着 `Object.assign` 流到别的列上。
- *      ⚠️ 与两个后端里那份 `PREF_KEYS` **必须逐字一致**（原语层不许 require 业务层常量，故各留一份）。
  * @type {Array.<string>}
  */
 const PREF_KEYS = ['remind_d3', 'remind_d1', 'remind_h3'];
 
 /**
- * 「人生日历」两项设置允许写入的键 —— ⭐ 0.8.9：从日历模块**整体搬来**。
+ * 「人生日历」两项设置允许写入的键 —— 从日历模块**整体搬来**。
  * ⚠️ 与两个后端里那份 `LIFE_KEYS` **必须逐字一致**；与上面的 `PREF_KEYS` **刻意分成两份**
- *（合并一份的下场是「改提醒开关时把出生日期写成 `undefined`」= 静默清空，先例见 calendar 那三份）。
  */
 const LIFE_KEYS = ['birth_date', 'expect_years'];
 
 /**
  * 功能：把 `time_trip_prefs` 那一行里的「人生日历」两项归一化 —— 空串 / 缺列 / null 一律当「没设」。
- *
  * 说明：⚠️ 与日历模块 `calendarLife()` 的归一化逐字同义（搬过来时一起搬的）：
  *      `expect_years` 过一遍 `Number` 是**必需的** —— 老库 / 手改过的 JSON 里它可能是字符串，
  *      前端拿 `'80'` 去乘 52 会**静默得到 NaN**（界面上就是一片空白，不报错）。
- *
  * @param {Object} row - `time_trip_prefs` 的一行（可能缺列）
  * @returns {{birth_date: ?string, expect_years: ?number}} 两项设置（没设就是 null）
  */
@@ -116,28 +83,24 @@ const NOTE_MAX = 500;
 /** 轨迹点 / 打卡点的两种类型 —— ⚠️ 与 `schema.js` 的 `CHECK (kind IN (…))` 逐字一致。 */
 const POINT_KINDS = ['track', 'checkin'];
 
-/** ⭐ 一次最多补多少个点（方案 §6.2：超限**可见地拒绝**，⛔ 不静默截断）。 */
+/** ⭐ 一次最多补多少个点（超限**可见地拒绝**，⛔ 不静默截断）。 */
 const POINT_MAX_BATCH = 200;
 
 /** 点的测量时刻下限（2000-01-01 UTC）—— 比这还早的 `at` 一定是设备时钟坏了。 */
 const AT_FLOOR_MS = Date.UTC(2000, 0, 1);
 
 /**
- * ⭐ 允许的「未来量」：`at` 最多能比服务端现在晚 5 分钟（方案 §6.2）。
- *
  * 说明：⚠️ 完全不判「不能是未来」会放过一台时钟差了几个小时的设备 —— 那台设备采的点
  *      会**排到轨迹最前面**，里程与时长当场算错，而且**没有任何迹象**。
- *      给 5 分钟是给设备间的正常时钟漂移留余量（NTP 之外的机器差几秒很常见）。
  */
 const AT_FUTURE_MS = 5 * 60 * 1000;
 
-/** 打卡点名字的长度上限 —— ⚠️ 方案 §6.2 没写 label 的上限，按「站名 / 地名」的量级取 60（记附录 D）。 */
+/** 打卡点名字的长度上限 —— 按「站名 / 地名」的量级取 60。 */
 const LABEL_MAX = 60;
 
 /**
  * 功能：`YYYY-MM-DD` 是不是**真实存在**的一天（回环校验）。
  *
- * 说明：⚠️ 只比字符串不够：`2026-02-30` 也过正则，落库后字典序照样可比，
  *      但**永远匹配不到任何一天** ⇒ 表现是「保存成功了，却找不到它」，而且不报错。
  *
  * @param {string} s - 待校验的日期串
@@ -188,12 +151,9 @@ function keyOf(ms) {
 
 /**
  * 功能：把一条行程整理成界面要的形状（同一份字段名，两端共用）。
- *
  * 说明：⚠️ 空值一律给**稳定的空形状**（`''` 而不是 `null` / `undefined`）：
  *      两端渲染都直接读这些字段，缺键会让 `undefined` 混进 DOM 与比较里。
- *      ⚠️ **刻意不落「状态（计划中 / 进行中 / 已结束）」**（方案 §4.4）：它是派生的，
  *      由两端自己用 `start_date` / `end_date` 与「今天」算。
- *
  * @param {Object} r - 库里的行
  * @returns {Object} 界面用的对象
  */
@@ -201,7 +161,7 @@ function shapeTrip(r) {
   return {
     id: Number(r.id),
     title: String(r.title || ''),
-    // ⭐ 0.8.6：交通工具 / 起点 / 终点 / 起始时刻 —— 四个都**可空**，
+    // 交通工具 / 起点 / 终点 / 起始时刻 —— 四个都**可空**，
     //    ⇒ 一律给稳定的空串（⛔ 不是 null，两端渲染直接读这些字段）。
     vehicle: r.vehicle == null ? '' : String(r.vehicle),
     from_place: r.from_place == null ? '' : String(r.from_place),
@@ -216,11 +176,9 @@ function shapeTrip(r) {
 
 /**
  * 功能：把一张车票整理成界面要的形状。
- *
  * 说明：⚠️ `price_fen` 空时给 **`null`**（不是 0）：「没填票价」与「票价 0 元」是两件事，
  *      把它们合成 0 会让界面显示一个凭空捏造的「¥0.00」。
  *      ⚠️ `trip_id` 空时给 `null`（= 不归属任何行程， 的**正常状态**）。
- *
  * @param {Object} r - 库里的行
  * @returns {Object} 界面用的对象
  */
@@ -244,7 +202,6 @@ function shapeTicket(r) {
 }
 
 /**
- * 功能：校验**合并之后**的一行行程（方案 §6.2 的三条硬约束）。
  * @param {Object} row - 合并之后的行程行（界面形状）
  * @returns {void}
  * @throws {Error} 违反任一条时抛 400
@@ -252,7 +209,7 @@ function shapeTicket(r) {
 function assertTripRow(row) {
   const title = String(row.title || '').trim();
   if (!title) throw badRequest('行程得有个名字');
-  // ⭐ 0.8.6：交通工具的值域 = 票型那一套（`TICKET_KINDS`）—— ⛔ 别在别处再内联一份 `===` 判断。
+  // 交通工具的值域 = 票型那一套（`TICKET_KINDS`）—— ⛔ 别在别处再内联一份 `===` 判断。
   //    ⚠️ 接口层（`routes.js` 的 `checkTrip`）已经拦过一道；这里**再判一次**是照 `assertTicketRow`
   //    的既有做法（两层都判）：Store 是别的模块能直接调的入口，硬边界不该只挂在路由上。
   const vehicle = String(row.vehicle || '');
@@ -261,14 +218,14 @@ function assertTripRow(row) {
     throw badRequest('开始日期要写成 2026-09-30 这样的日期，而且要真实存在');
   }
   // ⭐ 起始**时刻**可空；给了就必须是 `HH:MM`（⚠️ 与 `routes.js` 的 `checkClock` 同一条口径）
-  //    ⚠️⭐ 0.8.13：这里**刻意不要求非空**（「新建必填」只落在 `createTrip()` 那条路上）——
+  //    这里**刻意不要求非空**（「新建必填」只落在 `createTrip()` 那条路上）——
   //    无条件要求非空会让老行（`start_time` 是 NULL）「改个标题就 400」。
   const st = String(row.start_time || '');
   if (st) {
     const m = /^(\d{2}):(\d{2})$/.exec(st);
     if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) throw badRequest('起始时刻要写成 08:30 这样');
   }
-  // ⭐⭐ 0.8.13：结束**时刻**（可空）—— 首页按它算那一段的长度
+  // 结束**时刻**（可空）—— 首页按它算那一段的长度
   const et = String(row.end_time || '');
   if (et) {
     const m = /^(\d{2}):(\d{2})$/.exec(et);
@@ -286,13 +243,6 @@ function assertTripRow(row) {
 }
 
 /**
- * 功能：校验**合并之后**的一行车票（方案 §6.2 的跨列硬约束）。
- *
- * 说明：⭐ 判的是「改完之后整行长什么样」，不是请求体 —— `PUT` 只带 `kind` 时，
- *      坏数据是**合并之后**才产生的。
- *      ⚠️⭐ **刻意不判「到达必须晚于出发」**：红眼航班与跨零点的车都是**正常情形**
- *      （方案 §4.2 明令 ⛔ 不加那条跨列约束）。
- *
  * @param {Object} row - 合并之后的车票行（界面形状）
  * @returns {void}
  * @throws {Error} 违反任一条时抛 400
@@ -329,11 +279,9 @@ function shiftDate(s, n) {
 
 /**
  * 功能：把**可空的数字列**归一化 —— 空串 / null 一律给 `null`（⛔ 不给 0）。
- *
  * 说明：⚠️⭐ **不在这里做类型校验**：`Number('abc')` 是 `NaN`，而 `NaN` 落进库之后
  *      既不等于任何数、`JSON.stringify` 还会把它变成 `null` —— 那就成了「存进去了一列空值」
  *      且**没有人报错**。校验由 `assertPointRow()` 负责（`Number.isFinite` 会拦下 NaN）。
- *
  * @param {*} v - 原始值
  * @returns {?number} 数字或 null
  */
@@ -344,11 +292,9 @@ function numOrNull(v) {
 
 /**
  * 功能：把一条轨迹点 / 打卡点整理成界面要的形状（同一份字段名，两端共用）。
- *
  * 说明：⚠️ 空值一律给**稳定的空形状**（`''` 而不是 `undefined`）—— 两端直接读这些字段渲染。
  *      ⚠️ `accuracy` / `altitude` / `speed` / `heading` 空时给 **`null`**（不是 0）：
  *      「手填的点没有精度」与「精度 0 米」是两件事（同 `price_fen` 的口径）。
- *
  * @param {Object} r - 库里的行
  * @returns {Object} 界面用的对象
  */
@@ -370,13 +316,6 @@ function shapePoint(r) {
 }
 
 /**
- * 功能：校验一个点的所有字段（方案 §6.2 的「点」那几行）—— 不满足一律抛 400。
- *
- * 说明：⭐ 判的是**准备落库的那一行**（不是请求体）：`at` 缺省时会被补成服务端现在，
- *      所以 `at` 的上下界要**在补完之后**判。
- *      ⚠️ `at` 未来量那条是**安全边界**：设备时钟差了 3 小时的话，那批点会排到轨迹最前面，
- *      里程与时长当场算错、而且没有任何迹象（见 `AT_FUTURE_MS` 的说明）。
- *
  * @param {Object} row - 准备落库的点行
  * @param {number} nowMs - 服务端现在（epoch 毫秒）
  * @returns {void}
@@ -406,10 +345,6 @@ function assertPointRow(row, nowMs) {
 
 /**
  * 功能：把「归属行程」归一化成行程 id 或 `null`，并确认它**是自己的行程**。
- *
- * 说明：⚠️ 方案 §6.2 明写：`trip_id` 不是自己的行程 ⇒ **400**（不是 404 —— 它是个**入参**，
- *      不是被访问的资源）。`null` / 空串是**合法值**（= 不归属任何行程， 的正常状态）。
- *
  * @param {Object} store - Store 实例（取 `_bk.getTrip` 判权）
  * @param {number} uid - 账号 id
  * @param {*} tripId - 原始入参
@@ -425,13 +360,6 @@ function resolveTripId(store, uid, tripId) {
 }
 
 /**
- * 功能：把一条入参点归一化成**准备落库的行**（含 `user_id` / `trip_id` / `created_at`）。
- *
- * 说明：⭐ `created_at` 是**服务端收下那一刻**（审计），与 `at`（设备给的测量时刻）**分两列**——
- *      轨迹是批量补传的，把「服务端收到」当成「测量时刻」会把一路上采的点全压成同一时刻
- *      （方案 §三）。
- *      ⚠️ `at` 没带时用服务端现在（打卡走「此刻」是合理的；补传的点一定带 `at`）。
- *
  * @param {number} uid - 账号 id
  * @param {?(number|string)} tripId - 归属行程 id 或 null
  * @param {Object} p - 原始点
@@ -466,12 +394,9 @@ module.exports = {
   // ---- 三档提醒开关 ----
   /**
    * 功能：读本账号的三档出发提醒开关 —— ⭐ **缺省值在这里合并**（表里没有行时也给一份可用的）。
-   *
    * 说明：⭐ 这是「默认值只有一处」的落点（`TRIP_PREF_DEFAULT`）：两个后端都不兜默认值，
    *      所以「这台机器还从没改过开关」与「改了、但改成了默认值」对外表现完全一样。
    *      ⚠️ 库里的值可能是字符串（老库 / 手改过的 JSON）—— 统一压成 0/1，
-   *      否则前端 `remind_d3 === 1` 这种判据会在 `'1'` 上静默比错。
-   *
    * @param {number} uid - 账号 id
    * @returns {Object} `{ remind_d3, remind_d1, remind_h3 }`（都是 0 / 1）
    */
@@ -504,19 +429,12 @@ module.exports = {
     return this.tripPrefs(uid);
   },
 
-  // ---- 人生日历（⭐ 0.8.9：「整体从日历模块搬进行程」）----
+  // ---- 人生日历（「整体从日历模块搬进行程」）----
   /**
    * 功能：取本账号的「人生日历」两项设置（出生日期 / 预期寿命）。
-   *
-   * 说明：⭐ 0.8.9：这两项**原住日历模块**（`calendar_prefs.birth_date` / `expect_years`，0.7.8 起），
+   * 说明：这两项**原住日历模块**，
    *      本版整体搬进行程 ⇒ 现在读的是 `time_trip_prefs` 的两列（与提醒开关同一行，一人一行）。
    *      ⚠️ **搬迁是懒的、且不改写旧数据**：新表两列都还空着时，就**只读地**回退
-   *      去问日历模块要一次旧值（走它的公开方法 `calendarLife()`，⛔ 不直连它的表）。
-   *      「真正搬过去」发生在**第一次在行程里保存**（`tripSaveLife()` 写新表 ＋ 清日历那两列）。
-   *      ⇒ 从没改过设置的人照样看得到自己的生日；改过一次之后，数据就只在行程这边了。
-   *      ⚠️ 日历模块被整个删掉时 `calendarLife` 根本不存在 ⇒ 自然回退成「没设过」（空态），
-   *      不抛错（与「模块被删 ⇒ 界面照常」的既有口径一致）。
-   *
    * @param {number} uid - 账号 id
    * @returns {{birth_date: ?string, expect_years: ?number}} 两项设置（没设就是 null）
    */
@@ -533,14 +451,6 @@ module.exports = {
 
   /**
    * 功能：改本账号的「人生日历」两项设置 —— ⭐ **带哪个键写哪个键**。
-   *
-   * 说明：⚠️ 与 `tripSavePrefs()` 同构（先读合并、再整份写回）—— 合并的**基准是 `tripLife()`**，
-   *      也就是**含上面那次回退**的当前值，于是「只改出生日期」不会把预期寿命写成空。
-   *      ⭐ 写新表之后**顺手把日历那边那两列清空** —— 这一步才是「搬」。
-   *      ⛔ 顺序不能反：先写新表、成功了再清旧列；反过来的话中途出错就是两边都空 = 真丢数据。
-   *      它是**幂等**的：旧列已经是空时不再动手。
-   *      ⚠️ 清空走日历模块的公开方法 `calendarSaveLife()`（⛔ 不直连它的表）；模块不在时跳过。
-   *
    * @param {number} uid - 账号 id
    * @param {Object} patch - 只含要改的那几个键（已由路由层校验格式；值可为 `null` = 清空）
    * @param {number} nowMs - 现在（epoch 毫秒，当 `updated_at` 用）
@@ -593,7 +503,6 @@ module.exports = {
    * 功能：新建一条行程。
    * @param {number} uid - 账号 id
    * @param {Object} input - 已归一化：`{title, vehicle, from_place, to_place, start_date,
-   *      start_time, end_date, note}`
    * @param {number} nowMs - 现在（epoch 毫秒，当两个审计列）
    * @returns {Object} 新建的行（界面形状）
    * @throws {Error} 违反约束时抛 400；数据层只读时抛 503
@@ -615,9 +524,9 @@ module.exports = {
       created_at: Math.round(Number(nowMs)),
       updated_at: Math.round(Number(nowMs)),
     };
-    // ⭐⭐ 0.8.13：起始时刻**新建必填** —— 首页「日程表」要按
+    // 起始时刻**新建必填** —— 首页「日程表」要按
     //    `start_time` ~ `end_time` 画那一段的**长度**，缺了它那一段就画不出来。
-    //    ⚠️⭐ 判据刻意只落在**新建**这一条路上：老行（0.8.6 之前建的）`start_time` 是 NULL，
+    //    ⚠️⭐ 判据刻意只落在**新建**这一条路上：老行`start_time` 是 NULL，
     //    若在 `checkTripRow()` 里无条件要求非空，**老行程改个标题就会 400**（真踩过的同类）。
     //    ⚠️ 两层都判（与 `assertTripRow` 同款）：Store 也是别的模块能直接调的入口。
     if (!String(row.start_time || '').trim()) throw badRequest('请给这条行程一个起始时刻（格式 08:30）');
@@ -626,11 +535,6 @@ module.exports = {
   },
 
   /**
-   * 功能：改一条行程 —— ⭐ **逐字段**：请求带哪个键改哪个键，没带的保持原样。
-   *
-   * 说明：⭐ 做法是「**先取现状 → 把 patch 合上去 → 校验合并结果 → 整行写回**」。
-   *      ⚠️ 取不到就是 **404**（越权与不存在逐字一致 ——）。
-   *
    * @param {number} uid - 账号 id
    * @param {number} id - 行程 id
    * @param {Object} patch - 只含要改的那几个键
@@ -648,9 +552,9 @@ module.exports = {
     for (const k of TRIP_EDIT_COLS) {
       if (Object.prototype.hasOwnProperty.call(src, k)) next[k] = src[k] == null ? '' : String(src[k]);
     }
-    // ⭐⭐ 0.8.13：起始时刻**不许被清空** —— 它的语义是「必填」，
+    // 起始时刻**不许被清空** —— 它的语义是「必填」，
     //    而空串在这套口径里正是「清掉」。
-    //    ⚠️⭐ 判据是「**从有值改成空**」，⛔ 不是「合并之后为空」：老行（0.8.6 之前建的）
+    //    ⚠️⭐ 判据是「**从有值改成空**」，⛔ 不是「合并之后为空」：老行
     //    `start_time` 本来就是 NULL，无条件拦会让**老行程改个标题就 400**（这一条真踩过）。
     if (String(cur.start_time || '') && !String(next.start_time || '')) {
       throw badRequest('起始时刻不能清空（日程表要按它排那一段）');
@@ -677,11 +581,7 @@ module.exports = {
 
   /**
    * 功能：删一条行程 —— ⭐ **解绑不级联删**。
-   *
-   * 说明：⭐⭐ 「解绑 → 删」由**原语的 `deleteTrip`** 在**一个事务**里做完（方案 §5.5）：
    *      挂在它名下的车票与轨迹点 `trip_id` 置空、行程那一行删掉 —— ⛔ 不许出现半截状态。
-   *      ⚠️ 先取一次再删：取不到就 404（越权与不存在逐字一致）。
-   *
    * @param {number} uid - 账号 id
    * @param {number} id - 行程 id
    * @returns {boolean} 删成功为 true
@@ -720,10 +620,6 @@ module.exports = {
 
   /**
    * 功能：新建一张车票。
-   *
-   * 说明：⚠️ `trip_id` 带值时**必须是自己的行程** ⇒ 否则 **400**（不是 404 ——
-   *      它是个**入参**，不是被访问的资源；方案 §6.2 明写这一条）。
-   *
    * @param {number} uid - 账号 id
    * @param {Object} input - 已归一化的车票字段
    * @param {number} nowMs - 现在（epoch 毫秒，当两个审计列）
@@ -759,7 +655,6 @@ module.exports = {
   },
 
   /**
-   * 功能：改一张车票 —— ⭐ **逐字段**，跨列校验判**合并之后**的那一行。
    * @param {number} uid - 账号 id
    * @param {number} id - 车票 id
    * @param {Object} patch - 只含要改的那几个键
@@ -828,15 +723,9 @@ module.exports = {
   // ---- 轨迹点与打卡点 ----
   /**
    * 功能：取一条行程（或「不挂行程」）的**全部点**（按测量时刻升序）。
-   *
-   * 说明：⭐⭐ **它刻意不进 `tripState`**（方案 §5.3）：`time_trip_points` 是本项目**第一张可能上万行
-   *      的用户表**（一段两小时的车程 ≈ 数百到数千点）⇒ 首屏只给**点数**（一条 `COUNT`），
-   *      点只在**轨迹屏**单独取。⛔ 别图省事把它并进一屏接口 —— 那会让每次进屏都拖上万个点。
-   *
    * @param {number} uid - 账号 id
    * @param {?(number|string)} tripId - 行程 id；`null` / 省略 = 「不挂行程的那些」
    * @param {?number} fromMs - 最早测量时刻（epoch 毫秒，含）；null = 不限 —— ⚠️ 它来自
-   *      `GET /api/trip/points?from=&to=`（方案 §6.1 第 9 条），不是方案 §5.3 的签名简写里那两项
    * @param {?number} toMs - 最晚测量时刻（epoch 毫秒，含）；null = 不限
    * @returns {Array.<Object>} 界面形状的点数组（按 `at` 升序）
    */
@@ -848,16 +737,6 @@ module.exports = {
   },
 
   /**
-   * 功能：⭐ **批量补点** —— 整批要么全进、要么不进（一个事务）。
-   *
-   * 说明：⭐⭐ **一次 ≤ 200 个**（方案 §6.2「超限可见地拒绝」，⛔ 不静默截断）：前端每 20 秒或
-   *      每满 50 个点发一批，200 是它 4 倍余量 ⇒ 正常路径永远碰不到这道闸门，碰到就是有人在
-   *      拿别的客户端一次性灌点，那种请求该被看得见地拒掉。
-   *      ⚠️ 路由层也判一次（那里能把 `max` / `got` 一起回给调用方）；这里是**第二道**，
-   *      防的是「跨模块直接调业务方法」绕过接口层。
-   *      ⚠️ 空数组 ⇒ **400 而不是静默成功**：一次什么都没带的补点请求一定是调用方写错了，
-   *      静默回 200 会让它一直错下去。
-   *
    * @param {number} uid - 账号 id
    * @param {?(number|string)} tripId - 归属行程 id 或 null
    * @param {Array.<Object>} points - 待写入的点（每项可含 `kind` / `at` / `lat` / `lng` / …）
@@ -880,12 +759,6 @@ module.exports = {
   },
 
   /**
-   * 功能：⭐ **打卡** —— 记一个点 ＋ 一个名字（`kind = 'checkin'`）。
-   *
-   * 说明：⭐ 「打卡」与「轨迹」是**同一张表里的两种点**（方案 §三），差别只在 `kind`
-   *      与 `label`：轨迹点是「走过的路」，打卡点是「一个有意义的地点」。
-   *      ⚠️ **不要求有行程**（方案 §11.1-5）： 的直接结果 —— 不建行程也能打卡。
-   *
    * @param {number} uid - 账号 id
    * @param {?(number|string)} tripId - 归属行程 id 或 null
    * @param {Object} point - `{ at?, lat, lng, accuracy?, label?, note? }`
@@ -904,12 +777,6 @@ module.exports = {
 
   /**
    * 功能：改一个点的**名字 / 备注 / 归属** —— ⛔ 坐标与测量时刻**一个都不许改**。
-   *
-   * 说明：⭐⭐ 「打卡点的名字写错了」与「这条轨迹记的不对」是**两件事**：前者随手可改，
-   *      后者只能删掉重记。⇒ 原语 `setTripPoint()` 的列清单里**只有三列**
-   *      （`label` / `note` / `trip_id`），`lat` / `lng` / `at` 进不了 SET
-   *      （与 `allowedCols` 四张表全空是同一条纪律的两个落点）。
-   *
    * @param {number} uid - 账号 id
    * @param {number} id - 点 id
    * @param {Object} patch - 只含要改的那几个键（`label` / `note` / `trip_id`）
@@ -957,12 +824,7 @@ module.exports = {
 
   /**
    * 功能：清空一条行程（或「不挂行程」）的全部点，返回删掉的条数。
-   *
    * 说明：⚠️ `tripId` 为 `null` 时**只清「不挂行程的那些」**（⛔ 不是「清全部」）——
-   *      与 `listTripPoints` 共用同一个判据（原语层的 `tripCond()`，一处实现）。
-   *      ⚠️ 前端必须做二次确认（方案 §6.1 第 14 条）；服务端**不**代做那个判断
-   *      （接口只做「取参数 → 校验 → 调业务方法 → 回响应」）。
-   *
    * @param {number} uid - 账号 id
    * @param {?(number|string)} tripId - 行程 id 或 null
    * @returns {number} 删掉的条数
@@ -977,35 +839,9 @@ module.exports = {
 
   // ---- 给对话 ticker 的公开读方法----
   /**
-   * 功能：⭐ **判据唯一处** —— 「这一分钟该发哪些出发提醒」（方案 §8.3）。
-   *
-   * 说明：⭐⭐ 上游（`modules/teamwork/ticker.js` 的 `dueJobs()` 第 ⑤ 组）**一行算术都不做**，
-   *      它只把这个函数的返回值原样展开。这么分工的理由：三档 `fire_at` 的算术只该有一份
-   *      ，而它住在 `lib/depart.js`；在 ticker 里再判一遍就是第二份口径。
-   *
-   * **两扇门**（任一条不成立 ⇒ 一个候选都不给）：
-   *      ① `users.hide_trip` 开着（这个账号把行程模块关掉了）；
-   *      ② 三档提醒开关全关（`time_trip_prefs` 那一行，读侧已合并默认值）。
-   *
-   * ⭐ **扫的窗口**：从 `nowKey` 起、未来「最长档位 + 1 分钟」（3 天 + 1 分钟）——
-   *      靠 `idx_trip_tickets_user_depart` 那条索引，⛔ 不把全部车票捞回来。
-   *      「+1 分钟」是为了让**恰好落在窗口末端的**那一分钟也进得来（闭区间）。
-   *
-   * ⭐ **同一分钟多张票 ⇒ 一条消息**（照 `courseBody()` 的做法）：按**档位**分组，
-   *      每组一个候选，`ref_keys` 是组里每一个 (票, 档位) 的键 —— 于是
-   *      「只要有**一条**键记上账就发、全记过就跳过」这条既有语义（`fireGroup`）自动成立。
-   *      ⚠️ 同一分钟**不同档位**（一张票的 d3 与另一张票的 d1 撞在一起）**不合并**：
-   *      它们开头那句不一样，挤进一个气泡反而看不清。
-   *
-   * ⚠️ **`ref_key` 的形状**：`trip:<车票 id>:<档位>` —— 刻意**不带「归属」**（见 `ticker.js`
-   *      的 `KIND` 说明）；也刻意**不带 `fire_at` 之外的时刻信息** ⇒
-   *      「票被改到另一个出发时刻之后，同一档**不会**再发第二次」是**刻意的**
-   *      （否则改一次票就多发一轮）。这条在方案 §8.5 明写、`trip.test.js` 有测试钉着，⛔ 别当 bug 修。
-   *
    * @param {number} uid - 账号 id
    * @param {string} nowKey - 这一分钟 `YYYY-MM-DD HH:MM`
    * @returns {Array.<{stage: string, ref_keys: Array.<string>, fire_at: string, body: string}>}
-   *      待发候选（按 `TRIP_STAGES` 的顺序；空数组 = 这一分钟没有）
    */
   tripReminderCandidates(uid, nowKey) {
     const me = Number(uid);
@@ -1054,19 +890,6 @@ module.exports = {
 
   // ---- 给 AI 读工具的公开读方法----
   /**
-   * 功能：⭐ **给 AI 读工具的公开读方法**（方案 §9.1）—— **返回面就是出网面**。
-   *
-   * 说明：⭐⭐ **刻意与 `tripState` 分开**（方案 §5.3）：工具面要的是「有哪些行程、什么票」，
-   *      而 `tripState` 带 `id` / 订单号 / 备注 / 点数…… 混用一个方法的下场是
-   *      「改一屏的摘要顺手就把订单号带出了网」，而且**没有任何用例会红**。
-   *
-   * ⛔ **不给**：`id` / `order_no`（票号与订单号）/ `price_fen` / `note` / 任何坐标
-   *      。
-   * ⭐ **取不到要带原因**（照 `busySlots()` 的既有教训）：`reason ∈ {ok, disabled, empty}`
-   *      —— ⛔ 一律**不许回一个空数组**（空数组与「我真的没有行程」在模型眼里长得一模一样）。
-   *      ⚠️ `no_module` 那一种由调用方（AI 侧的 `need` 守卫）判 —— 模块被整目录删掉时
-   *      这个方法在原型上根本不存在，那时**轮不到它自己说话**。
-   *
    * @param {number} uid - 账号 id
    * @param {string} range - `upcoming`（今天起 30 天，默认）或 `recent`（最近 30 天）
    * @param {?string} today - 服务端「今天」`YYYY-MM-DD`（由调用方传，本方法不读时钟）
@@ -1090,7 +913,7 @@ module.exports = {
       range: r,
       reason: 'ok',
       // ⚠️ 逐字段白名单搬运（⛔ 不是 `{...t}`）：多一个字段就是多一次出网
-      //    ⭐ 0.8.6（给行程加了交通工具 / 起点 / 终点 / 起始时刻）：
+      //    （给行程加了交通工具 / 起点 / 终点 / 起始时刻）：
       //    这四项恰恰是「我接下来要去哪」要答的东西 ⇒ 一并给出（与车票那边给 `from` / `to`
       //    同一个尺度：都是**用户自己填的地名与类别**）。
       //    ⛔ `note` / 任何 `id` / 任何坐标**仍然不给**。
@@ -1119,25 +942,11 @@ module.exports = {
   // ---- 一屏聚合 ----
   /**
    * 功能：把「一屏所需的全部」一次给全 —— 服务端「今天」＋ 三档开关 ＋ 下一张待出发的票
-   *      ＋ 行程列表（每条带票数与点数）＋ 区间车票。
-   *
-   * 说明：⭐ 合并成**一个** `GET /api/trip`：少一次请求、少一处 401 分支，
-   *      进屏时三块不会各闪一次。
-   *      ⭐⭐ **不含任何轨迹点**：`time_trip_points` 是本项目第一张可能上万行的用户表，
-   *      点只在**轨迹屏**单独取（`GET /api/trip/points`）—— 首屏只给**点数**（一条 COUNT）。
-   *      ⚠️⭐ **列表摘要是「票数 ＋ 点数」，刻意不含里程**（方案 §7.2 的示例里写了 128 km）：
-   *      要在列表里算里程就得把每条行程的上万个点**全取回来**，与方案自己那条
-   *      「⛔ 前端不许为了画一行摘要把上万个点捞回来」冲突 ⇒ 里程只在轨迹屏算
-   *      （那里本来就要取全部点）。这一处偏离已记进方案附录 D 与 §15.3.3。
-   *      ⚠️ `upcoming` = **现在之后最早的一张票**（`depart_at > nowKey`），没有就给 `null`。
-   *      倒计时文案由两端用 `shared.js` 的 `tripCountdown()` 现算（⛔ 服务端不下发文案）。
-   *
    * @param {number} uid - 账号 id
    * @param {?string} from - 区间起点 `YYYY-MM-DD`（省略 = 不限）
    * @param {?string} to - 区间终点 `YYYY-MM-DD`（省略 = 不限）
    * @param {number} nowMs - 服务端当前时刻（epoch 毫秒）
    * @returns {{today: string, from: string, to: string, prefs: Object, upcoming: ?Object,
-   *      trips: Array.<Object>, tickets: Array.<Object>, loose_point_count: number}} 一屏所需的全部
    */
   tripState(uid, from, to, nowMs) {
     const me = Number(uid);
@@ -1164,12 +973,11 @@ module.exports = {
     const next = this._bk.departingTripTickets(me, nowKey, horizon);
     const upcoming = next.length ? this.getTripTicket(me, Number(next[0].id)) : null;
 
-    // ⭐ 「没挂进行程的点」的条数（方案 §7.2 的 ③ 未归属块要含轨迹）：⛔ 不是「全部点」，是一条 COUNT
     const loosePointCount = this._bk.countTripPoints(me, null) || 0;
 
     return {
       today,
-      // ⭐ 0.8.33 追改（「还没开始怎么就进行中了」）：「现在几点」也搭车带回 ——
+      // 追改（「还没开始怎么就进行中了」）：「现在几点」也搭车带回 ——
       //    行程状态从前只看**整日**（`start_date ≤ today ≤ end_date` 就算进行中），
       //    于是一条今天 18:00 才出发的行程，上午十点就写着「进行中」。
       //    ⚠️ 与 `today` 同一条纪律：**服务端时间才是权威源**，前端⛔ 不许读本机时钟去算它
@@ -1178,7 +986,7 @@ module.exports = {
       from: f,
       to: t,
       prefs: this.tripPrefs(me),
-      // ⭐ 0.8.9：人生日历那两项设置随一屏搭车带回（零新请求）——
+      // 人生日历那两项设置随一屏搭车带回（零新请求）——
       //    它已经从日历模块整体搬进行程，行程屏那颗按钮点开就是它。
       life: this.tripLife(me),
       upcoming,

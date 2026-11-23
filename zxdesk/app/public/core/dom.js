@@ -2,13 +2,13 @@
  * core/dom.js —— DOM / 文本小工具（两端唯一一份）
  *
  * 功能：两端共用的 DOM 与文本小助手 —— `esc()` 转义 HTML、`$()` 取元素、`el()` 建元素、
- *      `skeletonHtml()` 出骨架屏占位、`fitTabs()` 把药丸里各颗按钮撑成等宽、
- *      `swapIn()`（⭐ 0.8.15 起定义在 `core/transition.js`，这里只 re-export）、
- *      `formatBytes()` 把字节数转成人话、`copyText()` 带兜底地复制到剪贴板。
+ * `skeletonHtml()` 出骨架屏占位、`fitTabs()` 把药丸里各颗按钮撑成等宽、
+ * `swapIn()`（起定义在 `core/transition.js`，这里只 re-export）、
+ * `formatBytes()` 把字节数转成人话、`copyText()` 带兜底地复制到剪贴板。
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.15
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/07-前端-电脑版与手机版.md
  */
 

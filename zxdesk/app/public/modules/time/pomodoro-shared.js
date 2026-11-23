@@ -1,26 +1,14 @@
 /**
- * modules/time/pomodoro-shared.js —— 番茄钟**两端共用**的纯函数 / 文案 / 提示音（0.8.32）
+ * modules/time/pomodoro-shared.js —— 番茄钟**两端共用**的纯函数 / 文案 / 提示音
  *
  * 功能：番茄钟那一屏两端要说的**话**与要算的**数**只有这一份 ——
- *      · `pomoFmt()` / `pomoPct()`      —— 倒计时文案与进度百分比；
- *      · `pomoStateText()` / `pomoHintText()` —— 左上那枚状态胶囊与表盘下面那行小字；
- *      · `pomoStatText()` / `pomoBreakStatText()` —— 今天 / 本周的统计两行；
- *      · `pomoPhaseOf()`                —— 这条记录是专注还是哪一档休息（配色的判据）；
- *      · `pomoNextBreak()`              —— ⭐ **第几个番茄之后该进长休**的判据；
- *      · `pomoBeep()`                   —— ⭐ 到点那一声（Web Audio 现场合成，⛔ 不引外部音频）。
- *
- * ⭐⭐ **为什么抽成一份**：0.7.5 起 `pomodoro-desktop.js` 与 `pomodoro-mobile.js`
- *    各自抄了一份同样的函数。抄一份的代价当时看不出来，直到 0.8.32 要改文案 —— 那就得
- *    「记得两边都改」，而漏一边的表现是「电脑端说『已完成，待确认』、手机端说别的」，
- *    **没有任何用例会红**（前端文案没有对账护栏）。
- *
- * ⚠️ 本文件**模块作用域里不许出现任何浏览器 API**（`window` / `document` / `AudioContext`）——
- *    `frontend-modules.test.js` 会在 Node 里直接 import 前端文件跑断言，模块求值期碰 DOM 会当场炸。
- *    要用浏览器 API 的（只有提示音那一个）一律写在**函数体**里。
+ * `pomoFmt()` / `pomoPct()`      —— 倒计时文案与进度百分比；
+ * `pomoStateText()` / `pomoHintText()` —— 左上那枚状态胶囊与表盘下面那行小字；
+ * `pomoStatText()` / `pomoBreakStatText()` —— 今天 / 本周的统计两行…
  *
  * @author zx
  * @date   2026-10-14
- * @since 0.8.33
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/21-番茄钟.md
  */
 
@@ -64,7 +52,6 @@ export function pomoPct(r) {
  * 说明：⚠️ 认不出来的一律当**专注**（老数据没有 `kind` 这一列，那种记录本来就是专注）。
  *
  * @param {?Object} s - 记录（可为 null）
- * @returns {string} `'focus'` / `'short_break'` / `'long_break'`
  */
 export function pomoPhaseOf(s) {
   const k = s && s.kind;
@@ -83,20 +70,16 @@ export function pomoStateText(s, r) {
   if (s.status === 'paused') return phase === 'focus' ? '已暂停' : '休息暂停中';
   if (s.status !== 'running') return s.status === 'completed' ? '已完成' : '已放弃';
   if (r.due) return '待确认';
-  // ⭐ 只给「正在跑」这一档挂番茄 / 咖啡：已完成、已放弃、还没开始挂上就很怪
+  // 只给「正在跑」这一档挂番茄 / 咖啡：已完成、已放弃、还没开始挂上就很怪
   return phase === 'focus' ? '🍅 专注中' : phase === 'long_break' ? '☕ 长休中' : '🌿 短休中';
 }
 
 /**
  * 功能：表盘下面那行小字 —— 说清楚「还剩多少 / 该干什么」，⛔ 不编数字。
  *
- * ⚠️⭐ 0.8.33（「介绍语要简洁明了」）：每一句都压到 **6 字以内** ——
- *      原来「暂停中 —— 剩下的时间不会偷偷走掉」那种半句话的解释一律删掉（表盘上的数字
- *      自己就说明了一切）。
- *
- * @param {?Object} s - 记录（可为 null）
- * @param {Object} r - `clock.remaining()` 的结果
- * @returns {string} 一句话
+ * ：每一句都压到 **6 字以内** ——
+ * 原来「暂停中 —— 剩下的时间不会偷偷走掉」那种半句话的解释一律删掉（表盘上的数字
+ * 自己就说明了一切）。
  */
 export function pomoHintText(s, r) {
   const phase = pomoPhaseOf(s);
@@ -111,13 +94,8 @@ export function pomoHintText(s, r) {
  * 功能：⭐ 第几个番茄之后该进长休 —— **判据只有这一处**（两端⛔ 别各算一遍）。
  *
  * 说明：⭐ 番茄工作法的经典规则：每完成 N 个专注进一次长休（`rounds_before_long`，默认 4），
- *      其余每一次进短休。⚠️ 入参是**今天已经完成的专注数**（含刚刚那一个）——
- *      口径与 `pomodoroStats()` 的「今日专注数」同源，⛔ 别拿「本次会话里的计数」来算
- *      （那会随刷新归零，而统计里的数字不会）。
- *
- * @param {number} doneFocus - 今天已经完成的专注个数（含刚完成的那个）
- * @param {number} rounds - 几个轮次之后进长休（偏好 `rounds_before_long`）
- * @returns {string} `'long_break'` 或 `'short_break'`
+ * 其余每一次进短休。⚠️ 入参是**今天已经完成的专注数**（含刚刚那一个）——
+ * 口径与 `pomodoroStats()` 的「今日专注数」同源，⛔ 别拿「本次会话里的计数」来算
  */
 export function pomoNextBreak(doneFocus, rounds) {
   const n = Math.round(Number(doneFocus) || 0);
@@ -138,18 +116,14 @@ const POMO_ICON_MAX = 8;
 export function pomoStatText(st, label) {
   const d = st || { count: 0, minutes: 0 };
   if (!d.count) return `${label}还没有番茄`;
-  // ⚠️⭐ 超过上限时⛔ **别只画前 8 个** —— 数字写着 11、图标只有 8 个，看上去像「只有 8 个」
+  // 超过上限时⛔ **别只画前 8 个** —— 数字写着 11、图标只有 8 个，看上去像「只有 8 个」
   const icons = d.count <= POMO_ICON_MAX ? '🍅'.repeat(d.count) : `🍅×${d.count}`;
   return `${label} <b>${d.count}</b> 个 · 共 <b>${d.minutes}</b> 分钟 <span class="pomo-tomatoes">${icons}</span>`;
 }
 
 /**
- * 功能：**休息**那一行的文案（0.8.32）—— ⛔ 与番茄那一路分开数、分开写。
  *
- * 说明：⚠️ 0 次时给一句人话（不给「0 次 · 共 0 分钟」那种机械写法）。
  * @param {?Object} st - `stats.today/week` 里的 `breaks`
- * @param {string} label - 区间名（今天 / 本周）
- * @returns {string} 一行字
  */
 export function pomoBreakStatText(st, label) {
   const d = st || { count: 0, minutes: 0 };
@@ -161,17 +135,10 @@ export function pomoBreakStatText(st, label) {
  * 功能：到一个段落结束时响一声 —— ⭐ **现场合成**（⛔ 不引外部音频文件、不加依赖）。
  *
  * 说明：⚠️ 只在偏好 `sound_on` 为 1 时由调用方调它（判据不在本函数里 ——
- *      本函数只管「响」，不管「该不该响」）。
- *      ⚠️ 浏览器要求音频必须由**用户手势**触发过才允许播放 —— 用户点过「开始专注」，
- *      所以到点那一下是能响的；被拦下时**静默失败**（⛔ 不弹错，那会变成一句没人看得懂的报错）。
- *      ⚠️ 默认 0.06 的音量 ＋ 240→180Hz 两声短音：够听见，不吓人。
- *      ⚠️ `AudioContext` 用完就关（`close()`）—— 攒着不关会在手机上留下一个一直醒着的音频线程。
- *
- * @param {string} [phase] - `'focus'`（专注结束）/ `'short_break'` / `'long_break'`（休息结束）
- * @returns {void}
+ * 本函数只管「响」，不管「该不该响」）。
+ * 浏览器要求音频必须由**用户手势**触发过才允许播放 —— 用户点过「开始专注」，
  */
 export function pomoBeep(phase) {
-  // ⚠️ 模块作用域不许碰浏览器 API ⇒ 这段只能在函数体里（见文件头）
   const Ctx = typeof window === 'undefined' ? null : window.AudioContext || window.webkitAudioContext;
   if (!Ctx) return;
   // 专注结束：两声下行（该歇了）；休息结束：两声上行（该干活了）

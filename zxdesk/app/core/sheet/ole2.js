@@ -1,15 +1,12 @@
 /**
-sheet/ole2.js —— OLE2 复合文档与 BIFF8 基础类型解码
+ * sheet/ole2.js —— OLE2 复合文档与 BIFF8 基础类型解码
  *
  * 功能：解 OLE2 复合文档取出目标流（`readOle2`），以及 BIFF8 记录里用到的数值解码
- *      （`decodeRk` 解 RK 数值、`fmtNum` 归一化数字文本）与扇区链表常量。
- *
- * ⚠️ 真 BIFF8 `.xls` 是 **OLE2 复合文档**，魔数 `D0 CF 11 E0 A1 B1 1A E1`；
- *    **按内容识别，不看扩展名** —— 扩展名在真实世界里对不上。
+ * （`decodeRk` 解 RK 数值、`fmtNum` 归一化数字文本）与扇区链表常量。
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.5.3
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/06-课表.md
  */
 'use strict';
@@ -27,8 +24,6 @@ const FREE_SECTOR = 0xffffffff;
  * 说明：任何结构性异常都抛 `Error`（由 parseSheet 统一转成友好结果）。
  *
  * @param {Buffer} buf - 整个 .xls 文件的字节
- * @returns {{ streams: Map.<string, Buffer>, names: Array.<string> }} 流表与全部普通流的名字列表
- * @throws {Error} 头部不足 / 扇区大小非法 / FAT 链成环或越界 / 流长度不足时抛出
  */
 function readOle2(buf) {
   if (buf.length < 512) throw new Error('OLE2 头部不足 512 字节');
@@ -63,8 +58,6 @@ function readOle2(buf) {
    *
    * @param {number} start - 链的起始扇区号
    * @param {Array.<number>} fat - 分配表（下标为扇区号，值为下一个扇区号）
-   * @returns {Array.<number>} 该链上的扇区号数组
-   * @throws {Error} 链成环或越界时抛出
    */
   const chain = (start, fat) => {
     const out = [];
@@ -136,7 +129,6 @@ function readOle2(buf) {
     }
     let data;
     if (e.size < miniCutoff) {
-      // ⚠️ 小流走 miniFAT + mini 流：**必须实现**，否则小于 4KB 的 Workbook 直接读不出来
       data = Buffer.concat(chain(e.start, miniFat).map((n) => miniStream.subarray(n * mssz, (n + 1) * mssz)));
     } else {
       data = Buffer.concat(chain(e.start, fat).map(sector));

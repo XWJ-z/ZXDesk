@@ -2,20 +2,11 @@
 
 /**
  * modules/ai/backend/json.js —— ai辅助任务（接口配置 / AI 会话 / AI 消息）的**JSON 版原语**
- *
  * 功能：本模块自己的存储原语（JSON 回退），与另一个后端**同名同参** ——
- *      「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，
- *      少一个 / 打错名 / 形参个数不一致 = 启动即抛。
- *
- * ⚠️ ops 里的 `this` 是 **Store 实例**（门面用 `.apply(store, …)` 调用），所以照常访问
- *    `this.db` / `this.data` / `this._saveJson()` / `this._listSql()`。
- *
- * ⚠️ 本层**只做数据**，权限判断不在这一层 —— 但每个读写 op 都带 `uid` 参数，
- *    让 methods 层能先判归属再操作（「先判权、后取数」是硬约束）。
- *
+ * 「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，
  * @author zx
  * @date   2026-09-15
- * @since 0.8.13
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/18-ai辅助任务.md、docs/公共/开发方案/11-AI辅助任务-1期.md、docs/公共/开发方案/14-AI辅助任务-2期.md
  */
 
@@ -27,12 +18,10 @@ const { uidOf } = require('../../../core/store/helpers.js');
  * 说明：⚠️ **只归一读出来的值，绝不写回数据**（可空列的语义保持一致）；SQLite 版对应用 `COALESCE`。
  *
  * @param {*} v - 原始列值
- * @returns {number} 段号（≥ 1）
  */
 const seg1 = (v) => (v == null ? 1 : Number(v));
 
 const ops = {
-  // ---- AI 辅助任务（0.6.0）----
   /**
    * 功能：取该账号的 AI 接口配置行；没配过返回 null。
    * @param {(number|string)} uid - 用户 id
@@ -46,16 +35,8 @@ const ops = {
    * 功能：为该账号插入一行 AI 接口配置（**每账号一行**，调用方保证先查过没有）。
    *
    * 说明：⚠️ id 用 JSON 后端的**全局自增序列** `data._seq`（与全部表同一发号器，不按表各发各的）。
-   *      ⚠️⭐ 这里必须写 `this.data._seq` —— 0.6.x（2 期）修的一处既有笔误：原先写的是
-   *      `this._seq`（Store 上没有这个属性）⇒ 发出来的 id 是 `undefined`、写完 `undefined + 1` 变 NaN。
-   *      SQLite 后端走 rowid、`getAiConfig` 又只按 `user_id` 找，所以这个错**一直没露出来**；
-   *      2 期的分段与消息路径按 id 排序/核对，JSON 后端第一次跑就被它咬住（见 ttt/test/ai.test.js
-   *      的「两个后端同一批用例」）。其它模块的 JSON 后端一律是 `this.data._seq`，与它们对齐。
-   *
-   * @param {(number|string)} uid - 用户 id
-   * @param {{base_url: string, model: string, enabled: number, key_iv: ?string,
-   *          key_cipher: ?string, key_tag: ?string, stamp: string}} f - 字段与时间戳
-   * @returns {void}
+   * 这里必须写 `this.data._seq` —— 0.6.x（2 期）修的一处既有笔误：原先写的是
+   * `this._seq`（Store 上没有这个属性）⇒ 发出来的 id 是 `undefined`、写完 `undefined + 1` 变 NaN。
    */
   insertAiConfig(uid, f) {
     const row = {
@@ -79,12 +60,8 @@ const ops = {
    * 功能：更新该账号的 AI 接口配置的**指定列**，返回是否更新到了行。
    *
    * 说明：⚠️ `setKeys` 的合法集由 `modules/ai/store.js` 的**硬映射**收口，本层不再重复校验。
-   *      ⚠️ 与 SQLite 版**逐字段同语义**：行不存在返回 false（调用方保证先 `insertAiConfig`）。
+   * 与 SQLite 版**逐字段同语义**：行不存在返回 false（调用方保证先 `insertAiConfig`）。
    *
-   * @param {(number|string)} uid - 用户 id
-   * @param {Array.<string>} setKeys - 要写的列名（已过 store 层白名单）
-   * @param {Array.<*>} values - 与 setKeys 一一对应的值
-   * @returns {boolean} 行存在且更新了为 true
    */
   updateAiConfig(uid, setKeys, values) {
     const row = (this.data.ai_configs || []).find((r) => uidOf(r) === Number(uid));
@@ -125,14 +102,6 @@ const ops = {
    * 说明：⚠️ 与 SQLite 版**逐字段同语义**（id 都由后端发号；`ai_chats.updated_at` 一起动）。
    *
    * @param {(number|string)} uid - 用户 id
-   * @param {number} chatId - 会话 id（调用方已判过归属）
-   * @param {string} role - 'user' | 'assistant'
-   * @param {string} content - 消息内容
-   * @param {number} segment - 对话段号（2 期，方案 14；调用方给实值）
-   * @param {string} stamp - 时间戳
-   * @param {?string} [kind] - ⭐ 0.7.7-⑲：消息种类（NULL = 普通消息；`'task_proposal'` = 确认卡）
-   * @param {?string} [meta] - ⭐ 0.7.7-⑲：卡片快照 JSON 文本（普通消息为 NULL）
-   * @returns {number} 新消息 id
    */
   insertAiMessage(uid, chatId, role, content, segment, stamp, kind, meta, image) {
     const row = {
@@ -141,12 +110,12 @@ const ops = {
       chat_id: Number(chatId),
       role,
       content,
-      // ⭐ 2 期：段号**原样存**（与 SQLite 版同语义 —— 调用方给的一定是数字，NULL 语义只对老数据有效）
+      // 2 期：段号**原样存**（与 SQLite 版同语义 —— 调用方给的一定是数字，NULL 语义只对老数据有效）
       segment,
-      // ⭐ 0.7.7-⑲：与 SQLite 版同形状（`null` = 普通消息）—— 两边都要有，漏一个就只坏一个后端
+      // -⑲：与 SQLite 版同形状（`null` = 普通消息）—— 两边都要有，漏一个就只坏一个后端
       kind: kind == null ? null : String(kind),
       meta: meta == null ? null : String(meta),
-      // ⭐ 0.8.6：图片（整串 data URL；`null` = 没有图）—— 与 SQLite 版同参同序
+      // 图片（整串 data URL；`null` = 没有图）—— 与 SQLite 版同参同序
       image: image == null ? null : String(image),
       created_at: stamp,
     };
@@ -162,14 +131,8 @@ const ops = {
    * 功能：按游标翻页取会话消息（**id 降序**、`beforeId` 往前翻）；判权带 `user_id`。
    *
    * 说明：⭐ 2 期：`segment` 读出来**归一成 1**（`seg1()`），**不写回数据**；`segment` 为空
-   *      = 不带段过滤（返回全部）。与 SQLite 版（`COALESCE`）逐字段同语义。
+   * = 不带段过滤（返回全部）。与 SQLite 版（`COALESCE`）逐字段同语义。
    *
-   * @param {(number|string)} uid - 用户 id
-   * @param {number} chatId - 会话 id
-   * @param {?number} beforeId - 游标（取 id 小于它的）；null = 从最新开始
-   * @param {number} limit - 条数上限
-   * @param {?number} segment - 只取这一段；null = 全部
-   * @returns {Array.<Object>} 消息行（id 降序）
    */
   listAiMessages(uid, chatId, beforeId, limit, segment) {
     const u = Number(uid);
@@ -187,11 +150,10 @@ const ops = {
         role: r.role,
         content: r.content,
         segment: seg1(r.segment),
-        // ⭐ 0.7.7-⑲：`kind` / `meta` 与 SQLite 版逐字段同名同语义（老行没有这两个键 ⇒ 归一成 null）
+        // -⑲：`kind` / `meta` 与 SQLite 版逐字段同名同语义（老行没有这两个键 ⇒ 归一成 null）
         kind: r.kind == null ? null : r.kind,
         meta: r.meta == null ? null : r.meta,
-        // ⭐ 0.8.6：图片**只回「有没有」**（与 SQLite 版的 `(image IS NOT NULL) AS has_image` 同语义、
-        //    同 0 / 1 取值），⛔ **绝不回 base64** —— 那会让整个会话列表暴涨。
+        // 图片**只回「有没有」**（与 SQLite 版的 `(image IS NOT NULL) AS has_image` 同语义、
         has_image: r.image == null || r.image === '' ? 0 : 1,
         created_at: r.created_at,
       }));
@@ -216,11 +178,8 @@ const ops = {
    * 功能：取**自己的**一条对话消息（`teamwork_messages`），返回原文；不是自己的 / 不存在 / 表不存在返回 null。
    *
    * 说明：判权口径与 SQLite 版逐字一致（`user_id` 必须是自己）；
-   *      ⚠️ 对话模块被删时 `data.teamwork_messages` 根本没有 —— 按「不存在」处理（同体 404）。
+   * 对话模块被删时 `data.teamwork_messages` 根本没有 —— 按「不存在」处理（同体 404）。
    *
-   * @param {(number|string)} uid - 用户 id
-   * @param {number} id - 对话消息 id
-   * @returns {?Object} `{ id, body, created_at }`；取不到为 null
    */
   getChatMessageForAi(uid, id) {
     const list = this.data.teamwork_messages || [];
@@ -233,11 +192,7 @@ const ops = {
    * 功能：取该会话的**当前段号** —— 读会话行上的 `cur_segment`（NULL / 没有会话 ⇒ **1**）。
    *
    * 说明：⚠️ 与 SQLite 版逐字段同语义：段号从**会话行**读，不从「消息里最大的 segment」推
-   *      （点了「开启新对话」还没发消息时，新段一条消息都没有）。
-   *
-   * @param {(number|string)} uid - 用户 id
-   * @param {number} chatId - 会话 id（0 = 不按 id 核对）
-   * @returns {number} 当前段号（≥ 1）
+   * （点了「开启新对话」还没发消息时，新段一条消息都没有）。
    */
   currentAiSegment(uid, chatId) {
     const u = Number(uid);
@@ -285,7 +240,6 @@ const ops = {
    * @param {number} chatId - 会话 id
    * @param {number} segment - 段号
    * @param {number} limit - 条数上限
-   * @returns {Array.<Object>} 消息行（id 降序）
    */
   listAiContextMessages(uid, chatId, segment, limit) {
     const u = Number(uid);
@@ -302,7 +256,7 @@ const ops = {
         role: r.role,
         content: r.content,
         segment: seg1(r.segment),
-        // ⚠️ `kind` / `meta` 必须带出来：注入模型前要把确认卡降级成一句话（见 store.js）
+        // `kind` / `meta` 必须带出来：注入模型前要把确认卡降级成一句话（见 store.js）
         kind: r.kind == null ? null : r.kind,
         meta: r.meta == null ? null : r.meta,
         created_at: r.created_at,
@@ -333,11 +287,8 @@ const ops = {
    * 功能：取该账号**一条消息的图片**（显示路由专用；判权带 `user_id`）。
    *
    * 说明：⭐ 与 `getAiMessage` **刻意分成两个 op** —— 列表 / 上下文 / 单条那三处⛔ 永不选 `image`，
-   *      只有这条显示路由会读它（与 SQLite 版同语义：不是自己的 / 不存在 / 没图 ⇒ null）。
+   * 只有这条显示路由会读它（与 SQLite 版同语义：不是自己的 / 不存在 / 没图 ⇒ null）。
    *
-   * @param {(number|string)} uid - 用户 id
-   * @param {(number|string)} id - 消息 id
-   * @returns {?string} 整串 data URL；不是自己的 / 不存在 / 这条没有图 ⇒ null
    */
   getAiMessageImage(uid, id) {
     const row = (this.data.ai_messages || []).find((r) => uidOf(r) === Number(uid) && Number(r.id) === Number(id));
@@ -371,12 +322,9 @@ const ops = {
     rows.sort((a, b) => a.sort_no - b.sort_no || a.id - b.id);
     return rows.map((r) => ({
       id: r.id,
-      // ⭐ 0.7.1：名称一并带出 —— ⚠️ **两个后端都是「显式字段清单」**（本文件一行行抄，
-      //    `backend/sqlite.js` 的 `listAiMemories` 是一条 SQL 的列清单，**不是 `SELECT *`**），
-      //    这里漏一个键的表现是「SQLite 上好好的、切到 JSON 后端名称全空」——
-      //    只坏一个后端的 bug 最难查，⚠️ 0.7.6 就真出过一次（SQLite 那边漏了 `label`），
-      //    改动时**两个后端一起看**。
-      //    老数据没有这个键 ⇒ 归一成 `null`（与 SQLite 补列后的 NULL 同形状）。
+      // 名称一并带出 —— ⚠️ **两个后端都是「显式字段清单」**（本文件一行行抄，
+      // `backend/sqlite.js` 的 `listAiMemories` 是一条 SQL 的列清单，**不是 `SELECT *`**），
+      // 这里漏一个键的表现是「SQLite 上好好的、切到 JSON 后端名称全空」——
       label: r.label === undefined ? null : r.label,
       content: r.content,
       source: r.source,
@@ -392,9 +340,6 @@ const ops = {
    * @param {string} content - 记忆正文
    * @param {string} source - 来源（2 期恒为 'manual'）
    * @param {number} sortNo - 排序位
-   * @param {?string} label - ⭐ 0.7.1：这一条的名称（`null` = 没有名称；空串由 store 层归一成 null）
-   * @param {string} stamp - 时间戳
-   * @returns {number} 新记忆 id
    */
   insertAiMemory(uid, content, source, sortNo, label, stamp) {
     const row = {
@@ -419,7 +364,6 @@ const ops = {
    * @param {number} id - 记忆 id
    * @param {Object} fields - 列名 → 新值（合法集由 store 层硬映射收口）
    * @param {string} stamp - 时间戳（写进 `updated_at`）
-   * @returns {number} 影响行数
    */
   updateAiMemory(uid, id, fields, stamp) {
     const u = Number(uid);

@@ -1,8 +1,5 @@
 /**
  * 更新服务：状态流转、失败降级、下载校验。
- *
- * 接口用假 fetch（不联网），下载用本机真实 socket —— 校验通过与否要看落盘字节，
- * 这里不能全靠桩。
  */
 
 import assert from 'node:assert/strict';
@@ -231,7 +228,6 @@ test('所有下载源都连不上：停手（give-up）并说明是连不上，�
   assert.match(state.error.message, /连不上/);
 });
 
-// ---------------------------------------------------------------- 0.2.2 增补：下载上限与版本核对
 
 test('清单里带 fallbackUrl：check 之后状态里能看到（界面据此给网盘按钮）', async (t) => {
   const { service, dir } = makeService(t, {

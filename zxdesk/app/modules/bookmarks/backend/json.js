@@ -2,31 +2,21 @@
 
 /**
  * modules/bookmarks/backend/json.js —— 网址收藏夹的表（书签 / 分类 / 分类关联）的**JSON 版原语**
- *
  * 功能：本模块自己的存储原语（JSON 回退），与另一个后端**同名同参** ——
- *      「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，少一个 / 打错名 / 形参个数不一致 = 启动即抛。
- *
- * ⭐ 0.5.0 模块化重构（方案 `09-模块化重构` §四 第 2 行）：比对的粒度从「两个大文件」下移到**每个模块自己的一对**。
- *    ⚠️ **纯搬运**：方法体是从 `store/backend/json.js` 按段落**逐字节切出来**的，一个字都没重写
- *    （切块前后 sha256 见 0.5.0的提交说明）。
- *
- * ⚠️ ops 里的 `this` 是 **Store 实例**（门面用 `.apply(store, …)` 调用），所以照常访问
- *    `this.db` / `this.data` / `this._saveJson()` / `this._listSql()`。
- *
+ * 「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，少一个 / 打错名 / 形参个数不一致 = 启动即抛。
  * @author zx
  * @date   2026-09-14
- * @since 0.8.19
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md、docs/公共/开发方案/09-模块化重构.md
  */
 
 const { uidOf } = require('../../../core/store/helpers.js');
 
 const ops = {
-  // ---- 网址收藏夹（0.3.0）----
   /**
    * 功能：列出该账号的全部书签（倒序：最新添加的在最前）。
    * 说明：⭐ 检索与分类筛选**不在这一层做**（见 `modules/bookmarks/store.js`）—— 两个后端
-   *      必须给出逐字一致的结果，语义只能有一份实现。
+   * 必须给出逐字一致的结果，语义只能有一份实现。
    * @param {(number|string)} uid - 用户 id
    * @returns {Array.<Object>} 书签行数组（按 created_at、id 倒序）
    */
@@ -67,7 +57,6 @@ const ops = {
   },
 
   /**
-   * 功能：找出「绑定了某个密码库条目」的那条书签 —— 0.8.19 一对一绑定校验用。
    * @param {(number|string)} uid - 用户 id
    * @param {(number|string)} vaultId - 密码库条目 id
    * @returns {?Object} 命中的书签行；没有则为 null
@@ -90,7 +79,7 @@ const ops = {
     const before = this.data.bookmarks.length;
     this.data.bookmarks = this.data.bookmarks.filter((b) => !(b.id === Number(id) && uidOf(b) === Number(uid)));
     if (this.data.bookmarks.length < before) {
-      // ⚠️ JSON 后端没有外键，级联必须自己写 —— 漏了它就会在列表里留下指向已删书签的孤儿关联行
+      // JSON 后端没有外键，级联必须自己写 —— 漏了它就会在列表里留下指向已删书签的孤儿关联行
       this.data.bookmark_tag_links = (this.data.bookmark_tag_links || []).filter(
         (l) => !(l.bookmark_id === Number(id) && uidOf(l) === Number(uid)),
       );
@@ -145,7 +134,7 @@ const ops = {
 
   /**
    * 功能：删除一个分类，并连带清掉它的关联行（对应 SQLite 的 ON DELETE CASCADE）；
-   *      **书签本身保留**（只解除归类）。
+   * **书签本身保留**（只解除归类）。
    * @param {(number|string)} uid - 用户 id
    * @param {(number|string)} id - 分类 id
    * @returns {boolean} 分类行是否真的被删掉
@@ -221,11 +210,9 @@ const ops = {
   /**
    * 功能：**整体替换**一条书签的分类归属（编辑保存时用）。
    * 说明：⚠️ 先把两次改动都做完再 `_saveJson()`（只写一次文件）—— JSON 后端没有事务，
-   *      中途出错留下的半套关联无法回滚，所以把落盘压到最后一刻。
+   * 中途出错留下的半套关联无法回滚，所以把落盘压到最后一刻。
    * @param {(number|string)} uid - 用户 id
    * @param {(number|string)} bookmarkId - 书签 id
-   * @param {Array.<number>} tagIds - 目标分类 id 列表
-   * @returns {boolean} 恒为 true
    */
   setBookmarkTags(uid, bookmarkId, tagIds) {
     const u = Number(uid);
@@ -244,10 +231,8 @@ const ops = {
    * 功能：把本模块三张表里属于该账号的行**整份取出来**（个人备份的导出片段用它，见 `../export.js`）。
    *
    * 说明：⚠️ 排序与深拷贝规则与搬家前 `store/backend/json.js` 的 `exportAll` 里那三行**逐字相同**
-   *      （先 `JSON` 深拷贝再过滤排序，导出结果与内存里的数据完全脱钩）—— 备份内容因此不变。
+   * （先 `JSON` 深拷贝再过滤排序，导出结果与内存里的数据完全脱钩）—— 备份内容因此不变。
    *
-   * @param {number} uid - 用户 id
-   * @returns {{bookmarks: Array.<Object>, bmTags: Array.<Object>, bmLinks: Array.<Object>}} 三张表的行
    */
   exportBookmarks(uid) {
     const d = this.data || {};

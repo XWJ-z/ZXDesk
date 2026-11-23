@@ -1,24 +1,13 @@
 /**
  * vault.js —— 密码库只读通路（状态查询 / 取一条明文）
- *
  * 功能：`vaultStatus` 问「初始化没有、锁没锁」（不需要解锁）；`vaultEntry` 取一条的
  *      `title` / `username` / `password`（要求服务端已解锁）。⛔ 只有 SW 经这里发请求。
  *
  * 服务端口径（`app/modules/vault/routes.js` + `store.js` 实证）：
  * - `GET /api/vault/status` **不需要解锁** ⇒ `{initialized, unlocked, lockAfterSeconds, lockMinutes}`
- *   （⚠️ 它用 `peekUnlocked` 只读判断，**不续期**自动锁定 —— 所以可以放心轮询）；
- * - `GET /api/vault/:id` 需要解锁 + 归属校验 ⇒ 明文 `{id,title,username,password,url,note,tags,updated_at}`；
- *   未解锁 ⇒ **403**；不存在 / 越权 ⇒ **404**（同码）；
- * - **解锁态在服务端**（按账号，进程内存 + 自动锁定）⇒ 网页里解锁后，插件同源同会话立刻可读。
- *   这是本端能「零新增风险面」的前提：插件**不收主密码**，解锁态始终在服务端。
- *
- * ⚠️ 明文纪律：
- *   - 只挑 `title/username/password` 三样回给 UI，`note/url/tags` 一律不下发（用不上就不给）；
- *   - ⛔ 不进 `chrome.storage`、⛔ 不进 `console`、⛔ 不进任何日志与上报；
- *   - 错误分支**不带任何响应体内容**，只回错误码（403 的 body 里也可能有线索，不回传）。
- *
+ *   （⚠️ 它用 `peekUnlocked` 只读判断，**不续期**自动锁定 —— 所以可以放心轮询）…
  * @author zx
- * @since 0.1.5
+ * @since
  * 相关：Project/Edge/README.md
  */
 import { fetchJson } from './api.js';
@@ -47,7 +36,7 @@ export async function vaultStatus(base) {
  * 功能：取一条密码的明文（**只在内存里过**）。
  * @param {string|number} id - 收藏行上的 `vault_entry_id`
  * @returns {Promise<{ok:true, entry:{title:string, username:string, password:string}}
- *                  |{ok:false, code:'vault_locked'|'vault_gone'|'need_zxdesk_login'|string}>}
+ * |{ok:false, code:'vault_locked'|'vault_gone'|'need_zxdesk_login'|string}>}
  */
 export async function vaultEntry(base, id) {
   try {

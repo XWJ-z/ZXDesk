@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：DohProbe.kt
- * 职责：公共 DNS over HTTPS 查询，给 DohDns 与解析诊断共用
  */
 
 package com.zxdesk.core.connection
@@ -9,11 +7,6 @@ package com.zxdesk.core.connection
 /**
  * DoH 查询的结果，三态 —— 这三态对应三种完全不同的处置，⛔ 不能合并成「没查到」：
  *
- * - [Found]：域名有记录。系统解析失败而这里有记录 ⇒ **本机 DNS 这条路断了**，
- *   但域名本身好的，拿这批地址按原域名建连是合法的（SNI 与证书校验仍用域名）。
- *   见 [DohDns]。
- * - [NoRecord]：域名确实没有记录 —— 飞牛中继那边此刻没这台设备，通常十几分钟自愈；
- * - [Unreachable]：连 DoH 都到不了，说明手机整体没网，先修网络。
  */
 internal sealed interface DohResult {
     data class Found(val ips: List<String>) : DohResult
@@ -24,14 +17,6 @@ internal sealed interface DohResult {
 /**
  * 用公共 DoH 查一次记录。
  *
- * 为什么应用侧要自己解析：Chromium 与 `HttpURLConnection` 都只认系统解析，
- * 而部分运营商 / 路由器 / 私人 DNS 会把 `*.fnos.net` 这类泛解析子域过滤掉或负缓存。
- * 这时同网络的飞牛官方 APP 能连、我们不能，差别就在解析这一层。
- *
- * 端点写死成 IP（`223.5.5.5` / `1.12.12.12`），⛔ 不用域名端点 —— 用域名端点等于
- * 把「解析不了」这道坎又搬到门口。
- *
- * ⚠️ 阻塞调用，总预算见 [TOTAL_BUDGET_MS]，⛔ 别在主线程跑。
  */
 internal object DohProbe {
     /** 两个端点按顺序试，先通先算。阿里与腾讯的 JSON 接口字段一致。 */
@@ -59,7 +44,6 @@ internal object DohProbe {
     /**
      * 查 [host] 的记录：先 A，没有结果再 AAAA。
      *
-     * 为什么要 AAAA：纯 IPv6 网络下 A 记录为空但 AAAA 有值，只查 A 会误判成「中继没有这台设备」。
      */
     fun lookup(host: String): DohResult {
         val deadline = System.nanoTime() + TOTAL_BUDGET_MS * 1_000_000

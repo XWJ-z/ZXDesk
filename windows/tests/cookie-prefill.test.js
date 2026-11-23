@@ -1,7 +1,5 @@
 /**
- * 0.1.4 的两个 P0 回归：
- * ① 登录两次 —— Cookie 必须写进**远程视图的分区**（`persist:zxdesk`），且**视图先建、Cookie 后写**；
- * ② 密码不回填 —— 所有回连接页的路径都要触发预填。
+ * 的两个 P0 回归：
  */
 
 import assert from 'node:assert/strict';

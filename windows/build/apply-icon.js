@@ -1,16 +1,13 @@
 /**
  * 把图标与版本资源写进 `ZXDesk.exe`（`resedit` 是纯 JS，免 Wine）。
- *
  * ⚠️ 为什么这个脚本这么啰嗦：`resedit` 在 Electron 45 的 ~250 MB exe 上**时灵时不灵**
- * （同一个文件同样的调用，有时字节不变、有时变）。0.1.6 就吃过一次：脚本打印了「已写入」，
+ * （同一个文件同样的调用，有时字节不变、有时变）。就吃过一次：脚本打印了「已写入」，
  * 但**打好的包里 exe 还是 Electron 默认图标**（原因是图标写完之后又跑了一次 pack，把 exe 覆盖回去了）。
- *
  * 所以现在三道锁：
  * 1. 写完**重新解析产物**，确认图标组里有 7 个尺寸、RT_ICON 有 7 条（不是只看哈希变没变）；
  * 2. 不满足就**从原始字节重试**（最多 3 次），仍不行**退出码 1** —— 打包链会当场失败，
  *    ⛔ 不允许「静默出一个没有图标的包」；
  * 3. `build/pack.js` 在打包**之后**才调它（顺序写死在脚本里，见 pack.js 末尾）。
- *
  * 用法：`node build/apply-icon.js [exe 路径]`（默认为 `build/out/ZXDesk-win32-x64/ZXDesk.exe`）
  */
 
@@ -26,11 +23,7 @@ const RT_GROUP_ICON = 14;
 
 /**
  * exe 里要写的版本号，取自 `package.json`。
- *
- * ⚠️ 这里以前写死 `0, 1, 0, 0`（0.1.0 那次留下的常量），于是**每一个发出去的包**
- * 在资源管理器「属性 → 详细信息」里都显示 `文件版本 0.1.0.0` —— 程序自己报的版本（`app.getVersion()`
- * 读的是 asar 里的 package.json）却是新的，两边对不上。现在跟着 package.json 走，
- * 并且在写完之后把它当**验收项**读回来比一次（不对就退出码 1）。
+ * ⚠️ 这里以前写死 `0, 1, 0, 0`（那次留下的常量），于是**每一个发出去的包**
  */
 function exeVersion(version) {
   const parts = String(version || '')
@@ -97,7 +90,7 @@ async function main() {
     const exe = ResEdit.NtExecutable.from(original, { ignoreCert: true });
     const res = ResEdit.NtExecutableResource.from(exe);
 
-    // ⚠️ 三个要点（0.1.6 后「挪目录图标变默认」就栽在这）：
+    // ⚠️ 三个要点（后「挪目录图标变默认」就栽在这）：
     // ① **先删掉所有旧图标组**：Electron 自带的是 1/1033，留着会和我们的组并存，
     //    某些 shell 路径会挑到旧的那组（4 个尺寸、PNG 都没有），于是退回通用图标；
     // ② 用**语言中性（lang=0）**写：中文 Windows 的 UI 语言是 2052，中性组是标准做法，
@@ -153,7 +146,7 @@ async function main() {
 
     if (ok) {
       fs.writeFileSync(exePath, output);
-      // 落盘后再读一次，防止「写盘失败/被别的东西覆盖」这类事（0.1.6 就是这么丢的）
+      // 落盘后再读一次，防止「写盘失败/被别的东西覆盖」这类事（就是这么丢的）
       const onDisk = inspect(ResEdit, fs.readFileSync(exePath));
       if (
         onDisk.groups !== 1 ||

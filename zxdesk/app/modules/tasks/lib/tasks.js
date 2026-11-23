@@ -1,29 +1,11 @@
 'use strict';
 /**
- * modules/tasks/lib/tasks.js —— 日常任务的业务方法（0.2.0，审查报告 B2）
- *
+ * modules/tasks/lib/tasks.js —— 日常任务的业务方法
  * 功能：日常任务的业务方法 —— `listDailyTasks` / `createDailyTask` / `updateDailyTask` /
- *      `deleteDailyTask`，与取单条的 `_findTask` / `_findDailyTask`；`_maintainCompletedAt`
- *      负责 `completed_at` 的状态跃迁维护。
- *
- * ⭐ 这里的方法**一律不出现 `this.backend`**：凡是要分后端的地方都走
- *    `this._bk.<op>(...)`（存储原语层门面，见 store/backend/index.js）。
- *
- * ⚠️ 方法体是从改造前的 `db.js` 按字节切出来的（分岔那段搬去了 backend/*.js）。
- *
- * ⭐ 0.5.0 模块化重构：本文件从 `core/store/methods/tasks.js` **原样搬进模块目录**
- *    （方案 `09-模块化重构` §七，纯搬运不改逻辑）。只改了一处：`helpers.js` 的相对路径。
- *    ⚠️ 与它**同源**的 `_insert` / `_update`（通用写原语，六个模块共用）**没有跟着搬** ——
- *    它们留在 `core/store/methods/task-writes.js`：搬进模块目录之后，**删掉本模块**
- *    会让收藏夹 / 硬件 / 密码库 / 课表 / 对话的写入全部变成运行期 `undefined`
- *    （施工单 §2 的硬约束，也是本批最重要的一处划分）。
- *    ⚠️ `_findTask` / `_maintainCompletedAt` / `_findDailyTask` **跟着本模块走**：
- *    它们只服务两类任务（`projects.js` 的 `updateProjectTask()` 与这里的 `updateDailyTask()`），
- *    是任务板自己的业务。
- *
+ * `deleteDailyTask`，与取单条的 `_findTask` / `_findDailyTask`；`_maintainCompletedAt`
  * @author zx
  * @date   2026-09-11
- * @since 0.8.14
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md、docs/公共/架构文档/05-任务板.md
  */
 const { today, nowStamp, clampRange } = require('../../../core/store/helpers.js');
@@ -31,25 +13,11 @@ const { today, nowStamp, clampRange } = require('../../../core/store/helpers.js'
 module.exports = {
   // ---- daily tasks ----
   /**
-   * 功能：把一条任务**搬到另一个归属**（日常任务 ⇄ 某个项目）—— ⭐ 0.8.14：
-   *      「任务的归属要可以修改」。
-   *
-   * 说明：⭐⭐ 这是**真正的搬移**：往目标表插一行新的、把原来那行删掉。
-   *      为什么要这么麻烦 —— `daily_tasks` 与 `project_tasks` 是**两张物理表、列也不一样**，
-   *      没有「改一个 `project_id` 就换归属」这回事（那是把两张表合并的大重构，不在本次射程）。
-   *      ⚠️⭐ 因此 **id 会变**（新表新行）⇒ 两处「按 id 挂着的东西」必须一起搬，漏了都**不报错**：
-   *      ① 周期任务的打卡记录（`task_occurrences` 按 `task_source` + `task_id` 认任务）；
-   *      ② 随手记「变成任务」的追溯（`idea_items.task_id` / `task_source`）。
-   *      ⚠️ 目标表**没有的列直接丢弃**：搬到日常任务时 `assignee` / `tag` 留不下（那张表压根没有
-   *      这两列）。这是两张表的固有差异，⛔ 不要为了搬家给 `daily_tasks` 也补这两列。
-   *      ⚠️ 搬完**不预设**「完成状态 / 打卡」会变：`status` / `completed_at` / 打卡记录原样跟着走。
-   *
    * @param {number} uid - 账号 id
    * @param {(string|number)} from - 原归属：`'daily'` 或项目 id
    * @param {(number|string)} id - 任务 id
    * @param {(string|number)} to - 新归属：`'daily'` 或项目 id
    * @returns {?Object} 搬过去之后的**新**任务行（含新 `id`）；任务不存在 / 不是自己的 / 目标项目
-   *      不是自己的 ⇒ `null`（由 HTTP 层收口成 404）
    * @throws {Error} 数据层只读时抛出（由 HTTP 层收口成 503）
    */
   moveTask(uid, from, id, to) {
@@ -142,13 +110,13 @@ module.exports = {
       due_date: input.due_date || today(),
       status: input.status || 'todo',
       completed_at: input.status === 'done' ? nowStamp() : null,
-      // ⭐ 0.4.4：从对话里的哪条消息建的（没有就是 null）。**写一次就定死** ——
+      // 从对话里的哪条消息建的（没有就是 null）。**写一次就定死** ——
       //    它不在 `allowedCols` 里，所以任何 PUT 都改不到它（见 schema/tasks.js 文件头）。
       from_message_id: input.from_message_id ? Number(input.from_message_id) : null,
-      // ⭐ 0.5.2：绑的网址（`0` / 没传 = 不绑 → 存 null）—— 与 createProjectTask 同一处的教训：
+      // 绑的网址（`0` / 没传 = 不绑 → 存 null）—— 与 createProjectTask 同一处的教训：
       //    逐列显式建 row，键漏了就**静默不写**（首轮实测踩过，见 projects.js 同名注释）。
       bookmark_id: input.bookmark_id ? Number(input.bookmark_id) : null,
-      // ⭐⭐ 0.8.14：任务类型这一维度 —— ⚠️ 同样是「逐列显式建 row」，
+      // 任务类型这一维度 —— ⚠️ 同样是「逐列显式建 row」，
       //    这四个键漏一个就是那一列**静默不写**（本项目在 `bookmark_id` 上真的踩过）。
       task_kind: input.task_kind || 'plain',
       start_time: input.start_time || null,
@@ -159,7 +127,7 @@ module.exports = {
       updated_at: nowStamp(),
     };
     const created = this._insert('daily_tasks', clampRange(row));
-    // ⭐ 0.7.2：这条任务是**从课表的「本节备注」过来的**（表单里点了保存）⇒ 建完**回绑**那条备注
+    // 这条任务是**从课表的「本节备注」过来的**（表单里点了保存）⇒ 建完**回绑**那条备注
     //    —— 两边本质是同一个东西。跨模块只走 store 上的既有方法。
     //    ⚠️ 课表模块被整目录删掉 / 被账号关掉时 `linkDayNoteTask` 压根不在 ⇒ **静默跳过**，
     //    任务照常建好（任务不能被别的模块连累，与 `timetable/store.js` 的 `_syncNoteTask` 同一条纪律）。
@@ -177,12 +145,11 @@ module.exports = {
         /* 见上面第三条说明：绑不上就绑不上，任务已经建好了 */
       }
     }
-    // ⭐⭐ 0.8.14：这条任务是**从随手记「变成任务」过来的**（走留白事件
+    // 这条任务是**从随手记「变成任务」过来的**（走留白事件
     //    `zx:task-draft` ＋ 任务板自己的草稿表单）⇒ 建完**回绑**那条随手记。⭐ 与上面
     //    `from_day_note` → `linkDayNoteTask()` **逐字同构**：同一处落点、同一条纪律。
-    //    ⚠️ 为什么不让随手记「建完再 PUT 一次」把 task_id 写回去（那正是 0.8.13 以前的做法）：
+    //    ⚠️ 为什么不让随手记「建完再 PUT 一次」把 task_id 写回去：
     //    表单一旦交给任务板，刚建出来的任务 id 就**到不了随手记手里**了 —— 剩下的只有
-    //    「再读一次任务列表猜哪条是刚建的」那种不可靠做法（方案 §四②末段）。
     //    ⚠️ 灵感模块被整目录删掉 ⇒ `bindIdeaTask` 压根不在 ⇒ **静默跳过**，任务照常建好。
     //    ⚠️ 回绑失败**不许**把「建任务」带崩（数据层只读降级时会抛，吞掉即可 —— 与上面同一条）。
     const iid = input && input.from_idea ? Number(input.from_idea.id) : 0;
@@ -198,21 +165,6 @@ module.exports = {
 
   /**
    * 功能：维护 `completed_at`（**状态跃迁的派生物**，日常任务与项目任务共用同一套规则），
-   *      返回补过该字段的新对象，不改动调用方传入的 `input`。
-   *
-   * 说明：历史缺陷（0.0.8 由测试套件发现，0.1.2 扩到项目任务）：`completed_at` 只在
-   *      **创建时状态即为 done** 才写入，事后勾选完成不补写、取消完成也不清空，
-   *      导致该字段在事后完成的任务上恒为 `null`。现在的规则是：
-   *      · 调用方**显式**传了 `completed_at` 就尊重它，不自动维护（含显式传 null）
-   *      · 没传 `status` 就不碰 `completed_at`
-   *      · 迁入 done → 补写当前时间戳；迁出 done → 清空为 null
-   *      · 已是 done 再标 done 不重写时间戳（保留首次完成时刻，便于「完成时间」排序）
-   *      ⚠️ 这个字段现在是**有语义的**，不只是个记录：前端按「完成日之后不再显示这条任务」
-   *      来排计划日期（需求）。所以「迁出 done 必须清空」不是可选项 ——
-   *      留着旧时间戳会让一条被重新打开的任务在它原来完成日之后的日期里继续隐身。
-   *      也正因如此，`updateDailyTask()` / `updateProjectTask()` **不可绕过**：
-   *      `completed_at` 是状态跃迁的派生物，直接调 `_update()` 会再丢完成时间。
-   *
    * @param {string} table - 表名，'daily_tasks' 或 'project_tasks'
    * @param {number} uid - 账号 id
    * @param {number} id - 任务 id
@@ -228,7 +180,7 @@ module.exports = {
         const isDone = next.status === 'done';
         if (isDone && !wasDone) next.completed_at = nowStamp();
         else if (!isDone && wasDone) next.completed_at = null;
-        // ⭐⭐ 0.8.14：状态**迁入 done** ⇒ 顺手把「这条任务是从哪条随手记来的」
+        // 状态**迁入 done** ⇒ 顺手把「这条任务是从哪条随手记来的」
         //    那条随手记**归档**（「任务完成之后，这个随手记也要变为归档」）。
         //    ⚠️ 落在这里的理由：`_maintainCompletedAt()` 是「状态迁入 done」的**唯一判定处**
         //    （日常任务与项目任务共用），落在这儿就**只有一处**，不会漏掉某条路径。
@@ -252,10 +204,6 @@ module.exports = {
 
   /**
    * 功能：更新日常任务（`completed_at` 规则见 `_maintainCompletedAt`）。
-   *
-   * 说明：`updateDailyTask()` 不可绕过：`completed_at` 是状态跃迁的派生物，
-   *      直接调 `_update()` 会再丢完成时间。
-   *
    * @param {number} uid - 账号 id
    * @param {number} id - 日常任务 id
    * @param {Object} input - 要改的字段（先经 `_maintainCompletedAt` 补齐 `completed_at`）
@@ -264,7 +212,7 @@ module.exports = {
    */
   updateDailyTask(uid, id, input) {
     const r = this._update('daily_tasks', uid, id, this._maintainCompletedAt('daily_tasks', uid, id, input));
-    // ⭐ 0.7.2：**任务侧改了标题 ⇒ 回写绑定的那条「本节备注」**（双向同步的回程）。
+    // **任务侧改了标题 ⇒ 回写绑定的那条「本节备注」**（双向同步的回程）。
     //    跨模块只走 store 上已有的方法—— 与 `teamwork/ticker.js` 调课表的 `listPeriods`
     //    是同一种走法，⛔ 没有 import 任何课表模块的实现。
     //    ⚠️ 课表模块是**可以被整目录删掉**的 ⇒ 先判方法在不在；拿不到就什么都不做（任务照常改）。
@@ -308,7 +256,7 @@ module.exports = {
   deleteDailyTask(uid, id) {
     this._assertWritable();
     const r = this._bk.deleteDailyTask(uid, id);
-    // ⭐⭐ 0.8.14：任务被删 ⇒ 清掉随手记上那条**绑定** —— 否则那条随手记
+    // 任务被删 ⇒ 清掉随手记上那条**绑定** —— 否则那条随手记
     //    永远顶着一枚**指空的**「已变成任务」，而且再也点不了「变成任务」（`bindIdeaTask`
     //    只在「本来没有绑定」时才写）。
     //    ⚠️ `typeof` 守卫照旧（灵感模块可整目录删）；清绑定失败不带崩删除本身。

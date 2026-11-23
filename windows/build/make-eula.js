@@ -1,19 +1,14 @@
 /**
  * 生成安装向导用的许可协议（`build/eula.txt` → `build/eula.rtf`）。
- *
  * 为什么要转换，不直接把 txt 交给 NSIS：
  * - NSIS 的 Unicode 安装包读 `.txt` 时按 UTF-16LE 解释，UTF-8 的中文会变成乱码；
  * - `.rtf` 是纯 ASCII（中文以 `\uNNNN?` 转义），任何 NSIS 版本、任何系统区域设置下都正常；
  * - 顺带能做排版：文档标题居中加粗、章节标题加粗、段间距，长协议在向导里更好读。
- *
  * 源文件格式约定（`build/eula.txt`，UTF-8）：
  *   `# 文字`  → 标题（第一个是文档标题，其余是章节标题）
  *   空行      → 段落间距
  *   其它行    → 正文段落
- *
  * 用法：
- *   node build/make-eula.js           生成（有变化才写盘）
- *   node build/make-eula.js --check   只校验 rtf 是否与 txt 同步（门禁用，不写盘）
  */
 
 import fs from 'node:fs';
@@ -26,7 +21,6 @@ const outFile = path.join(root, 'build', 'eula.rtf');
 /**
  * 装进安装目录的那份：**UTF-16LE + BOM**。
  * Windows 记事本（含旧版）对无 BOM 的 UTF-8 会按 ANSI 解释 —— 中文全是乱码；
- * UTF-16LE 带 BOM 从 Win7 到 Win11 都能正确打开。
  */
 const outTxtFile = path.join(root, 'build', 'eula-utf16.txt');
 
@@ -34,11 +28,6 @@ const FONT_BODY = 'f0';
 const FONT_HEAD = 'f1';
 
 /**
- * 把一段文本转成 RTF 可用的 ASCII。
- *
- * ⚠️ `\uN` 里的 N 是**有符号 16 位**：码点大于 0x7FFF 要减 0x10000 变成负数，
- *    否则 Word / NSIS 会把它当成另一个字（中文大半落在这个区间，写错了满屏乱码）。
- *
  * @param {string} text
  * @returns {string}
  */

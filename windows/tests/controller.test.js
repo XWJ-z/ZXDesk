@@ -275,7 +275,6 @@ test('诊断文本不含密码与 token', async () => {
   assert.ok(text.includes(`ZXDesk ${pkg.version}`), `诊断里要有版本号：${text.split('\n')[0]}`);
 });
 
-// ---------------------------------------------------------------- 0.1.2：2FA 提交必须真的发出去
 
 /** 进到两步验证屏，并塞一个假 flow（controller.flow 是普通字段，可直接替换）。 */
 async function onTwoFactorScreen(controller) {

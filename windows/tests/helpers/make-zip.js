@@ -1,8 +1,5 @@
 /**
  * 测试用的最小 zip 打包器（单条目、deflate、无 zip64）。
- *
- * 只是为了让「读包内版本」的用例有真 zip 可读 —— ⛔ 不是通用打包器，
- * 不做 CRC、不支持多文件；生产的包由 `build/make-zip.py` 生成。
  */
 
 import zlib from 'node:zlib';

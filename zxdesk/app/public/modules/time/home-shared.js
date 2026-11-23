@@ -1,18 +1,12 @@
 /**
- * modules/time/home-shared.js —— 「番茄钟与日程表」首页的**两端共用纯函数 / 文案**（0.8.13）
+ * modules/time/home-shared.js —— 「番茄钟与日程表」首页的**两端共用纯函数 / 文案**
  *
  * 功能：宿主（`home-desktop.js` / `home-mobile.js`）共用的那一小层 —— 四个 pane 的名字、
- *      归一化、选择器与「‹ 日程表」返回键的 HTML 片段。
- *
- * ⚠️⭐ **两端各一份的是「怎么画」，共用的是「叫什么」**：按钮类名两端是两套
- *    （电脑版 `btn btn-subtle btn-sm` / 手机版 `btn ghost sm`），所以这里只产出结构、
- *    类名由调用方传进来（决策：共用片段不写死类名，否则一端必然画歪）。
- *
- * ⚠️ 这里**只放纯函数 / 常量**：碰 DOM 的事一律留在两端各自的宿主文件里，⛔ 不在这里写 `document`。
+ * 归一化、选择器与「‹ 日程表」返回键的 HTML 片段。
  *
  * @author zx
  * @date   2026-10-05
- * @since 0.8.33
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/27-番茄钟与日程表.md、07-前端-电脑版与手机版.md
  */
 
@@ -46,10 +40,8 @@ export const normTimeTab = (tab) => (TIME_PANES.includes(tab) ? tab : 'home');
  * 功能：生成「**‹ 日程表**」返回键（三个子屏的屏头各一颗）。
  *
  * 说明：⭐ 它**只派动作、不做跳转**：宿主在 `#time-view` 上一次性委托 `[data-time-tab]`，
- *      拿到 `home` 就去开首页 —— 子屏因此**不需要认识宿主**（也就不必互相 import）。
+ * 拿到 `home` 就去开首页 —— 子屏因此**不需要认识宿主**（也就不必互相 import）。
  *
- * @param {string} cls - 本端的按钮类名（两端两套，见文件头）
- * @returns {string} 按钮的 HTML
  */
 export const timeBackHtml = (cls) => `<button class="${cls}" type="button" data-time-tab="home">‹ 日程表</button>`;
 
@@ -79,10 +71,8 @@ export function addDaysStr(day, n) {
  * 功能：`HH:MM` → 当天的分钟数（0~1439）；认不出来回 `null`。
  *
  * 说明：⚠️ 回 `null` 而不是 `0` —— 「没填时刻」与「零点整」是两件事，
- *      前者要画默认长度并打记号，后者就是零点整。
+ * 前者要画默认长度并打记号，后者就是零点整。
  *
- * @param {?string} v - `HH:MM`
- * @returns {?number} 分钟数
  */
 export function hhmmToMin(v) {
   const s = String(v == null ? '' : v).trim();
@@ -133,13 +123,9 @@ export function msToDay(ms) {
 /**
  * 功能：把一段 `[起, 止]`（分钟）画成**0~100 的百分比**（`top` / `height`），并夹在当天里。
  *
- * 说明：⭐ 0.8.33 起顺手带回这一块在这一列上的**结束分钟数**（`endMin`）—— 「今天已经
- *      过完的块」要按它判（见 `buildWeek()` 第 ⑥ 步）。⚠️ 它是**夹过之后**的值：跨天的
- *      行程在今天这一列上画到 24:00 ⇒ `endMin = 1440`，于是「还没结束」自然不会被判成已过。
+ * 过完的块」要按它判（见 `buildWeek()` 第 ⑥ 步）。⚠️ 它是**夹过之后**的值：跨天的
+ * 行程在今天这一列上画到 24:00 ⇒ `endMin = 1440`，于是「还没结束」自然不会被判成已过。
  *
- * @param {number} startMin - 起始分钟
- * @param {number} endMin - 结束分钟（可以 > 1440，会被夹到 1440）
- * @returns {{top: number, height: number, endMin: number}} 百分比 ＋ 夹过的结束分钟
  */
 function spanPct(startMin, endMin) {
   const s = Math.max(0, Math.min(DAY_MIN, startMin));
@@ -151,14 +137,8 @@ function spanPct(startMin, endMin) {
  * 功能：把「这一趟在某一列上占哪一段」算出来 —— 含**跨天**（首日到 24:00、末日从 0:00、中间整天满列）。
  *
  * 说明：⭐ 跨天是「行程 / 车票」的常态（23:40 出发、次日 01:20 到），所以判据必须按
- *      「这一天落在这段区间的哪里」来算，⛔ 不能只比 `start_date`。
+ * 「这一天落在这段区间的哪里」来算，⛔ 不能只比 `start_date`。
  *
- * @param {string} day - 这一列的日期
- * @param {string} startDay - 起始日
- * @param {number} startMin - 起始分钟
- * @param {string} endDay - 结束日（可空 ⇒ 同起始日）
- * @param {number} endMin - 结束分钟
- * @returns {?{top: number, height: number}} 这一列上的百分比；这一天不在区间里回 `null`
  */
 function crossDayPct(day, startDay, startMin, endDay, endMin) {
   const eDay = endDay || startDay;
@@ -171,22 +151,9 @@ function crossDayPct(day, startDay, startMin, endDay, endMin) {
 /**
  * 功能：把首页接口的载荷压成**七列**（每列一堆块）—— ⭐ 两端共用这一份，⛔ 几何只写一次。
  *
- * 说明：⭐ 口径（方案 §四，逐条）：
- *      · 课程：`start_time` → `end_time`（作息必填，不会缺）；
- *      · 行程：`start_date`＋`start_time` → `end_date || start_date`＋`end_time`；
- *        **缺 `end_time` ⇒ 按默认 60 分钟画并打记号**（⛔ 不静默）；
- *      · 车票：`depart_at` → `arrive_at`（**缺 ⇒ 默认 120 分钟并打记号**）；
- *      · 番茄：只算 `completed`，`started_at` → `ended_at`（缺 ⇒ `planned_seconds`）；
- *        ⚠️ 跨零点的番茄**截断在 24:00**（⛔ 不跨列 —— 它属于**开始那天**，与统计口径一致）。
- *        ⭐ 0.8.32：**休息也画**（`kind` 是短休 / 长休时出 `kind: 'rest'` 的块）——
- *        休息与专注是两种块，⛔ 不是把它从时间轴上抹掉。
- *      · ⚠️ 重叠的块**叠着画**（`stack` 递增，界面据此加阴影）—— ⛔ 不做并排分道。
- *
- * @param {Object} data - `GET /api/time/home` 的响应
- * @param {?number} [nowMin] - 「现在」是当天的第几分钟（`0~1439`）—— ⭐ 0.8.33 新增，只用来判
- *      「**今天**这一列里哪些块已经过完了」（见第 ⑥ 步）。缺省 / 认不出来 ⇒ 一块都不标。
- * @returns {Array.<Object>} 七列：`{ date, label, isToday, past, blocks }`
- *      （`past` = **今天之前的那几天**，整列压暗；块上的 `isPast` = 今天这一列里已过完的那些）
+ * 课程：`start_time` → `end_time`（作息必填，不会缺）；
+ * 行程：`start_date`＋`start_time` → `end_date || start_date`＋`end_time`；
+ * **缺 `end_time` ⇒ 按默认 60 分钟画并打记号**（⛔ 不静默）；
  */
 export function buildWeek(data, nowMin) {
   const from = String((data && data.from) || '');
@@ -197,9 +164,9 @@ export function buildWeek(data, nowMin) {
   for (let i = 0; i < 7; i += 1) {
     const date = addDaysStr(from, i);
     if (to && date > to) break;
-    // ⭐ 0.8.31（「过了的时间要变灰色」）：多带一个「**这一天过完了没有**」
-    //    （`past`）—— 首页两端据此把**整列压暗**。判据只此一份，⛔ 别在两端各写各的日期比较。
-    //    ⚠️ `today` 是**服务端**给的（页面不读本机时钟）；它为空时（老响应）past 恒 false，安全。
+    // ：多带一个「**这一天过完了没有**」
+    // （`past`）—— 首页两端据此把**整列压暗**。判据只此一份，⛔ 别在两端各写各的日期比较。
+    // `today` 是**服务端**给的（页面不读本机时钟）；它为空时（老响应）past 恒 false，安全。
     cols.push({ date, label: WEEK_LABELS[i] || '', isToday: date === today, past: !!today && date < today, blocks: [] });
   }
   const at = new Map(cols.map((c, i) => [c.date, i]));
@@ -272,7 +239,7 @@ export function buildWeek(data, nowMin) {
   }
 
   // ④ 番茄与休息（只 completed；跨零点**截断在 24:00**，⛔ 不跨列）
-  //    ⭐ 0.8.32：休息（短休 / 长休）也画 —— 它是**另一种块**（`k-rest`），⛔ 不是不画。
+  // 休息（短休 / 长休）也画 —— 它是**另一种块**（`k-rest`），⛔ 不是不画。
   for (const p of (data && data.pomodoros) || []) {
     const long = String(p.kind) === 'long_break';
     const rest = long || String(p.kind) === 'short_break';
@@ -305,12 +272,9 @@ export function buildWeek(data, nowMin) {
     }
   }
 
-  // ⑥ ⭐⭐ 0.8.33（「今天过了的也要变灰色」）：**今天这一列**里逐块判「过完没有」。
-  //    ⚠️⭐ 判据是「**结束时刻**已经过去」（`endMin <= 现在`）—— 正在进行中的那一件保持原色，
-  //    它还没过完；跨天还在进行中的行程在今天这一列上 `endMin = 1440` ⇒ 天然不会被标上。
-  //    ⚠️ 只在 `isToday` 那一列上判：今天之前的整列已经由 `col.past` 压暗，不必逐块再标一次。
-  //    ⚠️ `nowMin` 由调用方从**服务端**时刻算出来（`core/timetable.js` 的 `ttNowHM()`）——
-  //    本函数仍然不读本机时钟，⛔ 也不在这里 import 任何东西。
+  // 判据是「**结束时刻**已经过去」（`endMin <= 现在`）—— 正在进行中的那一件保持原色，
+  // 它还没过完；跨天还在进行中的行程在今天这一列上 `endMin = 1440` ⇒ 天然不会被标上。
+  // 只在 `isToday` 那一列上判：今天之前的整列已经由 `col.past` 压暗，不必逐块再标一次。
   const nowM = Number(nowMin);
   const hasNow = nowMin != null && Number.isFinite(nowM);
   for (const col of cols) {
@@ -320,16 +284,13 @@ export function buildWeek(data, nowMin) {
   return cols;
 }
 
-// ---------- 0.8.30：周切换（翻周）与屏上共用文案 ----------
 
 /**
  * 功能：算某一天所在那一周的**周一**。
  *
  * 说明：⚠️ 与后端 `modules/time/routes.js` 的 `weekRangeOf()` **同口径**（本项目一律以周一为一周之首），
- *      全程 `Date.UTC` 算术 —— ⛔ 不碰本机时区。
+ * 全程 `Date.UTC` 算术 —— ⛔ 不碰本机时区。
  *
- * @param {string} day - `YYYY-MM-DD`
- * @returns {string} 那一周的周一
  */
 export function mondayOf(day) {
   const [y, m, d] = String(day).split('-').map(Number);
@@ -350,22 +311,18 @@ export function weekRangeOf(day, offsetWeeks) {
 }
 
 /**
- * 块的四类 → 点它要进的那一个子屏（0.8.30：首页的块可以点了）。
- * ⭐ 0.8.32：休息（`rest`）跟番茄进同一屏 —— 它也是番茄钟那边的事。
+ * 休息（`rest`）跟番茄进同一屏 —— 它也是番茄钟那边的事。
  * @type {Object.<string, string>}
  */
 export const HOME_TAB_OF_KIND = { course: 'timetable', trip: 'trip', ticket: 'trip', pomo: 'pomodoro', rest: 'pomodoro' };
 
-// ---------- ⭐ 0.8.32：日程表顶部那条「日期卡」（照首页看板列表视图那条周条的样子） ----------
 
 /**
  * 功能：把日期压成 `M/D` —— 日期卡下面那一行（与 `core/date.js` 的 `fmtShort` **同口径**）。
  *
  * 说明：⚠️ 本文件**不 import 任何东西**（`frontend-modules.test.js` 会在 Node 里直接 import 它跑断言，
- *      所以它必须没有依赖）⇒ 这三行自己写一份，取舍与 `trip-shared.js` 的 `escapeText` 同款。
+ * 所以它必须没有依赖）⇒ 这三行自己写一份，取舍与 `trip-shared.js` 的 `escapeText` 同款。
  *
- * @param {string} day - `YYYY-MM-DD`
- * @returns {string} 形如 `10/12`；认不出来回空串
  */
 export function mdOf(day) {
   const p = String(day == null ? '' : day).split('-');
@@ -377,12 +334,8 @@ export function mdOf(day) {
  * 功能：把一周七列折成**七张日期卡**要的那几个字段 —— ⭐ 两端共用这一份（⛔ 别各写一份）。
  *
  * 说明：⭐ 「日程表顶部那条日期切换改成首页看板那样的周条，接在对应日期下面」
- *      —— 于是这七张卡就是**七列各自的表头**（列宽自然对齐，⛔ 不必自己算偏移）。
- *      ⚠️ `past` 沿用 `buildWeek()` 的口径（**服务端**给的今天之前，⛔ 不读本机时钟）。
- *
- * @param {Array.<Object>} cols - `buildWeek()` 的产物（每列 `{ date, label, isToday, past }`）
- * @param {?string} selDay - 当前选中的那一天（可空 = 一张都不选中）
- * @returns {Array.<Object>} `{ date, weekday, md, isToday, past, sel }`
+ * —— 于是这七张卡就是**七列各自的表头**（列宽自然对齐，⛔ 不必自己算偏移）。
+ * `past` 沿用 `buildWeek()` 的口径（**服务端**给的今天之前，⛔ 不读本机时钟）。
  */
 export function dayCards(cols, selDay) {
   const sel = String(selDay == null ? '' : selDay);
@@ -399,9 +352,6 @@ export function dayCards(cols, selDay) {
 /**
  * 日期卡要用的类名（⭐ 沿用首页看板那条周条的 `.dash-day` —— 要的就是「和看板一样」）——
  * 两端的版式各写一份，但**状态怎么算、叫什么名字只有这一处**。
- *
- * @param {Object} c - `dayCards()` 的一条
- * @returns {string} 逗号分隔的类名（供两端各自拼进自己的骨架）
  */
 export function dayCardCls(c) {
   return ['dash-day', c.isToday ? 'is-today' : '', c.past ? 'is-past' : '', c.sel ? 'is-sel' : '']
@@ -409,21 +359,13 @@ export function dayCardCls(c) {
     .join(' ');
 }
 
-// ---------- ⭐ 0.8.33：顶部那行标题（「显示今天日期即可」） ----------
 
 /**
  * 功能：顶部那行标题该说**哪一天**。
  *
- * 说明：⭐ 0.8.33（「这个显示日期断干啥，显示今天日期即可」）：原来是
- *      「2026-10-12 ~ 2026-10-18」那种区间。口径（与手机端进屏滚动那一支同源）：
- *      · 选中了某一天 ⇒ 就说那一天（那一张卡与它下面那一列都高亮着，标题必须对得上）；
- *      · 没选中 ⇒ 说今天；今天不在这一屏上（翻到别的周了）⇒ 说这一屏的第一天（周一）。
- *      ⚠️ `today` 一律用**服务端**给的那一个（⛔ 页面不读本机时钟）。
- *
- * @param {Array.<Object>} cols - `buildWeek()` 的产物
- * @param {?string} selDay - 当前选中的那一天（空 = 一张都没选）
- * @param {?string} today - 服务端的今天
- * @returns {string} `YYYY-MM-DD`；一列都没有时回空串
+ * 选中了某一天 ⇒ 就说那一天（那一张卡与它下面那一列都高亮着，标题必须对得上）；
+ * 没选中 ⇒ 说今天；今天不在这一屏上（翻到别的周了）⇒ 说这一屏的第一天（周一）。
+ * `today` 一律用**服务端**给的那一个（⛔ 页面不读本机时钟）。
  */
 export function headDayOf(cols, selDay, today) {
   const list = cols || [];
@@ -436,11 +378,10 @@ export function headDayOf(cols, selDay, today) {
 
 /**
  * 功能：把一天写成顶部那行标题 —— 与首页看板 `dashRangeLabel()` 的**单日格式逐字同款**
- *      （`10月15日 周四 · 今天`）。
+ * （`10月15日 周四 · 今天`）。
  * @param {string} day - `YYYY-MM-DD`
  * @param {string} weekday - 单个汉字（一~日）
  * @param {boolean} isToday - 这一天是不是今天（是才带「 · 今天」）
- * @returns {string} 标题；日期认不出来回空串
  */
 export function dayHeadText(day, weekday, isToday) {
   const p = String(day == null ? '' : day).split('-');
@@ -463,11 +404,8 @@ export function homeHeadText(cols, selDay, today) {
 }
 
 /**
- * 首页**底部**那句口径说明 —— ⭐ 两端共用这一份（0.8.30 之前两端各写一份，还写歪成 Markdown 粗体）。
  *
- * ⚠️⭐ 0.8.33（「介绍语要简洁明了」）：从 34 字压到 20 字 —— 只留
- *      「怎么画的」这一条，⛔ 不再解释重叠与虚线的来龙去脉（界面上看得出来）。
- * @type {string}
+ * ：从 34 字压到 20 字 —— 只留
  */
 export const HOME_FOOT_HINT = '按实际时长等比例画；缺时刻的按默认长度画。';
 

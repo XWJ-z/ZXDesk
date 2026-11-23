@@ -1,36 +1,9 @@
 'use strict';
 /**
- * modules/secrets/routes.js —— **加密信息**路由（0.9.8 · 实验室第一格 / 方案 42）
+ * modules/secrets/routes.js —— **加密信息**路由
  *
  * 功能：`handleSecrets` 一处收全部接口 —— 正文的增删改查 ＋ 附件的上传 / 下载 / 列表 / 删除
- *      ＋ 附件位置设置。
- *
- * 路由表（`parts = ['api','secrets', …]`）——
- *   · `GET    /api/secrets`               列表（**只回标题与时间，不含正文**）—— 需要解锁
- *   · `POST   /api/secrets`               新增 —— 需要解锁
- *   · `GET    /api/secrets/:id`           单条（**含正文**）—— 需要解锁 ＋ 归属校验
- *   · `PUT    /api/secrets/:id`           编辑 —— 需要解锁 ＋ 归属校验
- *   · `DELETE /api/secrets/:id`           删除（**连带删掉它的附件行与文件**）—— 需要解锁
- *   · `GET    /api/secrets/:id/files`     这条的附件列表（名字/mime 解密后给）—— 需要解锁
- *   · `POST   /api/secrets/:id/files`     上传（**原始字节体**）—— 需要解锁 ＋ 归属校验
- *   · `GET    /api/secrets/files/:fid`    下载 / 预览 / Range —— 需要解锁 ＋ 归属校验
- *   · `DELETE /api/secrets/files/:fid`    删一个附件 —— 需要解锁 ＋ 归属校验
- *   · `GET    /api/secrets/settings`      附件位置（当前根 ＋ 默认根 ＋ 用过的根与用量）
- *   · `PUT    /api/secrets/settings`      改附件位置（六条校验，非法 400）—— 只影响之后的上传
- *                                        **保存成功后自动扫一次重新关联**（响应带计数）
- *   · `POST   /api/secrets/roots/relink`  重新关联（把挪走的附件目录认回来）—— 只改行的 `root`
- *   ⚠️「需要解锁」的判定**不在这一层**：它由 `modules/vault/store.js` 的 `_vaultDek()`
- *   自己抛 403（密码库与加密信息**共用同一个解锁态**，方案 42 §二·2）。路由层只负责
- *   把错误交给统一出口收口 —— ⛔ 别在这里另写一套「锁没锁」的判断（那就是第二份真相）。
- *
- * ⭐ **三条硬规矩**：
- *   ① **响应体里绝不出现任何密钥材料**：DEK / 盐 / 主密码 / 密文三列一个都不回；
- *   ② **日志里只有账号名与动作**：⛔ 不出现标题 / 正文 / **文件名**（文件名比正文更扎眼）；
- *   ③ **附件不进备份**（决策 144 ③）：所以「附件位置」这个接口必须把「该自己备份哪几个文件夹」
- *      如实告诉用户 —— 只说「不进备份」等于把问题丢回去。
- *
- * ⚠️ 越权与不存在回**同一个 404**（403 等于告诉对方「这条存在，只是不归你」），
- *    而且归属校验排在「取 DEK」之前 —— 未解锁时探某个 id 也只得到 404。
+ * ＋ 附件位置设置。
  *
  * @author zx
  * @date   2026-11-07
@@ -40,11 +13,11 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { logLine, store } = require('../../core/context.js');
+const { dataDir, logLine, store } = require('../../core/context.js');
 const { gatewayUser } = require('../../core/gateway.js');
 const trimApi = require('../../core/trim-api.js');
 // ⭐ 授权树逐层浏览（与「修改数据位置」共用一份判据）：附件位置现在能选**子目录**
-const { browseDirs, makeDir, grantUidOf } = require('../../core/grant-tree.js');
+const { browseDirs, makeDir, grantUidOfOrNull } = require('../../core/grant-tree.js');
 const { normPath: normGrantPath } = require('../../core/grant-path.js');
 const { httpError, idParam, json, notFound, readBody } = require('../../core/http-util.js');
 const { loginThrottle } = require('../../core/routes/auth.js');
@@ -54,6 +27,24 @@ const receive = require('./lib/receive.js');
 
 /** 允许**内联**在浏览器里打开的 mime（其余一律 `attachment` 下载） @type {Array.<string>} */
 const INLINE_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'];
+
+/**
+ * 功能：**没有网关身份**时，选目录能用的授权根 —— 本机已登记的 ＋ 应用自己的数据目录。
+ *
+ * 说明：⭐⭐ 直连端（安卓客户端 / 局域网直连 / Windows）读不到飞牛的授权清单（它只认网关头），
+ *      但「管理员给本应用的访问权限」在飞牛那边本来就把应用数据目录算了进去 ——
+ *      那份清单读不到，不代表那个目录不能碰。补上 `dataDir`（应用自己的家，一定有权限），
+ *      界面列出来的第一项就和飞牛 App 里看到的那一项对得上。
+ *      ⚠️ 只补这一个，⛔ 不补「猜出来的兄弟目录 / 上级目录」—— 那等于把权限面放大到整片存储。
+ * @param {number} uid - 本应用账号 id
+ * @returns {Array.<string>} 目录绝对路径（已去重）
+ */
+function localOnlyRoots(uid) {
+  const out = store.dirGrantRoots(uid);
+  const d = normGrantPath(dataDir);
+  if (d && !out.includes(d)) out.push(d);
+  return out;
+}
 
 /**
  * 阅读器嗅探出来的 mime 缓存：`路径|size|mtime → {at, mime}`，最多 16 条、5 分钟。
@@ -635,17 +626,26 @@ function handleSecretsInner({ req, res, parts, url, method, uid, user }) {
   // ==========================================================================================
   if (parts.length === 3 && parts[2] === 'dirs' && method === 'GET') {
     const sp = url && url.searchParams ? url.searchParams : new URLSearchParams();
-    // 网关身份在进树之前就要判（拿不到就直说，⛔ 不回一个空清单让人去反复授权）
-    let grantUid;
-    try {
-      grantUid = grantUidOf(req);
-    } catch (e) {
-      return json(res, (e && e.status) || 409, {
-        error: (e && e.message) || '读不到已授权目录',
-        code: (e && e.code) || '',
+    // ⭐⭐ 没有网关身份（安卓客户端 / 局域网直连 / Windows 版：都不经过飞牛统一网关）时，
+    //    飞牛的授权清单**根本查不到**（`trim.file.*` 只认 `X-Trim-Userid`）。以前这里直接 409，
+    //    表现就是「飞牛 App 里能看到授权目录，安卓 App 里一个都列不出来」。
+    //    现在改用「本账号当初核过飞牛授权、且现在读得到」的登记行当授权根 —— 判据没放宽，
+    //    见 `store.dirGrantRoots()`；有网关身份时**行为一字不变**（不并这份，免得授权撤销后还能浏览）。
+    const grantUid = grantUidOfOrNull(req);
+    const extraRoots = grantUid == null ? localOnlyRoots(uid) : [];
+    if (grantUid == null && !extraRoots.length) {
+      return json(res, 409, {
+        error:
+          '这台设备是直连的，读不到飞牛的授权目录清单；本账号也还没有登记过任何授权目录。请先用飞牛 App 或飞牛桌面打开本应用，在「设置 → 账号设置 → 个人授权目录」里授权一个目录。',
+        code: 'NO_GATEWAY_NO_LOCAL',
       });
     }
-    return browseDirs({ uid: grantUid, dir: sp.get('dir') || '', fresh: sp.get('fresh') === '1' })
+    return browseDirs({
+      uid: grantUid,
+      dir: sp.get('dir') || '',
+      fresh: sp.get('fresh') === '1',
+      extraRoots,
+    })
       .then(async (r) => {
         // 根层补备注：备注登记在「授权根」上（子目录没有登记行）—— 树上那一列就是它
         let dirs = r.dirs;
@@ -680,11 +680,14 @@ function handleSecretsInner({ req, res, parts, url, method, uid, user }) {
   if (parts.length === 3 && parts[2] === 'mkdir' && method === 'POST') {
     return readBody(req, res, async (b) => {
       try {
-        // ⚠️ 与 `/dirs` 同一口径：`uid` 是飞牛用户 uid，不是 `ctx.uid`
+        // ⚠️ 与 `/dirs` 同一口径：`uid` 是飞牛用户 uid，不是 `ctx.uid`；
+        //    直连端（无网关身份）与 `/dirs` 一样退到「本机已登记目录」那一份授权根。
+        const grantUid = grantUidOfOrNull(req);
         const r = await makeDir({
-          uid: grantUidOf(req),
+          uid: grantUid,
           dir: String((b && b.parent) || ''),
           name: String((b && b.name) || ''),
+          extraRoots: grantUid == null ? localOnlyRoots(uid) : [],
         });
         return json(res, 201, { ok: true, path: r.path, name: r.name });
       } catch (e) {

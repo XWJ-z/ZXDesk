@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：NoticeScreen.kt
- * 职责：公告页，服务端 app_notice 的列表（整屏，从抽屉「更多」进）
  */
 
 package com.zxdesk.app.ui
@@ -42,18 +40,6 @@ import com.zxdesk.core.update.Notice
 /**
  * 公告（整屏，从抽屉「更多 → 公告」进）。
  *
- * 数据在服务端 `app_notice` 表（接口 `GET /api/notices/android`），本页只负责排版。
- *
- * ⭐ **进页面就算读过了**：用户已经看见列表，不必再点一次「朕已阅」——
- * 那个按钮是给「只想消掉弹窗、不想进页面」的人留的。
- *
- * 排版（0.2.18 第二版，老大 15:24 说「有点丑」）：
- * - 「上次更新」从卡片下面那行**孤零零的小字**并进顶栏副行（`N 条 · 上次更新 xx`）；
- * - 卡片去掉整圈红边（那看着像报错），重要公告改成标题前一个红点、日期行一个「重要」小字；
- * - 标题 16sp、正文 14sp/22sp，日期与正文之间加一条淡分割线，信息层次不再糊成一团。
- *
- * @param onRefresh 顶栏「刷新」：受 10 分钟窗口约束（见 `AppViewModel.refreshNotices`）
- * @param onReadAll 标记全部已读（进入本页时自动调一次）
  */
 @Composable
 internal fun NoticeScreen(
@@ -208,7 +194,6 @@ private fun NoticeCard(notice: Notice) {
 }
 
 /**
- * 只取日期部分（服务端给的是 ISO 时间串，如 `2026-10-28T12:00:00.000Z`）。
  *
  * 公告是「哪天发的」，精确到分没有意义，反而把标题挤窄。
  */

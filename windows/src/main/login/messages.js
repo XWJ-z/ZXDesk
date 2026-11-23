@@ -1,11 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：messages.js
- * 职责：WS 请求体构造（移植自 `FnLoginClient.kt` 的 `payload()` / `FnLoginVerify.inner()` / `tokenLoginExtra()`）
- *
- * 两条不能错的规矩：
- * 1. **reqid 与 JSON 必须同源生成** —— 只取 JSON 另编一个 reqid 会永远等不到响应（只能等超时）；
- * 2. **`si` 必须是字符串** —— 18 位整数当数字发出去会被截断（2.16E17），服务端认不出。
  */
 
 /** 请求号发生器：心跳与业务请求共用同一个序列，⛔ 必须串行（回包会串号）。 */

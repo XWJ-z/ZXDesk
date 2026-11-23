@@ -1,12 +1,9 @@
 /**
  * 打 Windows **安装包**（正式版）：`npm run dist:setup`。
- *
  * 正式版口径：**正式版一律给安装包**；绿色 zip 只用于测试版。
  * 所以这个脚本产出的是 `release/zxdesk-windows-<version>-x64-setup.exe`，不是绿色包。
- *
  * 前置：先有应用目录（`build/out/ZXDesk-win32-x64`）。脚本会自己检查，没有就提示先跑 `npm run dist`。
  * 编译：本机用 `ttt/tools/nsis/makensis`（免 root 便携版，见该目录 README）。
- *
  * 检查项（失败即退 1）：
  * - 应用目录存在、里面 `ZXDesk.exe` 带我们的图标（7 个尺寸，防「打了张没图标的包」）；
  * - makensis 编译成功，产物是 PE（`MZ` / `PE\0\0`）；
@@ -51,7 +48,7 @@ if (!fs.existsSync(makensis)) {
   );
 }
 
-// 应用目录里的 exe 必须带图标（0.1.6 的教训：发出去没图标）
+// 应用目录里的 exe 必须带图标（的教训：发出去没图标）
 const ResEdit = await import('resedit');
 const exeRes = ResEdit.NtExecutableResource.from(
   ResEdit.NtExecutable.from(fs.readFileSync(path.join(srcDir, 'ZXDesk.exe')), { ignoreCert: true }),

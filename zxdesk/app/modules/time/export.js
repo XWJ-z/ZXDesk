@@ -1,22 +1,11 @@
 'use strict';
 /**
- * modules/time/export.js —— **番茄钟与日程表**（`0.8.13`）：个人备份片段的**拼装层**
- *
+ * modules/time/export.js —— **番茄钟与日程表**：个人备份片段的**拼装层**
  * 功能：把三个同级子模块各自进个人备份的那一份拼成一份。`store/methods/stats.js` 通过
- *      `modules/registry.js` 的 `exportFragments()` 合并各模块的片段 —— **搬走一个模块目录，
- *      它那几行就消失**（`time/` 整目录删掉 ⇒ 三块的备份键一起消失，正是删目录验收要看的事）。
- *
- * ⚠️⭐ **13 个键里，课表那 5 个仍是 0.1.2 时代的老名字**（`terms` / `period_blocks` / `periods` /
- *    `courses` / `course_sessions`）—— 它们跟**表名**走会造成「用 0.1.1 导出的老备份读不出来」，
- *    所以**一个字都不许动**（理由逐字见 `timetable/export.js` 的文件头）。
- *    其余 8 个键（调休 / 按日备注 / 番茄 2 / 行程 4）**跟着新表名走**。
- *
- * ⚠️ 键撞车由 `exportFragments()` 抛错兜住；三个子模块之间的键名实测两两不重
- *    （5 个老名 ＋ `time_` 前缀那 8 个），这里只做拼接。
- *
+ * `modules/registry.js` 的 `exportFragments()` 合并各模块的片段 —— **搬走一个模块目录…
  * @author zx
  * @date   2026-10-05
- * @since 0.8.13
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/27-番茄钟与日程表.md、03-数据安全与备份.md
  */
 

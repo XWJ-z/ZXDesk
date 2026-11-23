@@ -1,8 +1,5 @@
 /**
  * 壳的静态体检（本机没有显示器，跑不了 Electron，就把能静态验的都验掉）。
- *
- * 这些断言对应的都是「首跑直接白屏 / 按钮点了没反应」那类故障：
- * 引用了不存在的文件、CSP 把脚本挡了、内联事件被 CSP 拦、preload 路径写错。
  */
 
 import assert from 'node:assert/strict';
@@ -54,7 +51,6 @@ test('preload 只暴露窄 API，不把 ipcRenderer 整个递出去', () => {
 test('壳界面里没有硬编码的凭据 / 演示密码，也不往浏览器存储里写', () => {
   const app = fs.readFileSync(path.join(shellDir, 'app.js'), 'utf8');
   assert.ok(!/password\s*[:=]\s*['"][^'"]+['"]/.test(app), 'app.js 里不该有写死的密码');
-  // 注释里可以提 localStorage（说明「不用它」），但不许真的调用它
   assert.ok(!/(localStorage|sessionStorage)\s*\.\s*(setItem|getItem|removeItem)/.test(app), '壳不往浏览器存储里写东西');
 });
 
@@ -188,7 +184,6 @@ test('壳脚本不用 type="module"（file:// 下 ES module 会被 CORS 拦掉�
   assert.match(html, /<script src="app\.js" defer><\/script>/);
 });
 
-// ---------------------------------------------------------------- 0.1.2：壳必须把值带上 + 界面居中
 
 test('壳把 2FA 的值随动作发出去（⛔ 别再只存本地）', () => {
   const app = fs.readFileSync(path.join(shellDir, 'app.js'), 'utf8');
@@ -229,7 +224,6 @@ test('壳把主进程的 busy / error 合并回来（否则「验证中…」和
 test('顶栏是文字菜单栏：没有徽标、没有图标按钮、没有内联 SVG', () => {
   const html = fs.readFileSync(path.join(shellDir, 'index.html'), 'utf8');
   assert.match(html, /id="menubar"/, '应该有菜单栏容器');
-  // Windows 规范四组（0.2.6 重排；旧口径是照 Android 抽屉分 connect/settings）
   for (const menu of ['file', 'view', 'tools', 'help']) {
     assert.match(html, new RegExp(`data-menu="${menu}"`), `缺菜单：${menu}`);
   }
@@ -256,12 +250,8 @@ test('菜单栏仍是 44px，远程视图的偏移不用改', () => {
 });
 
 /**
- * 0.2.6：菜单栏**常驻**（Windows 规范）。
+ * 菜单栏**常驻**（Windows 规范）。
  *
- * ⚠️ 两个容易回退的点：
- * ① `no-toolbar` 是**布局**类（内容区高度要不要减 44px），必须跟 `menubar.hidden` 走；
- *    以前它跟「是不是浏览屏」走 —— 菜单常驻之后连接页会多出 44px、表单被顶出屏幕。
- * ② 访问码屏会把 `menuGroup` 藏起来，回连接页必须重置，否则菜单凭空消失。
  */
 test('菜单栏常驻：no-toolbar 跟 menubar.hidden 走，菜单组回连接页要还原', () => {
   const app = fs.readFileSync(path.join(shellDir, 'app.js'), 'utf8');
@@ -286,7 +276,7 @@ test('「显示 / 隐藏」是独立按钮，不换行', () => {
 });
 
 /**
- * 0.2.6：切换账号的两个入口 —— 连接页账号框右侧的「切换」按钮，与菜单「文件 → 切换账号」，
+ * 切换账号的两个入口 —— 连接页账号框右侧的「切换」按钮，与菜单「文件 → 切换账号」，
  * 打开的是同一个弹窗。
  */
 test('连接页账号框右侧有「切换」按钮，点开的是同一个弹窗', () => {
@@ -307,7 +297,6 @@ test('切换账号弹窗：遮罩容器在、且渲染函数只认主进程给�
   const app = fs.readFileSync(path.join(shellDir, 'app.js'), 'utf8');
   assert.match(app, /function renderAccounts\(acc\)/);
   assert.match(app, /renderAccounts\(state\.accounts\)/, 'render 要接上弹窗状态');
-  // ⚠️ 弹窗必须画在 browsingLike 早退之前，否则浏览页里打不开
   const callAt = app.indexOf('renderAccounts(state.accounts)');
   const earlyReturn = app.indexOf('if (browsingLike) {');
   assert.ok(callAt > 0 && callAt < earlyReturn, '弹窗渲染要排在 browsingLike 早退之前');
@@ -323,7 +312,7 @@ test('切换账号弹窗：**水平垂直都居中**，且超高时能滚到头'
   const card = css.slice(css.indexOf('.modal-card {'), css.indexOf('.modal-head {'));
 
   assert.match(modal, /display:\s*flex/);
-  // ⚠️ 正则要锚在**声明行**上：注释里也提到这两个值（说明为什么不这么写），不能误伤
+  // 正则要锚在**声明行**上：注释里也提到这两个值（说明为什么不这么写），不能误伤
   assert.equal(/^\s*align-items:\s*flex-start/m.test(modal), false, '⛔ 顶部对齐就是「没有垂直居中」');
   assert.equal(
     /^\s*align-items:\s*center/m.test(modal),
@@ -348,7 +337,6 @@ test('「记住密码」勾选会先写回本地副本（否则提交时被旧�
   assert.match(app, /form\.rememberPassword = event\.target\.checked/);
 });
 
-// ---------------------------------------------------------------- 0.1.5：显示密码要能被状态带回来
 
 test('render 合并里包含 showPassword / rememberPassword（否则「显示」点了没反应）', () => {
   const app = fs.readFileSync(path.join(shellDir, 'app.js'), 'utf8');
@@ -364,7 +352,6 @@ test('「显示 / 隐藏」按钮仍是独立小按钮（不换行）', () => {
   assert.match(block, /flex:\s*0 0 auto/);
 });
 
-// ---------------------------------------------------------------- 0.1.6：设置菜单 / 托盘 / 自启
 
 test('「设置」在工具菜单里（顶栏不再单独占一格），且仍然没有图标', () => {
   const html = fs.readFileSync(path.join(shellDir, 'index.html'), 'utf8');
@@ -391,7 +378,6 @@ test('主进程：菜单白名单是 Windows 规范四组；托盘 / 快捷方�
   assert.match(main, /closeToTray/, '关闭到托盘');
 });
 
-// ---------------------------------------------------------------- 0.1.6 收尾：设置菜单 / 快捷方式图标
 
 test('设置菜单不再显示启动文件夹长路径，改成可点的「打开启动文件夹」', () => {
   const main = fs.readFileSync(path.join(root, 'src', 'main', 'index.js'), 'utf8');
@@ -440,7 +426,6 @@ test('没有「打不开页面」整页错误屏了：错误只走菜单栏提�
   assert.ok(!controller.includes('已尝试'), '⛔ 不再拼「已尝试」列表');
 });
 
-// ---------------------------------------------------------------- 0.1.6 收尾 2：登录失败内联 / 密码回填
 
 test('登录失败那一行在「连接」按钮**下方**（⛔ 不再表单上方大块错误卡）', () => {
   const app = fs.readFileSync(path.join(shellDir, 'app.js'), 'utf8');

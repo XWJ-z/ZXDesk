@@ -2,42 +2,17 @@
 
 /**
  * modules/teamwork/backend/sqlite.js —— 对话四张表的存储原语（好友 / 会话 / 成员 / 消息）的**SQLite 版原语**
- *
  * 功能：本模块自己的存储原语（SQLite），与另一个后端**同名同参** ——
- *      「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，少一个 / 打错名 / 形参个数不一致 = 启动即抛。
- *
- * ⭐ 0.5.0 模块化重构（方案 `09-模块化重构` §四 第 2 行）：比对的粒度从「两个大文件」下移到**每个模块自己的一对**。
- *    ⚠️ **纯搬运**：方法体是从 `store/backend/sqlite.js` 按片段**逐字节切出来**的，一个字都没重写
- *    （切块前后 sha256 见 0.5.0的提交说明）。
- *
- * ⚠️ ops 里的 `this` 是 **Store 实例**（门面用 `.apply(store, …)` 调用），所以照常访问
- *    `this.db` / `this.data` / `this._saveJson()` / `this._listSql()`。
- *
+ * 「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，少一个 / 打错名 / 形参个数不一致 = 启动即抛。
  * @author zx
  * @date   2026-09-14
- * @since 0.8.13
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md、docs/公共/开发方案/09-模块化重构.md
  */
 
 /**
- * ⭐⭐ **「我清掉的那一段消息」的可见性判据** —— 全项目**只有这一处**（一处定义、三处复用）。
+ * **「我清掉的那一段消息」的可见性判据** —— 全项目**只有这一处**（一处定义、三处复用）。
  *
- * 说明：⚠️ 清一段聊天记录**不删任何一行**（对话是跨账号数据，删行＝连对方的记录一起删），
- *      只往 `teamwork_cleared` 记一行「我隐藏了哪个会话的哪一段」，读的时候把这一段滤掉。
- *      ⇒ 三个调用者**必须都用这一份**（各写一份的后果是「清空后往回翻又能翻出来」这类静默漏洞）：
- *      ① `listMessages()` —— `before` / `after` **两个游标都要服从**；
- *      ② `listConversations()` 的**未读数**子查询；
- *      ③ `listConversations()` 的**左栏预览**四个子查询（body / 发送者 / 是否内置 / 时间）。
- *
- *      ⚠️⭐ 两条**写进判据形状里**的硬规矩（见 `schema.js` 那张表的说明）：
- *      · `expires_at` **绝不出现在这里** —— 它只决定「回收站里还显不显示、还能不能恢复」；
- *        让它参与可见性 ⇒ 30 天后被清掉的消息**全部复活**。
- *      · 「会话排序」**刻意不服从**它（会话还是那个会话，按真实的最后一条消息排）—— 这是**有意**的，
- *        别让后来者以为漏了。
- *
- * @param {string} alias - 消息表的别名（`m` / `x` / `y`）
- * @param {string} owner - 「我」的表达式（外层成员行的 `m.user_id`，或 `listMessages` 里的绑定占位符 `?`）
- * @returns {string} 可直接拼进 `WHERE … AND` 的 SQL 片段
  */
 function clearedVisible(alias, owner) {
   return (
@@ -47,26 +22,23 @@ function clearedVisible(alias, owner) {
   );
 }
 
-// ⭐⭐ 0.8.12：协作五张表搬进本模块后，这里补齐它们的原语。
-//    `ensureReportFlowSchema()` 重建 `task_reports` 时要用**本模块自己的 DDL**（单一出处，避免
-//    重建出来的表与 `schema.js` 漂移）；schema.js 是纯数据、无 require，不会成环。
+// 协作五张表搬进本模块后，这里补齐它们的原语。
+// `ensureReportFlowSchema()` 重建 `task_reports` 时要用**本模块自己的 DDL**（单一出处，避免
+// 重建出来的表与 `schema.js` 漂移）；schema.js 是纯数据、无 require，不会成环。
 const TEAMWORK_SCHEMA = require('../schema.js');
-// ⭐⭐ 0.8.12：删项目 / 删任务的**磁盘连带**要用附件路径助手（与业务层单一出处）。
+// 删项目 / 删任务的**磁盘连带**要用附件路径助手（与业务层单一出处）。
 const { removeFileDisk, removeProjectDir } = require('../lib/collab.js');
-// ⭐⭐ 0.8.12：存量 AI 会话搬迁要给新建的会话 / 成员行一个时间戳。
-//    与业务层同一份（`nowStamp()` 的时区口径只此一处）。
+// 存量 AI 会话搬迁要给新建的会话 / 成员行一个时间戳。
+// 与业务层同一份（`nowStamp()` 的时区口径只此一处）。
 const { nowStamp } = require('../../../core/store/helpers.js');
 
 const ops = {
-  // ---- 对话（0.3.5）----
   /**
    * 功能：列出该账号**自己这一侧**的全部好友关系行（含 `pending` / `accepted` / `blocked`）。
    *
    * 说明：⭐ 好友存两行（我→他 / 他→我），所以「我的好友列表」就是这一条最简单的单表查询。
-   *      ⚠️ 状态与对方那一行**由 `setFriendshipPair` 保证一致**，这里不做任何推导。
+   * 状态与对方那一行**由 `setFriendshipPair` 保证一致**，这里不做任何推导。
    *
-   * @param {number} uid - 用户 id
-   * @returns {Array.<Object>} 好友关系行数组（按 id 升序，即「先加的在前面」）
    */
   listFriendships(uid) {
     return this._listSql('SELECT * FROM teamwork_friendships WHERE user_id=? ORDER BY id ASC', [uid]);
@@ -86,16 +58,8 @@ const ops = {
    * 功能：把一对账号的好友关系**两行一起**写成同一个状态（不存在则建），返回是否成功。
    *
    * 说明：⭐ **必须是一个事务**，这是本模块最容易出「裂脑」的一处：只写了「我→他」而没写
-   *      「他→我」的话，A 的界面上是好友、B 的界面上却不是 —— 而且没有任何报错。
-   *      一条 SQL 就够：`INSERT … ON CONFLICT(user_id, friend_id) DO UPDATE`
-   *      （依赖建表时的 `UNIQUE(user_id, friend_id)`）。
-   *
-   * @param {number} uid - 一方账号 id
-   * @param {number} friendId - 另一方账号 id
-   * @param {string} status - 目标状态（`pending` / `accepted` / `blocked`）
-   * @param {number} requestedBy - 发起人账号 id（只在新插入时写入，改状态时**不动它**）
-   * @param {string} stamp - 时间戳（`created_at` 与 `updated_at` 都写它）
-   * @returns {boolean} 恒为 true（写入失败会抛错而不是返回 false）
+   * 「他→我」的话，A 的界面上是好友、B 的界面上却不是 —— 而且没有任何报错。
+   * 一条 SQL 就够：`INSERT … ON CONFLICT(user_id, friend_id) DO UPDATE`
    */
   setFriendshipPair(uid, friendId, status, requestedBy, stamp) {
     const a = Number(uid);
@@ -140,25 +104,14 @@ const ops = {
   /**
    * 功能：列出「我参与的会话」，每条带上**我自己的未读数**与**最后一条消息的三个摘要字段**。
    *
-   * 说明：⭐ 一次查询就把会话列表页要画的东西取齐（方案 §4.1 取舍 3）——
-   *      改造前那种「先查会话、再逐条 `MAX(id)`」的写法是 N+1，在 `node:sqlite` 全同步 +
-   *      Node 单线程下会直接反映到首屏上（与收藏夹 / 硬件台账同一条理由）。
-   *      ⚠️ 未读数**不算自己发的消息**（`x.user_id <> ?`）：自己刚发完还顶着一个红点，
-   *      是最容易被当成本应用有 bug 的那种表现。
-   *      ⭐ 0.6.x 的**唯一例外**：内置角色（提醒助手）发的消息 `user_id` 也写会话归属者
-   *      （= 我自己，见 `insertMessage` 的说明），所以判据是「不是我发的 **或** 是内置角色发的」
-   *      —— 少了后半句，「提醒助手未读计入总数」（定案 6）会**静默失效**：
-   *      服务端算出 0 条未读，红点永远不会亮，而不报任何错。
-   *      ⚠️ 排序用冗余列 `last_message_id`（空会话排最后），不再对消息表做聚合。
-   *
-   * @param {number} uid - 用户 id
-   * @returns {Array.<Object>} 会话行数组（含 `last_read_id` / `unread` / `last_body` /
-   *      `last_sender_id` / `last_created_at`，按最后一条消息倒序）
+   * 改造前那种「先查会话、再逐条 `MAX(id)`」的写法是 N+1，在 `node:sqlite` 全同步 +
+   * Node 单线程下会直接反映到首屏上（与收藏夹 / 硬件台账同一条理由）。
+   * 未读数**不算自己发的消息**（`x.user_id <> ?`）：自己刚发完还顶着一个红点，
    */
   listConversations(uid) {
     const u = Number(uid);
-    // ⭐ 0.7.7：五个子查询都要过「我清掉的那一段」这道闸（判据见 `clearedVisible()` 的说明）。
-    //    「我」一律取外层成员行的 `m.user_id`（相关子查询引用外层列是合法的）⇒ 绑定参数仍只有两个 u。
+    // 五个子查询都要过「我清掉的那一段」这道闸（判据见 `clearedVisible()` 的说明）。
+    // 「我」一律取外层成员行的 `m.user_id`（相关子查询引用外层列是合法的）⇒ 绑定参数仍只有两个 u。
     const vis = (alias) => clearedVisible(alias, 'm.user_id');
     return this._listSql(
       `SELECT c.*, m.last_read_id,
@@ -200,11 +153,8 @@ const ops = {
    * 功能：按 id 取一个会话行（**不带归属条件** —— 判权由调用方先 `isMember()` 做）。
    *
    * 说明：⚠️ 这是本模块与其它模块在写法上最大的不同：会话是**跨账号**的，
-   *      「这行是不是你的」没有意义（它同时属于两个人），所以这里只按 id 取，
-   *      而**「能不能看」一律由 `methods/teamwork.js` 先问 `isMember()`**。
-   *
-   * @param {number} cid - 会话 id
-   * @returns {?Object} 会话行；不存在为 null
+   * 「这行是不是你的」没有意义（它同时属于两个人），所以这里只按 id 取，
+   * 而**「能不能看」一律由 `methods/teamwork.js` 先问 `isMember()`**。
    */
   getConversation(cid) {
     return this.db.prepare('SELECT * FROM teamwork_conversations WHERE id=?').get(Number(cid)) || null;
@@ -226,12 +176,8 @@ const ops = {
    * 功能：⭐ **判权核心** —— 该账号是不是这个会话的成员。
    *
    * 说明：本模块的每一条读、每一条写、每一次 SSE 推送范围，都以它为唯一判据
-   *      （方案 §4.4 问题 1）。⚠️ **好友关系不构成读历史消息的权限**：
-   *      删好友之后这个会话就不可读了（已批准的一期规则）。
+   * 删好友之后这个会话就不可读了（已批准的一期规则）。
    *
-   * @param {number} uid - 用户 id
-   * @param {number} cid - 会话 id
-   * @returns {boolean} 是成员则为 true
    */
   isMember(uid, cid) {
     return !!this.db
@@ -282,12 +228,8 @@ const ops = {
    * 功能：把「我在这个会话里的已读游标」推进到指定消息 id（标记已读走它）。
    *
    * 说明：⚠️ 游标**只许前进**（`COALESCE(last_read_id,0) < ?`）：多端同时在线时，
-   *      一端读到 100、另一端还在 50，若允许回退就会出现「已读红点去掉了又回来」。
+   * 一端读到 100、另一端还在 50，若允许回退就会出现「已读红点去掉了又回来」。
    *
-   * @param {number} uid - 用户 id
-   * @param {number} cid - 会话 id
-   * @param {number} lastReadId - 目标游标
-   * @returns {boolean} 更新到行则为 true
    */
   updateMemberRead(uid, cid, lastReadId) {
     const r = this.db
@@ -299,30 +241,17 @@ const ops = {
   },
 
   /**
-   * 功能：按游标取一个会话的消息 —— `afterId` 给增量补齐（升序），否则取 `beforeId` 之前的历史（倒序）。
    *
    * 说明：⭐ 两种情况共用一条原语，但**排序方向刻意不同**：
-   *      · `afterId`（断线补齐 / 轮询降级）要**升序**，直接按到达顺序合并即可；
-   *      · 历史分页要**倒序取最近 N 条**（界面从下往上翻），由业务层再反转成展示顺序。
-   *      ⚠️ 判权**不在这里**（这一层只做数据）：调用方必须先 `isMember()`。
-   *
-   * @param {number} cid - 会话 id
-   * @param {?number} beforeId - 取比它更早的消息（历史分页）
-   * @param {?number} afterId - 取比它更新的消息（增量补齐）
-   * @param {number} limit - 条数上限（路由层已限到 200）
-   * @param {number} uid - ⭐ 0.7.7：读者账号 id —— 可见性判据要按**他**清掉的那几段算
-   *      （`before` / `after` **两个游标都服从**，否则「清空后往回翻又能翻出来」）
-   * @returns {Array.<Object>} 消息行数组
    */
   listMessages(cid, beforeId, afterId, limit, uid) {
     const c = Number(cid);
     const n = Number(limit) || 50;
     const u = Number(uid) || 0;
     const vis = clearedVisible('m', '?');
-    // ⭐ 0.8.12：显式列清单 —— ⛔ **永不 `SELECT m.*`**。
-    //    本表 2g 起多了一列 `image`（整串 data URL），`m.*` 会把 base64 拖进每一次列表 /
-    //    SSE 载荷（一页 50 条就是几十 MB）。所以这里**只回 `has_image`**（0/1），
-    //    与 ai 那边 0.8.6 的定式逐字一致。⚠️ 两个后端必须同列同序。
+    // 显式列清单 —— ⛔ **永不 `SELECT m.*`**。
+    // 本表 2g 起多了一列 `image`（整串 data URL），`m.*` 会把 base64 拖进每一次列表 /
+    // SSE 载荷（一页 50 条就是几十 MB）。所以这里**只回 `has_image`**（0/1），
     const cols =
       'm.id, m.user_id, m.conversation_id, m.body, m.sender_builtin, m.kind, m.meta, m.segment, ' +
       '(m.image IS NOT NULL) AS has_image, m.created_at';
@@ -350,21 +279,8 @@ const ops = {
    * 功能：写入一条消息，并**在同一个事务里**把会话的 `last_message_id` 推进到它；返回新消息行。
    *
    * 说明：⭐ 两件事必须一起成：只写消息不推 `last_message_id`，会话列表的排序就停了
-   *      （新消息永远排不到最上面，而且不报任何错）。
-   *      ⚠️ 这里有**两次写**却只有一条语句是「业务」—— 所以走显式事务，不用 `_insert`
-   *      （`_insert` 是单行插入，无法覆盖会话那一行）。
-   *
-   * @param {number} uid - 发送者 id
-   * @param {number} cid - 会话 id
-   * @param {string} body - 消息正文（纯文本，长度已由 `validate.js` 把关）
-   * @param {string} createdAt - 发送时间戳
-   * @param {?string} [senderBuiltin] - 有值 = 这条是**内置角色**发的（0.6.x，方案 12）；
-   *      普通消息传 `null` / 不传。⚠️ 即便如此，`user_id` 照样写**会话归属者** —— 不建虚拟账号
-   *      （口令列 NOT NULL），未读/判权/推送那三套机制因此一行都不用改。
-   * @param {?string} [kind] - 消息种类（0.6.4，任务联动）：`'task_card'` = 任务卡片；普通消息传 `null`。
-   * @param {?string} [meta] - 卡片载荷（**已序列化好的 JSON 文本**，校验与序列化都在 `validate.js` 一处）；
-   *      `kind` 为空时必须为空。⚠️ 这里**不解析**它：存储层不认识载荷的字段语义。
-   * @returns {Object} 新消息行（带 `id`）
+   * （新消息永远排不到最上面，而且不报任何错）。
+   * 这里有**两次写**却只有一条语句是「业务」—— 所以走显式事务，不用 `_insert`
    */
   insertMessage(uid, cid, body, createdAt, senderBuiltin, kind, meta) {
     const u = Number(uid);
@@ -407,18 +323,14 @@ const ops = {
    * 功能：取一个会话里**最大**的消息 id（没有消息时为 0）—— 标记已读时用来**夹住游标**。
    *
    * 说明：⚠️ 这一条不是可选的：游标是**全局自增 id**（不是会话内序号），
-   *      若原样接受客户端传来的 `lastReadId: 999999`，这个会话未来所有的消息都会被判成「已读」，
-   *      而且**再也收不到未读红点** —— 用户只会觉得「这个功能时灵时不灵」。
-   *
-   * @param {number} cid - 会话 id
-   * @returns {number} 该会话最大消息 id；没有消息为 0
+   * 若原样接受客户端传来的 `lastReadId: 999999`，这个会话未来所有的消息都会被判成「已读」，
+   * 而且**再也收不到未读红点** —— 用户只会觉得「这个功能时灵时不灵」。
    */
   maxMessageId(cid) {
     const r = this.db.prepare('SELECT MAX(id) AS n FROM teamwork_messages WHERE conversation_id=?').get(Number(cid));
     return (r && Number(r.n)) || 0;
   },
 
-  // ---- 对话：个人备份要带出去的那一份（方案 §4.5）----
   /**
    * 功能：列出该账号**参与**的全部会话行（含别人的会话元信息，但**不含别人的消息**）。
    * @param {number} uid - 用户 id
@@ -443,7 +355,6 @@ const ops = {
   },
 
   /**
-   * 功能：列出该账号**自己发出的**全部消息 —— ⚠️ **对方的消息一条都不许进导出**（方案 §4.5）。
    * @param {number} uid - 用户 id
    * @returns {Array.<Object>} 消息行数组（按 id 升序）
    */
@@ -454,25 +365,9 @@ const ops = {
   /**
    * 功能：取本模块进**个人备份**的那一份数据（只带我这一侧的四张表）。
    *
-   * 说明：⭐ 这是 0.5.0唯一新增的**新代码**：四条 SQL 与排序**逐字照抄**改造前
-   *      `exportAll()` 里那几行，一个字都没重写（`teamworkMsgs` 那一条本来就只取我发出的消息）。
-   *      ⚠️ **「只带我这一侧」是 的硬规矩**：好友关系（我发的与我收的都算我的关系行）、
-   *      我参与的会话、我在各会话里的已读游标、以及**我发出的消息** ——
-   *      **对方的消息一条都不许进来**（把别人的聊天内容装进我的备份文件，
-   *      既超出「一人一份」的边界，也让「导出一下」变成泄露别人隐私的动作）。
-   *      ⚠️ SQLite 版靠 `JOIN teamwork_members … AND m.user_id = ?` 一步取出「我参与的会话」；
-   *      JSON 版没有 JOIN，得先算成员集合（见那边同名 op 的说明）。
-   *      ⚠️ 四条语句的顺序与改造前 `exportAll()` 里逐字一致。
-   *
-   *      ⭐ 0.7.7：**第五个键 `teamworkCleared`**（我清掉了哪几段）。它是「我这一侧的读取状态」，
-   *      与已经在导出里的 `teamworkMembers`（我的已读游标）是同一类东西 ——
-   *      不带的话语义说不通（备份里带着我发出的消息，却不带「这些我已经清掉了」）。
-   *      ⚠️ 它照样只带**我这一行**的记录，与另外四个键同一个过滤口径。
-   *
-   * @param {number} uid - 用户 id
-   * @returns {{teamworkFriends: Array.<Object>, teamworkConvs: Array.<Object>,
-   *      teamworkMembers: Array.<Object>, teamworkMsgs: Array.<Object>,
-   *      teamworkCleared: Array.<Object>}} 备份里的那五个键
+   * `exportAll()` 里那几行，一个字都没重写（`teamworkMsgs` 那一条本来就只取我发出的消息）。
+   * **「只带我这一侧」是 的硬规矩**：好友关系（我发的与我收的都算我的关系行）、
+   * 我参与的会话、我在各会话里的已读游标、以及**我发出的消息** ——
    */
   exportTeamwork(uid) {
     const teamworkFriends = this.db.prepare('SELECT * FROM teamwork_friendships WHERE user_id=? ORDER BY id ASC').all(uid);
@@ -494,12 +389,7 @@ const ops = {
    * 功能：取该账号的**内置角色会话**（`builtin_key` 命中的那一行）；没有则为 null。
    *
    * 说明：⭐ 内置会话是**懒创建**的（首次进对话页 / 首次发提醒时建），所以「没有」是常态、
-   *      不是错误 —— 调用方（`teamworkEnsureBuiltinConversation()`）据此决定要不要建。
-   *      ⚠️ 按 `user_id` 限定：每个账号**各自一条**（它是我和助手，不是跨账号数据）。
-   *
-   * @param {number} uid - 用户 id
-   * @param {string} key - 内置角色标识（`'reminder'`）
-   * @returns {?Object} 会话行；未命中为 null
+   * 不是错误 —— 调用方（`teamworkEnsureBuiltinConversation()`）据此决定要不要建。
    */
   findBuiltinConversation(uid, key) {
     return (
@@ -513,16 +403,8 @@ const ops = {
    * 功能：往提醒流水里写一行（**幂等记账**），撞唯一键时返回 null 表示「这个时刻已经发过」。
    *
    * 说明：⭐ ticker 一律**先调它、再发消息**：返回 null 就当场跳过。这样「服务重启不重发、
-   *      两个 tick 撞在同一分钟也只发一条」是**数据库约束保证的**，不是靠先查后插
-   *      （那中间有一个竞态窗口）。⚠️ 这也是「重启不补发历史」那条规矩的落点。
-   *
-   * @param {number} uid - 收件账号 id
-   * @param {string} kind - 提醒类别（`'course'` / `'task_today'` / `'overdue_daily'`）
-   * @param {string} refKey - 这件事的稳定标识（`'task:<id>'` / `'overdue:<日期>'` / `'course:<日期>:<课次id>'`）
-   * @param {string} fireAt - **分钟级**触发时刻 `YYYY-MM-DD HH:MM`
-   * @param {string} firedAt - 实际发出的时刻（`nowStamp()`）
-   * @param {string} createdAt - 记账行创建时刻
-   * @returns {?Object} 新插入的行（带 `id`）；已存在时返回 null
+   * 两个 tick 撞在同一分钟也只发一条」是**数据库约束保证的**，不是靠先查后插
+   * （那中间有一个竞态窗口）。⚠️ 这也是「重启不补发历史」那条规矩的落点。
    */
   insertReminder(uid, kind, refKey, fireAt, firedAt, createdAt) {
     const r = this.db
@@ -546,10 +428,8 @@ const ops = {
    * 功能：列出该账号的**全部**提醒流水（按 id 升序）—— 给测试与探针核对「发过什么」。
    *
    * 说明：⚠️ 刻意不做时间过滤：调用方（`store` 的 `teamworkRemindersFor()`）拿它做断言与少量展示，
-   *      真正的窄查询在 ticker 那边另走「当前分钟」这一条路。
+   * 真正的窄查询在 ticker 那边另走「当前分钟」这一条路。
    *
-   * @param {number} uid - 用户 id
-   * @returns {Array.<Object>} 流水行数组（按 id 升序）
    */
   listReminders(uid) {
     return this._listSql('SELECT * FROM teamwork_reminders WHERE user_id=? ORDER BY id ASC', [Number(uid)]);
@@ -559,10 +439,8 @@ const ops = {
    * 功能：清掉 `before` 之前的旧流水行，返回删掉的条数（默认保留 90 天，`tick` 里顺带清）。
    *
    * 说明：⭐ 流水是**运行态数据**（不进个人备份）：它的用处只有「这个时刻响过没有」，
-   *      90 天前的记账不会再被任何判据读到 ⇒ 不清就是一张只涨不缩的表。
+   * 90 天前的记账不会再被任何判据读到 ⇒ 不清就是一张只涨不缩的表。
    *
-   * @param {string} before - 早于这个时刻（`created_at` 字典序）的行都删掉
-   * @returns {number} 实际删除的条数
    */
   purgeReminders(before) {
     const r = this.db.prepare('DELETE FROM teamwork_reminders WHERE created_at < ?').run(String(before));
@@ -573,10 +451,8 @@ const ops = {
    * 功能：取该账号的提醒偏好行；没有则为 null（缺省值由**业务层**给，见 `teamworkReminderPrefs()`）。
    *
    * 说明：⚠️ 这里**不兜默认值**：默认值只有一处（`modules/teamwork/store.js` 的 `REMINDER_PREFS_DEFAULT`），
-   *      两个后端各抄一份迟早会不一致，而表现是「换了后端提醒时刻就变了」而且不报错。
+   * 两个后端各抄一份迟早会不一致，而表现是「换了后端提醒时刻就变了」而且不报错。
    *
-   * @param {number} uid - 用户 id
-   * @returns {?Object} 偏好行；未命中为 null
    */
   getReminderPrefs(uid) {
     return this.db.prepare('SELECT * FROM teamwork_reminder_prefs WHERE user_id=?').get(Number(uid)) || null;
@@ -586,20 +462,12 @@ const ops = {
    * 功能：把该账号的提醒偏好**整份写入**（一人一行，不存在则建），返回写入后的行。
    *
    * 说明：⭐ 为什么是「整份写入」而不是逐列 patch：默认值住在业务层（`teamworkReminderPrefs()` 给的是
-   *      合并过默认值的完整对象），调用方先读合并再整份写回 —— 于是「默认值」只有一处、
-   *      两个后端也不必各自兜一套。⚠️ `PUT /api/teamwork/reminder-prefs` 的「带哪个键写哪个键」
-   *      是在**路由/业务层**做的，不是靠这里放宽。
-   *
-   * @param {number} uid - 用户 id
-   * @param {Object} values - 恰好六个键：`enabled` / `course_lead_minutes` / `task_at` / `overdue_at` /
-   *      `due_lead_minutes` / `builtin_name`
-   * @param {string} stamp - 更新时间戳
-   * @returns {Object} 写入后的偏好行（含 `id` / `user_id`）
+   * 合并过默认值的完整对象），调用方先读合并再整份写回 —— 于是「默认值」只有一处、
+   * 两个后端也不必各自兜一套。⚠️ `PUT /api/teamwork/reminder-prefs` 的「带哪个键写哪个键」
    */
   upsertReminderPrefs(uid, values, stamp) {
     const u = Number(uid);
-    // ⚠️ 这份列名清单与 `store.js` 的 `REMINDER_PREF_KEYS` 必须**逐字一致**（两边各留一份是刻意的：
-    //    原语层不许 require 业务层常量）。漏一列的表现是「那个开关在界面上能点、但存不进去」。
+    // 这份列名清单与 `store.js` 的 `REMINDER_PREF_KEYS` 必须**逐字一致**（两边各留一份是刻意的：
     const cols = [
       'enabled',
       'course_lead_minutes',
@@ -616,22 +484,18 @@ const ops = {
          ON CONFLICT(user_id) DO UPDATE SET ${cols.map((k) => `${k}=excluded.${k}`).join(', ')}, updated_at=excluded.updated_at`,
       )
       .run(u, ...cols.map((k) => values[k]), stamp);
-    // ⚠️ 这里**不能**写 `this.getReminderPrefs(u)`：op 里的 `this` 是 **Store 实例**，
-    //    op 挂在 `ops` 表上、只能通过 `this._bk.xxx` 取到 —— 直接写是
-    //    `this.getReminderPrefs is not a function`（原语层内部一律内联，与 json.js 的
-    //    `updateMemberRead` 是同一条规矩）。
+    // 这里**不能**写 `this.getReminderPrefs(u)`：op 里的 `this` 是 **Store 实例**，
+    // op 挂在 `ops` 表上、只能通过 `this._bk.xxx` 取到 —— 直接写是
+    // `this.getReminderPrefs is not a function`（原语层内部一律内联，与 json.js 的
     return this.db.prepare('SELECT * FROM teamwork_reminder_prefs WHERE user_id=?').get(u) || null;
   },
 
-  // ---- 好友设置（0.7.7）----
   /**
    * 功能：取该账号的好友设置行；没有则为 null（缺省值由**业务层**给，见 `teamworkFriendPrefs()`）。
    *
    * 说明：⚠️ 与 `getReminderPrefs()` 同一条规矩：**不兜默认值** ——
-   *      默认值只有一处（`store.js` 的 `FRIEND_PREFS_DEFAULT`），两个后端各抄一份迟早不一致。
+   * 默认值只有一处（`store.js` 的 `FRIEND_PREFS_DEFAULT`），两个后端各抄一份迟早不一致。
    *
-   * @param {number} uid - 用户 id
-   * @returns {?Object} 设置行；未命中为 null
    */
   getFriendPrefs(uid) {
     return this.db.prepare('SELECT * FROM teamwork_friend_prefs WHERE user_id=?').get(Number(uid)) || null;
@@ -641,13 +505,8 @@ const ops = {
    * 功能：把该账号的好友设置**整份写入**（一人一行，不存在则建），返回写入后的行。
    *
    * 说明：⭐ 与 `upsertReminderPrefs()` 同一手法（`ON CONFLICT(user_id) DO UPDATE`）。
-   *      ⚠️ 列名清单与 `store.js` 的 `FRIEND_PREF_KEYS` 必须**逐字一致**（原语层不许 require
-   *      业务层常量，两边各留一份是刻意的）—— 漏一列的表现是「那个开关能点、但存不进去」。
+   * 业务层常量，两边各留一份是刻意的）—— 漏一列的表现是「那个开关能点、但存不进去」。
    *
-   * @param {number} uid - 用户 id
-   * @param {Object} values - 好友设置的键（目前只有 `auto_accept_friend`）
-   * @param {string} stamp - 更新时间戳
-   * @returns {Object} 写入后的设置行（含 `id` / `user_id`）
    */
   upsertFriendPrefs(uid, values, stamp) {
     const u = Number(uid);
@@ -659,21 +518,16 @@ const ops = {
          ON CONFLICT(user_id) DO UPDATE SET ${cols.map((k) => `${k}=excluded.${k}`).join(', ')}, updated_at=excluded.updated_at`,
       )
       .run(u, ...cols.map((k) => values[k]), stamp);
-    // ⚠️ 不能写 `this.getFriendPrefs(u)`：op 里的 `this` 是 Store 实例（见 `upsertReminderPrefs`）
+    // 不能写 `this.getFriendPrefs(u)`：op 里的 `this` 是 Store 实例（见 `upsertReminderPrefs`）
     return this.db.prepare('SELECT * FROM teamwork_friend_prefs WHERE user_id=?').get(u) || null;
   },
 
-  // ---- 聊天记录清理（0.7.7）----
   /**
    * 功能：列出该账号**全部**清理记录（按 id 升序）—— 回收站与可见性合并都读它。
    *
    * 说明：⚠️ **不做过期过滤**：`expires_at` 只决定「回收站里还显不显示」，
-   *      而可见性判据（同一张表）必须对所有行一视同仁 —— 在这里筛掉过期行，
-   *      等于让 30 天后被清掉的消息**全部复活**（见 `schema.js` 那张表的说明）。
-   *      ⇒ 「只列未过期的」是**业务层**的事（`teamworkClearedList()`）。
-   *
-   * @param {number} uid - 用户 id
-   * @returns {Array.<Object>} 清理记录行数组
+   * 而可见性判据（同一张表）必须对所有行一视同仁 —— 在这里筛掉过期行，
+   * 等于让 30 天后被清掉的消息**全部复活**（见 `schema.js` 那张表的说明）。
    */
   listCleared(uid) {
     return this._listSql('SELECT * FROM teamwork_cleared WHERE user_id=? ORDER BY id ASC', [Number(uid)]);
@@ -717,13 +571,8 @@ const ops = {
    * 功能：删掉一条清理记录（= **恢复**那一段消息），返回是否真的删到了行。
    *
    * 说明：⭐⭐ **删这一行的唯一合法理由就是「用户点了恢复」** —— 行的存在 = 那段消息被隐藏，
-   *      删掉 = 取消隐藏 = 消息复活。⛔ 绝不为「过期清理」去删它（那是把消息放回来），
-   *      ⛔ 也不许在任何别的路径上删（比如删会话 / 删好友时顺手清一遍）。
-   *      ⚠️ 带 `user_id=?`：只删得掉**我自己**那条记录（越权一律「没删到」）。
-   *
-   * @param {number} uid - 用户 id
-   * @param {number} id - 清理记录 id
-   * @returns {boolean} 删到行则为 true
+   * 删掉 = 取消隐藏 = 消息复活。⛔ 绝不为「过期清理」去删它（那是把消息放回来），
+   * 带 `user_id=?`：只删得掉**我自己**那条记录（越权一律「没删到」）。
    */
   deleteCleared(uid, id) {
     const r = this.db.prepare('DELETE FROM teamwork_cleared WHERE id=? AND user_id=?').run(Number(id), Number(uid));
@@ -733,16 +582,9 @@ const ops = {
   /**
    * 功能：取一个会话里**落在某个时刻区间内**的消息 id 区间与条数。
    *
-   * 说明：⭐ 判据是「**真实命中的 id 区间**」—— ⛔ 不许拿时间戳去比消息 id
-   *      （`created_at` 是写入时刻、`id` 是自增序号，两者在并发 / 补写场景下会有偏差，
-   *      自己换算出来的区间会静默多清或少清几条）。
-   *      ⚠️ `fromAt` / `toAt` 为 null 表示这一端不限（= 清整个会话）。
-   *      ⚠️ 时刻一律按**字符串字典序**比（与项目其余日期比较同一口径，不转 Date）。
-   *
-   * @param {number} cid - 会话 id
-   * @param {?string} fromAt - 起始时刻（含，本地 `YYYY-MM-DD HH:MM:SS`）；null = 不限
-   * @param {?string} toAt - 结束时刻（含）；null = 不限
-   * @returns {{min: ?number, max: ?number, count: number}} 命中的最小 / 最大消息 id 与条数；一条都没有时 min/max 为 null
+   * （`created_at` 是写入时刻、`id` 是自增序号，两者在并发 / 补写场景下会有偏差，
+   * 自己换算出来的区间会静默多清或少清几条）。
+   * `fromAt` / `toAt` 为 null 表示这一端不限（= 清整个会话）。
    */
   msgIdRange(cid, fromAt, toAt) {
     const c = Number(cid);
@@ -767,12 +609,8 @@ const ops = {
    * 功能：数一个会话里 `id` 落在 `[fromId, toId]`（**含两端**）内的消息条数。
    *
    * 说明：⭐ 供「区间合并后**重算** `msg_count`」用 —— 合并的几条区间不能把条数相加
-   *      （重叠部分会被算两遍，回收站上的「清了多少条」就变成一个假数字）。
+   * （重叠部分会被算两遍，回收站上的「清了多少条」就变成一个假数字）。
    *
-   * @param {number} cid - 会话 id
-   * @param {number} fromId - 起始消息 id（含）
-   * @param {number} toId - 结束消息 id（含）
-   * @returns {number} 条数
    */
   countMessagesBetween(cid, fromId, toId) {
     const r = this.db
@@ -784,22 +622,9 @@ const ops = {
   /**
    * 功能：把一个**即将注销**的账号在本模块里留下的东西收拾干净 —— 第一步：**会话先过户**。
    *
-   * 说明：⭐ 为什么需要这一步（0.3.5，方案 §4.4 问题 3）：本模块是项目里唯一的**跨账号**数据，
-   *      而「删账号要清空哪些表」这条机制是**按 `user_id` 列**工作的（`USER_SCOPED_TABLES`）。
-   *      直接照章办事的后果是：由我创建、对方还在用的那个会话，会因为 `teamwork_conversations.user_id = 我`
-   *      而被删掉 —— 对方面对的是「**整个会话没了**」，而方案承诺的只是「历史会话缺一段」
-   *      （对方自己发的那些消息也不该跟着消失）。所以先把「还有别人在」的会话**过户**给留下的人。
-   *
-   * ⚠️ 过户必须在**成员行还被删之前**做 —— 成员行一旦清了就无从知道「会话里还有谁」。
-   * ⚠️ 只认「会话里还有的别的成员」：没有任何别人的会话照旧被删（它会变成一条谁都打不开的孤岛）。
-   *
-   * ⭐ 0.8.12：本 op 与 `teamworkPurgeOnDelete` 是从
-   * `core/store/backend/{sqlite,json}.js` 的 `deleteUser` 里**搬进来的**（既定的「散乱的全部收回」）——
-   * 它们从此回到 `assertOpsContract()` 的覆盖范围内（少写一个后端当场启动即抛）。
-   * 调用点是核心 `deleteUser` 的**可选钩子**（`typeof this.teamworkTransferOnDelete === 'function'`）。
-   *
-   * @param {number} uid - 即将注销的账号 id
-   * @returns {void}
+   * 而「删账号要清空哪些表」这条机制是**按 `user_id` 列**工作的（`USER_SCOPED_TABLES`）。
+   * 而被删掉 —— 对方面对的是「**整个会话没了**」，而方案承诺的只是「历史会话缺一段」
+   * （对方自己发的那些消息也不该跟着消失）。所以先把「还有别人在」的会话**过户**给留下的人。
    */
   teamworkTransferOnDelete(uid) {
     const u = Number(uid);
@@ -820,17 +645,8 @@ const ops = {
    * 功能：删账号第二步 —— 好友补刀 ＋ 收拾**悬空引用**（本模块特有的两条收尾）。
    *
    * 说明：⚠️ **好友补刀不能省**：好友关系存**两行**，而通用清空按 `user_id` 只清掉「他→我」
-   *      那一行，**「我→他」那一行会留在库里** —— 表现是别人的好友列表里还挂着一个已经
-   *      不存在的账号（点开会话还会 404）。这一条不在 `userScoped` 的语义里，是本模块特有的。
-   *
-   * ⚠️ **清孤儿也不能省**，而且它是**顺序**上的必需品、不是「顺手清理」：`teamwork_members` /
-   *      `teamwork_messages` 都是按 `user_id` 单列清空的，而会话行可能因为「创建者注销」整条消失；
-   *      不留这一步就会在库里留下「指向不存在会话的消息」——它们永远显示不出来，
-   *      却会跟着个人导出与整体备份一直搬来搬去（也就是永久残留）。
-   *      最后一句把「一个成员都没有了的会话」也清掉，保证不会出现谁都打不开的孤岛。
-   *
-   * @param {number} uid - 即将注销的账号 id
-   * @returns {void}
+   * 那一行，**「我→他」那一行会留在库里** —— 表现是别人的好友列表里还挂着一个已经
+   * 不存在的账号（点开会话还会 404）。这一条不在 `userScoped` 的语义里，是本模块特有的。
    */
   teamworkPurgeOnDelete(uid) {
     const u = Number(uid);
@@ -840,20 +656,15 @@ const ops = {
     this.db.prepare('DELETE FROM teamwork_conversations WHERE id NOT IN (SELECT conversation_id FROM teamwork_members)').run();
   },
 
-  // ==== ⭐⭐ 0.8.12：协作原语（从 `modules/tasks/backend/sqlite.js` 整批搬来）====
-  //    ⚠️ 这里**一条判权逻辑都没有**：本层只回答「表里有什么 / 删掉几行」，
-  //    「谁能看 / 谁能写」全部住在 `../lib/collab.js` 的 `taskShareGuard()`（判据只准一处）。
+  // 这里**一条判权逻辑都没有**：本层只回答「表里有什么 / 删掉几行」，
+  // 「谁能看 / 谁能写」全部住在 `../lib/collab.js` 的 `taskShareGuard()`（判据只准一处）。
 
   /**
    * 功能：列出「我是成员」的那些**共享项目**（不含我自己拥有的 —— 那些走 `listProjects`）。
    *
    * 说明：⭐ 判权在 SQL 里只做了**一半**（`project_members.user_id = 我`），另一半是
-   *      「这个项目现在还共享着吗」（`p.shared = 1`）—— 两条都要，缺一条就会出现
-   *      「项目关了共享、成员还看得见」。⚠️ 它**不是**判据的第二个副本：判据（`taskShareGuard`）
-   *      仍然只有一处，这里只是「我有哪些共享项目」这一个列表的取数。
-   *
-   * @param {number} uid - 账号 id
-   * @returns {Array.<Object>} 项目行数组
+   * 「这个项目现在还共享着吗」（`p.shared = 1`）—— 两条都要，缺一条就会出现
+   * 「项目关了共享、成员还看得见」。⚠️ 它**不是**判据的第二个副本：判据（`taskShareGuard`）
    */
   listProjectsOfMember(uid) {
     return this._listSql(
@@ -898,12 +709,8 @@ const ops = {
    * 功能：按「任务来源 + 一批任务 id」取上报（按时间正序，方便前端取「每人最新一条」）。
    *
    * 说明：⚠️ **必须同时给 `taskSource` 与 `taskId`**：日常任务与项目任务是两张表、
-   *      id 都从 1 开始，只按 id 查会把两条毫不相干的任务混成一条时间线。
-   *      ⚠️ 空 id 数组直接回空数组（`IN ()` 是 SQL 语法错，不是「查不到」）。
-   *
-   * @param {string} taskSource - `'project_tasks'` / `'daily_tasks'`
-   * @param {Array.<number>} taskIds - 任务 id 数组
-   * @returns {Array.<Object>} 上报行数组
+   * id 都从 1 开始，只按 id 查会把两条毫不相干的任务混成一条时间线。
+   * 空 id 数组直接回空数组（`IN ()` 是 SQL 语法错，不是「查不到」）。
    */
   listTaskReportsForTasks(taskSource, taskIds) {
     if (!Array.isArray(taskIds) || !taskIds.length) return [];
@@ -918,11 +725,8 @@ const ops = {
    * 功能：删除**我自己**的一条上报；返回是否真的删掉了一行。
    *
    * 说明：⚠️ 带 `user_id` 过滤是**判权的第二道保险**（第一道在 `taskShareGuard`）：
-   *      删别人的上报永远删不到。
+   * 删别人的上报永远删不到。
    *
-   * @param {number} uid - 账号 id
-   * @param {number} id - 上报 id
-   * @returns {boolean} 删到行则为 true
    */
   deleteTaskReport(uid, id) {
     return this.db.prepare('DELETE FROM task_reports WHERE id=? AND user_id=?').run(id, uid).changes > 0;
@@ -990,18 +794,8 @@ const ops = {
    * 功能：把项目**过户**给另一个账号 —— 改 `projects.user_id` 与它名下全部 `project_tasks.user_id`。
    *
    * 说明：⚠️⭐ 为什么任务行的 `user_id` 也要跟着改：`project_tasks.user_id` 是**项目所有者**
-   *      （语义见），而看板/任务列表都是按 `user_id + project_id` 读的
-   *      （`listProjectTasks`）—— 只改 projects 会让新所有者**读不到任何任务**。
-   *      ⭐「已设的负责人（`assignee_id`）全不变、成员名单一行不动」是本原语的硬约束：
-   *      这里只碰 `user_id` 两处，`assignee_id` / `project_members` 一个字都不动。
-   *      ⚠️ 判权（只有所有者能转让、目标必须是成员）在业务层做，本层只执行。
-   *      ⭐ 0.8.12：本 op 是**协作专属**（只有 `collabTransfer()` 调），随协作搬进本模块 ——
-   *      它写的是 `tasks` 的两张地基表（`projects` / `project_tasks`），这是**原语层**，
-   *      与「业务层只走公开方法」是两回事（见方案 §丙-2-9-④）。
-   *
-   * @param {number} projectId - 项目 id
-   * @param {number} newOwnerId - 新所有者账号 id
-   * @returns {boolean} 项目存在且过户成功则为 true
+   * （语义见），而看板/任务列表都是按 `user_id + project_id` 读的
+   * 「已设的负责人（`assignee_id`）全不变、成员名单一行不动」是本原语的硬约束：
    */
   transferProject(projectId, newOwnerId) {
     const pid = Number(projectId);
@@ -1032,17 +826,10 @@ const ops = {
 
   /**
    * 功能：删除**我自己**的一条评论（并**连带删掉这条评论的附件**：文件行 ＋ 磁盘文件）；
-   *      返回是否真的删掉了一行。
+   * 返回是否真的删掉了一行。
    *
    * 说明：⚠️ 带 `user_id` 过滤是**判权的第二道保险**（第一道在业务层）：删别人的评论永远删不到
-   *      （连项目所有者也不行，/ 105）。
-   *      ⭐ 0.8.12：评论没了，挂在它下面的附件也没有意义 —— 与「删任务 / 删项目连带」
-   *      同一条口径（见 `deleteTaskCollabData`）。⚠️ 只删 `comment_id` 等于这条评论的，
-   *      同任务的其他附件（`comment_id` 为空 / 指别处）一个字不动。
-   *
-   * @param {number} id - 评论 id
-   * @param {number} userId - 必须是作者
-   * @returns {boolean} 删到行则为 true
+   * （连项目所有者也不行，/ 105）。
    */
   deleteComment(id, userId) {
     const r = this.db.prepare('DELETE FROM project_comments WHERE id=? AND user_id=?').run(id, userId);
@@ -1093,9 +880,8 @@ const ops = {
    * 功能：删除一行附件记录（按 id）；返回是否真的删掉了一行。
    *
    * 说明：⚠️ 判权（是不是成员 / 上传者或所有者）在业务层做，本层只删 —— 磁盘文件由业务层
-   *      `collabRemoveFile()` 一起清掉。
+   * `collabRemoveFile()` 一起清掉。
    * @param {number} id - 附件 id
-   * @returns {boolean} 删到行则为 true
    */
   deleteFile(id) {
     return this.db.prepare('DELETE FROM project_files WHERE id=?').run(id).changes > 0;
@@ -1105,11 +891,8 @@ const ops = {
    * 功能：给 `task_reports` 的老行补 `project_id`（按 `task_id` 反查 `project_tasks.project_id`）。
    *
    * 说明：⭐ **只补一列，老行一个字不改**—— 这不是改写用户数据，是多出一份可读的历史。
-   *      ⚠️ 幂等判据钉在 `project_id IS NULL` 上：补过的行不再进这条语句，跑几次结果一样；
-   *      找不到对应任务的行（`task_id` 悬空）**保持 NULL**（不猜、不硬塞）。
-   *      ⚠️ 只处理 `task_source='project_tasks'`：日常任务没有项目，本就该一直 NULL。
-   *
-   * @returns {number} 受影响的行数
+   * 幂等判据钉在 `project_id IS NULL` 上：补过的行不再进这条语句，跑几次结果一样；
+   * 找不到对应任务的行（`task_id` 悬空）**保持 NULL**（不猜、不硬塞）。
    */
   backfillReportProjects() {
     const r = this.db
@@ -1126,14 +909,8 @@ const ops = {
    * 功能：把某个项目里「负责人文本名」按**精确匹配** `users.username` 补成 `assignee_id`。
    *
    * 说明：⚠️ **匹配不上不改写**（保留原文、`assignee_id` 留 NULL）—— 手输的、已改名的、
-   *      指向不存在的人，一律不认领（界面上标「未认领」，兜底「视为没有负责人」）。
-   *      ⚠️ 幂等判据钉在 `assignee_id IS NULL` 上；`EXISTS` 保证匹配不上的行不进 `changes`
-   *      （失败方向安全，也避免把 NULL 写成 NULL 的空改动算进去）。
-   *      ⭐ 0.8.12：本 op 是**协作专属**（只有 `_migrateCollabProject()` 调），随协作搬进本模块 ——
-   *      它写的是 `tasks` 的 `project_tasks.assignee_id`（原语层，见方案 §丙-2-9-④）。
-   *
-   * @param {number} projectId - 项目 id
-   * @returns {number} 受影响的行数
+   * 指向不存在的人，一律不认领（界面上标「未认领」，兜底「视为没有负责人」）。
+   * 幂等判据钉在 `assignee_id IS NULL` 上；`EXISTS` 保证匹配不上的行不进 `changes`
    */
   backfillProjectAssignees(projectId) {
     const r = this.db
@@ -1149,18 +926,10 @@ const ops = {
 
   /**
    * 功能：老库上把 `task_reports.status` 的那条窄 CHECK 去掉 —— ⭐ **同一张表的原地重建**
-   *      （搬数据 + 行数守恒，⛔ 不是新建同义表；**不动 `SCHEMA_VERSION`**）。
+   * （搬数据 + 行数守恒，⛔ 不是新建同义表；**不动 `SCHEMA_VERSION`**）。
    *
-   * 说明：⭐⭐ 0.8.12 · 2d 把 `task_reports` 改造成「活动流水」后，`status` 落的是**项目自定义
-   *      状态键**（`backlog` / `done` / `cancelled` / 用户自建的 `s1` …），而老 DDL 上的
-   *      `CHECK (status IN ('todo','doing','blocked','done'))` 会把「改到 `backlog`」这种正常
-   *      状态变更**当场挡下**（写流水撞约束、变 500）。新库的 DDL 已无这条 CHECK（见 `schema.js`），
-   *      老库靠这条幂等重建补上。
-   *      ⚠️ 判据钉在 `sqlite_master.sql` 里有没有 `CHECK (status IN` 上：去掉之后不再进这条语句，
-   *      跑几次结果一样。⚠️ 建表用**本模块的 DDL**（`TEAMWORK_SCHEMA`），单一出处、不手抄列。
-   *      ⚠️ 重建会丢掉这张表的索引 ⇒ 结尾把两条索引补回来（启动期的建索引只在启动跑一次）。
-   *
-   * @returns {boolean} 是否真的重建了（已经是新结构则 false）
+   * 状态键**（`backlog` / `done` / `cancelled` / 用户自建的 `s1` …），而老 DDL 上的
+   * `CHECK (status IN ('todo','doing','blocked','done'))` 会把「改到 `backlog`」这种正常
    */
   ensureReportFlowSchema() {
     const row = this.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='task_reports'").get();
@@ -1203,14 +972,10 @@ const ops = {
   /**
    * 功能：删项目时**连带清协作那张公共数据**（状态配置 / 评论 / 附件行 ＋ 磁盘目录）—— 删项目连带的一处出口。
    *
-   * 说明：⭐⭐ 0.8.12：这五张表搬进本模块后，`tasks` 的 `deleteProject()` 不能再自己拼表名去删
-   *      （那会把 teamwork 的表名抄进 tasks）。它改成在项目行真被删掉时经 `_bk` 调本 op ——
-   *      表名 / 磁盘布局只在本模块一处。⚠️ 顺序与原实现一致：先清库里三类行，再删整个
-   *      `<project_id>` 目录（一次到位，不必逐条算路径）。
-   *      ⚠️ **不判权**：调用方（`tasks/backend/*.js` 的 `deleteProject`）已保证「项目行真被删掉」。
-   *
-   * @param {number} projectId - 项目 id
-   * @returns {void}
+   * （那会把 teamwork 的表名抄进 tasks）。它改成在项目行真被删掉时经 `_bk` 调本 op ——
+   * 表名 / 磁盘布局只在本模块一处。⚠️ 顺序与原实现一致：先清库里三类行，再删整个
+   * `<project_id>` 目录（一次到位，不必逐条算路径）。
+   * **不判权**：调用方（`tasks/backend/*.js` 的 `deleteProject`）已保证「项目行真被删掉」。
    */
   deleteProjectCollabData(projectId) {
     const id = Number(projectId);
@@ -1223,12 +988,9 @@ const ops = {
   /**
    * 功能：删项目任务时**连带清它的任务级协作数据**（评论行 / 附件行 ＋ 磁盘文件）—— 删任务连带的一处出口。
    *
-   * 说明：⭐⭐ 0.8.12：与 `deleteProjectCollabData` 同一条理由 —— 表名与磁盘布局只在本模块一处。
-   *      ⚠️ 项目级评论（`task_id` 为 NULL）与同任务其他附件（`comment_id` 指别处）一个字不动。
-   *      ⚠️ 顺序与原实现一致：先清评论行，再取附件行（拿 id 算磁盘路径）、删文件、删行。
+   * 项目级评论（`task_id` 为 NULL）与同任务其他附件（`comment_id` 指别处）一个字不动。
+   * 顺序与原实现一致：先清评论行，再取附件行（拿 id 算磁盘路径）、删文件、删行。
    *
-   * @param {number} taskId - 项目任务 id
-   * @returns {void}
    */
   deleteTaskCollabData(taskId) {
     const id = Number(taskId);
@@ -1238,26 +1000,13 @@ const ops = {
     this.db.prepare('DELETE FROM project_files WHERE task_id=?').run(id);
   },
 
-  // ==== 0.8.12：AI 助手会话并进对话两张表 —— 存量搬迁 ＋ 内置聊天原语 ====
 
   /**
    * 功能：把存量 AI 会话从 `ai_chats` / `ai_messages` **一次性搬迁**进 `teamwork_conversations`
-   *      （`builtin_key = 'ai'`）/ `teamwork_messages` —— 先体检、整份事务、幂等、老表保留。
+   * （`builtin_key = 'ai'`）/ `teamwork_messages` —— 先体检、整份事务、幂等、老表保留。
    *
-   * 说明：⭐⭐ 四条安全规矩（方案 §乙-7，照/ 25 的口径）——
-   *      ① **先体检**：`ai_messages` 有没有指向不存在会话的**孤儿行** · `role` 值是否合法；
-   *      ② **整份在一个事务里**：体检不过 ⇒ 整份放弃（返回 `abort`），**一行数据都不动**；
-   *      ③ **幂等判据 =「新表里已有 `builtin_key='ai'` 的会话」** —— 会话行与它的全部消息、
-   *         以及这个「已完成」的结果**在同一个事务里提交** ⇒ 看见会话行就等价于「搬完了」；
-   *      ④ ⚠️ **老表 `ai_chats` / `ai_messages` 保留、不再写**（降级回旧包的退路）——
-   *         ⛔ 本 op 里一句 `DROP` / `DELETE` 老表都没有（搬迁是「多出一份可读的历史」）。
-   *
-   * 映射（方案 §乙-7 表）：`ai_chats.user_id/title/cur_segment` 原样；`ai_messages.content` -> `body`、
-   *      `role='assistant'` -> `sender_builtin='ai'`、`role='user'` -> `sender_builtin=NULL`、
-   *      `user_id` -> **收件人自己**（= `ai_chats.user_id`）、`kind`/`meta`/`segment`/`image`/`created_at` 原样。
-   *
-   * @returns {{status: string, migrated: number, conversations: number, reason: string}}
-   *      `status`：`done` 真搬了 / `skip` 没什么可搬或已搬过 / `abort` 体检不过整份放弃
+   * ① **先体检**：`ai_messages` 有没有指向不存在会话的**孤儿行** · `role` 值是否合法；
+   * ② **整份在一个事务里**：体检不过 ⇒ 整份放弃（返回 `abort`），**一行数据都不动**；
    */
   migrateAiChatSessions() {
     // ③ 幂等判据：新表里已有内置 AI 会话 ⇒ 认为「搬完了」（会话行与它的消息同事务提交）
@@ -1353,17 +1102,9 @@ const ops = {
   /**
    * 功能：往**内置助手会话**（AI 助手那条 `teamwork_messages`）追加一条消息，返回 `{ id }`。
    * 说明：与 `insertMessage` 同一手法（消息 + 会话 `last_message_id` 一个事务），但多带
-   *      `segment` / `image` 两列（2g 新增）。`senderBuiltin` 有值 = 这条是助手说的（`'ai'`）。
+   * `segment` / `image` 两列（2g 新增）。`senderBuiltin` 有值 = 这条是助手说的（`'ai'`）。
    * @param {number} uid - 收件人（= 会话归属者）
    * @param {number} cid - 会话 id
-   * @param {string} body - 正文
-   * @param {string} createdAt - 时间戳
-   * @param {?string} senderBuiltin - `'ai'` / null
-   * @param {?string} kind - 消息种类
-   * @param {?string} meta - 卡片快照 JSON 文本
-   * @param {?string} image - 整串 data URL
-   * @param {?number} segment - 段号
-   * @returns {{id: number}} 新消息 id
    */
   insertBuiltinChatMessage(uid, cid, body, createdAt, senderBuiltin, kind, meta, image, segment) {
     const u = Number(uid);
@@ -1400,12 +1141,10 @@ const ops = {
    * @param {number} cid - 会话 id
    * @param {?number} beforeId - 游标；null = 从最新开始
    * @param {number} limit - 条数上限
-   * @param {?number} segment - 只取这一段；null = 全部
-   * @returns {Array.<Object>} 消息行（id 降序）
    */
   listBuiltinChatMessages(uid, cid, beforeId, limit, segment) {
-    // ⭐ 0.8.12：AI 会话的读口也要过「我清掉的那一段」这道闸
-    //    —— 与好友会话 / 提醒助手共用同一条 `clearedVisible()` 判据（唯一出处）。
+    // AI 会话的读口也要过「我清掉的那一段」这道闸
+    // —— 与好友会话 / 提醒助手共用同一条 `clearedVisible()` 判据（唯一出处）。
     const conds = ['m.conversation_id=?', 'm.user_id=?', clearedVisible('m', '?')];
     const args = [Number(cid), Number(uid), Number(uid)];
     if (beforeId) {
@@ -1442,10 +1181,9 @@ const ops = {
    * @param {number} cid - 会话 id
    * @param {number} segment - 段号
    * @param {number} limit - 条数上限
-   * @returns {Array.<Object>} 消息行（id 降序）
    */
   listBuiltinChatContext(uid, cid, segment, limit) {
-    // ⭐ 0.8.12：喂模型的上下文同样不该带「我已经清掉的那一段」。
+    // 喂模型的上下文同样不该带「我已经清掉的那一段」。
     return this._listSql(
       `SELECT m.id, m.body, m.sender_builtin, m.kind, m.meta, m.segment, m.created_at FROM teamwork_messages m WHERE m.conversation_id=? AND m.user_id=? AND COALESCE(m.segment, 1)=? AND ${clearedVisible('m', '?')} ORDER BY m.id DESC LIMIT ?`,
       [Number(cid), Number(uid), Number(segment), Number(uid), Number(limit) || 20],
@@ -1475,7 +1213,6 @@ const ops = {
    * @param {number} cid - 会话 id
    * @param {number} id - 消息 id
    * @param {string} meta - 新的快照 JSON 文本
-   * @returns {number} 影响行数
    */
   setBuiltinChatMessageMeta(uid, cid, id, meta) {
     const r = this.db

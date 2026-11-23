@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：UpdateCenter.kt
- * 职责：版本检测与拉取更新的状态机，检查、下载、三重校验、安装
  */
 
 package com.zxdesk.app.update
@@ -52,15 +50,6 @@ sealed interface InstallResult {
 /**
  * 版本检测与拉取更新的状态机。
  *
- * 只做四件事，别的一律不做（界面、文案排版都在 Compose 层）：
- * 1. 调接口并判定「有没有新版」；
- * 2. 按接口给的地址（含镜像候选）下载 APK；
- * 3. 校验：字节数 → SHA256 → 包内 versionCode；
- * 4. 把当前阶段推进 [state]，并在用户点「立即安装」时把系统安装器拉起来。
- *
- * 失败分两类，处理方式不同：
- * - 「没有发布记录 / 网络不通 / 接口 5xx」→ 安静收场（更新服务挂了不能影响连 NAS）；
- * - 「hash 对不上 / 大小不对 / 包内版本不符」→ 删包换源，两次之后停手并给网盘出口。
  */
 class UpdateCenter(
     private val context: Context,
@@ -78,11 +67,6 @@ class UpdateCenter(
     /**
      * 冷启动时把**上一次的检查结果**从盘里读回来。
      *
-     * 为什么要读：限频规则是「成功之后 10 分钟内不再请求」，而这个窗口跨进程有效。
-     * 结果只放内存的话，重开应用就只能显示「未检查」—— 用户刚查验过，结果却没了。
-     *
-     * ⚠️ `available` 要**按当前装着的版本重算**：上次检查时有新版、之后装了新包，
-     *    再照搬那个 true 会让抽屉一直喊「下载更新」。
      */
     private fun restoredState(): UpdateState {
         val (version, code) = installed
@@ -110,11 +94,6 @@ class UpdateCenter(
     /**
      * 「用户点过下载，但手里还没有清单」。
      *
-     * 冷启动时 [restoredState] 只恢复得出「有新版本」这个**结论**（版本号 / 说明 / 时间落盘了），
-     * 而下载必需的清单（hash / 大小 / 文件名 / 下载地址）只在内存里 —— 重开应用后是空的。
-     * 旧版在这种情况下 `download()` 直接 `manifest ?: return`，点了「下载更新」一个字都不动。
-     *
-     * ⇒ 现在先补一次检查，[applyManifest] 拿到清单后自动接着下载；检查失败则清掉这个标记并报错。
      */
     private var pendingDownload = false
 
@@ -126,11 +105,7 @@ class UpdateCenter(
 
     /**
      * 查询最新版本。
-     *
      * @param silent 进浏览页后的自动检查：失败不打扰界面，也不把已有的「已下载」结论冲掉。
-     * @param force 为「下载」补清单：跳过 10 分钟限频窗口。只由 [download] 在
-     *        「结论还在、清单没了」时使用 —— 这不是重复请求，而是把缺的那份下载依据取回来。
-     *        服务端那边的风控仍由 [prefs.lastUpdateCheckAt] 记录，连续下载失败不会变成连打接口。
      */
     fun check(silent: Boolean = false, force: Boolean = false) {
         if (checkJob?.isActive == true || downloadJob?.isActive == true) return
@@ -138,14 +113,8 @@ class UpdateCenter(
         if (!force && _state.value.phase == UpdatePhase.READY) return
 
         // 限频：更新接口有风控（**10 秒 20 次就封**），而本端是「每次冷启动自动查一次」
-        //    ＋ 抽屉里随时能点 ⇒ 手快的人在几秒内就能把额度打满，然后整个更新服务对自己关门。
-        //    规则：**成功之后 10 分钟内不再请求**；失败只挡 5 秒（防连点，但别耽误排障）。
-        //    ⚠️ 时间戳落盘（Prefs）：杀进程重开不清零，否则限制等于没有。
-        //
-        // ⚠️ 0.3.1：`force` 不再无条件跳过整个窗口。旧写法 `if (!force && …)` 意味着
-        //    「冷启动后连点几下下载」每次都真打一次接口 —— 而服务端那边 429 一旦被触发就会持续。
-        //    现在 force 只跳过「成功后的长窗口」（清单确实只在内存里，重开就没了，必须补回来），
-        //    并且仍要求距上次请求 ≥ [CHECK_FORCE_MIN_GAP_MS]；失败后的 5 秒窗口照旧守。
+        // ＋ 抽屉里随时能点 ⇒ 手快的人在几秒内就能把额度打满，然后整个更新服务对自己关门。
+        // 规则：**成功之后 10 分钟内不再请求**；失败只挡 5 秒（防连点，但别耽误排障）。
         val now = System.currentTimeMillis()
         if (prefs.lastUpdateCheckAt > 0) {
             val passed = now - prefs.lastUpdateCheckAt
@@ -155,8 +124,8 @@ class UpdateCenter(
                 // force 的来源是用户点了「下载更新」：⛔ 不能静默把这次点击吞掉
                 if (!silent || force) {
                     val leftSec = ((window - passed) / 1000).coerceAtLeast(1)
-                    // ⚠️ 只给分钟级的粗略值：这条提示写在 state 里不会自己刷新，
-                    //    秒级倒计时几秒后就变成假话（用户看到「还有 9 分 58 秒」等了半分钟还是一样）。
+                    // 只给分钟级的粗略值：这条提示写在 state 里不会自己刷新，
+                    // 秒级倒计时几秒后就变成假话（用户看到「还有 9 分 58 秒」等了半分钟还是一样）。
                     val leftText =
                         if (leftSec >= 60) "约 ${(leftSec + 59) / 60} 分钟" else "$leftSec 秒"
                     _state.update { it.copy(error = "刚查过，$leftText 内不再请求") }
@@ -209,8 +178,8 @@ class UpdateCenter(
 
                 is FetchResult.Failed -> {
                     AppLog.w(TAG, "检查失败：" + describe(result))
-                    // ⭐ 429 = 已经被限流：按「成功窗口」同样挡 10 分钟。
-                    //    继续每 5 秒去撞一次，等于把封禁时间一直续着。
+                    // 429 = 已经被限流：按「成功窗口」同样挡 10 分钟。
+                    // 继续每 5 秒去撞一次，等于把封禁时间一直续着。
                     val throttled = result.kind == FetchResult.Failed.Kind.HTTP &&
                         result.message.contains("429")
                     markChecked(ok = throttled)
@@ -234,7 +203,6 @@ class UpdateCenter(
 
     /**
      * 记一次检查结果（成功 / 失败），供下次 [check] 判断是否还在限频窗口内。
-     *
      * @param ok 是否拿到有效响应（「没有发布记录」也算成功 —— 请求确实打到了服务端）
      */
     private fun markChecked(ok: Boolean) {
@@ -272,7 +240,7 @@ class UpdateCenter(
         }
 
         // 这次检查是「为了下载而补清单」：拿到清单就接着下，⛔ 不要让人再点一次。
-        // ⚠️ 清单说不比本机新时不下载 —— 本机已经装上去了，再下就是绕一圈装回同一个版本。
+        // 清单说不比本机新时不下载 —— 本机已经装上去了，再下就是绕一圈装回同一个版本。
         val wasPending = pendingDownload
         pendingDownload = false
         if (wasPending && available) {
@@ -298,13 +266,9 @@ class UpdateCenter(
     fun download() {
         val info = manifest
         if (info == null) {
-            // ⭐ 冷启动恢复出来的「可更新」只有结论（版本号 / 说明 / 时间），下载必需的清单
-            //   （hash / 大小 / 文件名 / 地址）只在内存里 —— 重开应用后是空的。
-            //   旧版在这里直接 return：用户点「下载更新」一个字都不动，看着像卡死。
-            //   现在补一次检查（跳过 10 分钟限频，因为要的是下载依据而不是重复查询），
-            //   拿到清单后由 [applyManifest] 自动接着下。
-            // 标记必须在「检查是否正在跑」之前置位：这次检查如果正好在跑，
-            // 它完成时会看到这个标记并自动接着下载，不需要用户再点一次。
+            // 冷启动恢复出来的「可更新」只有结论（版本号 / 说明 / 时间），下载必需的清单
+            // （hash / 大小 / 文件名 / 地址）只在内存里 —— 重开应用后是空的。
+            // 旧版在这里直接 return：用户点「下载更新」一个字都不动，看着像卡死。
             if (downloadJob?.isActive == true) return
             if (!pendingDownload) {
                 pendingDownload = true
@@ -318,9 +282,8 @@ class UpdateCenter(
         if (_state.value.phase == UpdatePhase.READY) return
 
         // 装不下就别开始：下到一半才失败，用户白等，还要清半截文件。
-        // ⚠️ 0.3.1 修：旧文案算的是 `fileSize - free`，而这里正是「free 够 fileSize、
-        //    只是没达到 1.25 倍余量」的区间 —— 差额为负，`readableSize` 又被 coerceAtLeast(1) 兜住，
-        //    界面上会出现「存储空间不足：还需要 1 KB 左右」。改成把「需要 / 可用」都说清楚。
+        // 只是没达到 1.25 倍余量」的区间 —— 差额为负，`readableSize` 又被 coerceAtLeast(1) 兜住，
+        // 界面上会出现「存储空间不足：还需要 1 KB 左右」。改成把「需要 / 可用」都说清楚。
         if (info.fileSize > 0) {
             val free = runCatching { StatFs(context.filesDir.absolutePath).availableBytes }.getOrNull()
             if (free != null && free < info.fileSize + info.fileSize / 4) {
@@ -344,8 +307,7 @@ class UpdateCenter(
                 pruneOldPackages(dir, dest.name)
 
                 // ① 探测：候选地址**全部来自服务端下发的 downloadUrls**（含镜像地址）。
-                //    客户端不自己拼镜像前缀 —— 那些域名换了、挂了，客户端不发版就改不了。
-                //    先探测再下载的理由：连不上的源逐个等超时会让用户干等好几分钟。
+                // 客户端不自己拼镜像前缀 —— 那些域名换了、挂了，客户端不发版就改不了。
                 val reachable = downloader.probe(info.downloadUrls)
                 if (reachable.isEmpty()) {
                     giveUp("所有下载源都连不上", 0)
@@ -457,8 +419,6 @@ class UpdateCenter(
     /**
      * 拉起系统安装器。
      *
-     * ⚠️ targetSdk 35 下必须走 [FileProvider]：把 `file://` 交给别的应用会触发
-     * `FileUriExposedException`，安装器直接闪退。
      */
     fun install(): InstallResult {
         val file = downloadedFile()
@@ -563,9 +523,6 @@ class UpdateCenter(
         /**
          * 一次「下载更新」最多下载几次。
          *
-         * 为什么要有上限：镜像可能缓存了旧包（hash / 大小 / 包内版本都对不上），
-         * 候选地址有 4 个（1 个官方 + 3 个前缀），逐个试下来会把十兆的包反复拖好几遍 ——
-         * 用户看到的就是「一直在下载」。两次还不行就停手，交给网盘兜底。
          */
         const val MAX_DOWNLOAD_ATTEMPTS = 2
 
@@ -581,8 +538,6 @@ class UpdateCenter(
         /**
          * `force`（为下载补清单）仍然要守的最小间隔。
          *
-         * 补清单本身是合理请求，但它由「点下载」触发 —— 连点就是连打接口，
-         * 而服务端 429 一旦被触发会持续一段时间。10 秒足够正常人点两下，也足够避开风控。
          */
         const val CHECK_FORCE_MIN_GAP_MS = 10_000L
     }

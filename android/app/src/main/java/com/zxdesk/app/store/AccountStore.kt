@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：AccountStore.kt
- * 职责：保存过的账号清单，多 NAS / 多账号切换的数据来源
  */
 
 package com.zxdesk.app.store
@@ -14,8 +12,6 @@ import com.zxdesk.core.connection.Target
 /**
  * 一个保存过的 NAS 账号（地址 ＋ 飞牛账号）。
  *
- * 只存「去哪、用谁」—— 密码不在这里（见 [CredentialStore]，加密后另存），会话也不在这里
- * （见 [SessionStore]，只保留最近一次登录）。
  */
 data class Account(
     /** 用户当初输入的地址（IP / 域名 / FNID），用于回填登录页。 */
@@ -34,8 +30,6 @@ data class Account(
     /**
      * 分组键：地址里的主机名（去协议、去端口、去路径，统一小写）。
      *
-     * 同一台 NAS 可能有多种写法（FNID / 局域网 IP / 自定义域名），这里只认地址自身的主机部分 ——
-     * 没有设备唯一标识就判定不了某个域名与某个 FNID 是同一台机器，⛔ 不靠猜合并。
      */
     val host: String
         get() = when (val target = InputParser.parse(address)) {
@@ -48,10 +42,6 @@ data class Account(
 /**
  * 保存过的账号清单（多 NAS / 多账号切换）。
  *
- * 存 `SharedPreferences` 明文：这里只有地址与账号名，**没有任何凭据**；密码走 [CredentialStore]，
- * 会话走 [SessionStore]，两者都经 Android Keystore 加密。
- *
- * ⚠️ 上限 [MAX_ACCOUNTS] 条：超出时淘汰最久未用的，避免这份清单无限增长。
  */
 class AccountStore(context: Context) {
 
@@ -65,11 +55,7 @@ class AccountStore(context: Context) {
 
     /**
      * 记一条账号（存在则更新 https 与最近使用时间），返回更新后的清单。
-     *
      * @param address 用户输入的地址
-     * @param user 飞牛账号
-     * @param https 当时是否为 HTTPS
-     * @return 更新后的清单（已排序）
      */
     fun remember(address: String, user: String, https: Boolean): List<Account> {
         val target = Account(address.trim(), user.trim(), https, System.currentTimeMillis())

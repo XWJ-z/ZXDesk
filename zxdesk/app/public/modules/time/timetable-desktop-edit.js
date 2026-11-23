@@ -1,27 +1,8 @@
 /**
- * modules/timetable/desktop-edit.js —— 课表**编辑**弹层（课程管理 / 课次 / 调课 · 0.2.3）
+ * modules/timetable/desktop-edit.js —— 课表**编辑**弹层（课程管理 / 课次 / 调课 ）
  *
  * 功能：手动维护课表所需的三个弹层 —— `openTtCourses`（课程管理：课程与课次的增删改）、
- *      `openTtCourseForm` / `openTtSessionForm`（两张表单）、`openTtAdjust`（调课 / 停课）。
- *
- * ⭐ 为什么单独一个模块：电脑版课表视图已经 700+ 行，再塞进这一套就会越过「JS >800 行该拆」的线
- *    （见 08-工程规范）。而这几块是**新功能**、边界清楚（都是「改数据」的弹层），
- *    与 `timetable.js`（渲染课表）分开正好。
- *
- * ⚠️ **依赖方向是单向的**：本模块**静态**依赖 `timetable.js`（借用它的弹窗壳、星期表、刷新函数），
- *    而 `timetable.js` 只在点击时用**动态 `import()`** 反向调这里（`ttAdjustLazy` / `ttCoursesLazy`）——
- *    静态边只有一条，两边不会成环。因此本文件**不进 `index.html` 的 modulepreload**
- *    清单：它是点击才加载的低频入口，静态挂上去只会让首屏多一个请求。
- *
- * ⚠️ 三件事刻意不在这里做：
- *    ① **不自己算「这周有没有课」** —— 周次判定、撞车、单双周劈开全在服务端（
- *       同一套口径只留一份，否则两端迟早不一致）；
- *    ② **不改用户数据以外的任何东西** —— 表单只发用户填的字段，缺省值由服务端补；
- *    ③ **不碰作息** —— 节次表来自「作息设置」，这里只读它来决定下拉范围。
- *
- * ⭐ 0.5.0 模块化重构：本文件从 `public/desktop/views/timetable-edit.js` **原样搬进模块目录**
- *    （方案 `09-模块化重构` §七，纯搬运不改逻辑）。只改了 import 的相对路径与静态依赖的
- *    目标（`./timetable.js` → `./timetable-desktop.js`）。它**仍然不进 `modulepreload`**（懒加载入口，见上）。
+ * `openTtCourseForm` / `openTtSessionForm`（两张表单）、`openTtAdjust`（调课 / 停课）。
  *
  * @author zx
  * @date   2026-09-12
@@ -95,22 +76,18 @@ function sessText(s) {
 /**
  * 功能：打开「课程管理」弹窗 —— 列出本学期的课程与课次，并给出增删改入口。
  *
- * 说明：⭐ 这是**没导入过教务文件的人唯一能填进课表的地方**（0.2.3 之前课表只能靠导入，
- *      空课表时前端一个新增入口都没有）。数据每次都现拉，所以「保存完再调一次本函数」
- *      就是刷新，不必手工改 DOM。
+ * 空课表时前端一个新增入口都没有）。数据每次都现拉，所以「保存完再调一次本函数」
+ * 就是刷新，不必手工改 DOM。
  *
- * @returns {Promise.<void>}
  */
 export async function openTtCourses() {
   if (!state.ttTermId) return toast('先建一个学期', true);
   let courses = [];
   let sessions = [];
   try {
-    // ⭐ 0.5.5（「课程管理 点击加载延迟太大」）：服务端补了「按学期整份取课次」的
-    //    接口（`GET /api/timetable/sessions?term_id=`），这里从 **1 + N 次请求**降到 **2 次** ——
-    //    原先是逐门课拉 `/courses/:id/sessions`。 写得明确：「**减请求数是唯一有效的办法**」
-    //    （HTTP/1.1 每源 6 并发 + `node:sqlite` 全同步查询 + Node 单线程 ⇒ 请求越多服务端排队越久）。
-    //    两次互不依赖，一起发。
+    // ：服务端补了「按学期整份取课次」的
+    // 接口（`GET /api/timetable/sessions?term_id=`），这里从 **1 + N 次请求**降到 **2 次** ——
+    // 原先是逐门课拉 `/courses/:id/sessions`。 写得明确：「**减请求数是唯一有效的办法**」
     const r = await Promise.all([
       api('GET', `/api/timetable/courses?term_id=${state.ttTermId}`),
       api('GET', `/api/timetable/sessions?term_id=${state.ttTermId}`),
@@ -186,8 +163,8 @@ export async function openTtCourses() {
     b.onclick = () => {
       const c = courses.find((x) => Number(x.id) === Number(b.dataset.ttCDel));
       if (!c) return;
-      // ⚠️ 删除是破坏性的（连带它名下所有课次），所以就地二次确认 —— 与作息设置同一套做法，
-      //    不用 `confirm()`（在飞牛的 iframe 壳里样式不可控）
+      // 删除是破坏性的（连带它名下所有课次），所以就地二次确认 —— 与作息设置同一套做法，
+      // 不用 `confirm()`（在飞牛的 iframe 壳里样式不可控）
       const row = root.querySelector(`.tt-course[data-cid="${c.id}"]`);
       const info = sessions.filter((s) => Number(s.course_id) === Number(c.id)).length;
       if (row) {
@@ -218,8 +195,7 @@ export async function openTtCourses() {
  * @returns {void}
  */
 export function openTtCourseForm(course) {
-  // ⚠️ 新建课程必须挂在某个学期下（课次也是按学期走的）—— 一个学期都没有时先给一句人话，
-  //    别让用户填完一圈再收到一个 400（0.4.4 第二版：「新建」菜单里可以直接点进来）
+  // 新建课程必须挂在某个学期下（课次也是按学期走的）—— 一个学期都没有时先给一句人话，
   if (!course && !state.ttTermId) return toast('先建一个学期', true);
   const c = course || {};
   openTtModal(
@@ -270,12 +246,8 @@ export function openTtCourseForm(course) {
  * 功能：打开「课次」表单（新建或编辑）—— 星期 / 起止节次 / 周次 / 教室 / 教师。
  *
  * 说明：⚠️ 节次下拉的**范围来自这个学期的作息表**：写一个作息里没有的节次，网格里根本没有那一行，
- *      课会「加进去了但看不见」。所以这里不给自由输入，直接按作息里的节次生成选项。
- *      ⚠️ 作息为空时**明确拒绝并指路**，而不是给一个空下拉让用户猜。
- *
- * @param {Object} course - 所属课程
- * @param {?Object} session - 传入则为编辑（回填），不传为新建
- * @returns {void}
+ * 课会「加进去了但看不见」。所以这里不给自由输入，直接按作息里的节次生成选项。
+ * 作息为空时**明确拒绝并指路**，而不是给一个空下拉让用户猜。
  */
 export function openTtSessionForm(course, session) {
   const s = session || {};
@@ -353,16 +325,8 @@ export function openTtSessionForm(course, session) {
  * 功能：打开「调课 / 停课」弹窗 —— 口径：**范围要能选「本节 / 此后全部」**。
  *
  * 说明：⭐ 两个范围的落法完全不同，界面上必须说清（用户要知道「此后全部会切开这条课次」）：
- *      · **本节** → 只影响第 N 周这一次，写一行调整（可撤销）；
- *      · **此后全部** → 把这条课次在第 N 周处**劈成两条**，之后各走各的。
- *      ⚠️ 周次是可以改的（默认取当前查看的那一周）—— 全学期视图下没有「当前周」，
- *      没有这个输入框就只能逼用户先切周，反而更难用。
- *      ⭐ 跨周调课：再给一个「调到哪一周」。与源周不同 ⇒ 源周变灰写明去向、
- *      目标周多出这一次；这种只能「本节」范围（「此后全部」是把课次劈开，与「换一周」不是一回事）。
- *      ⚠️ 撞车、单双周、节次范围**一律由服务端判**，这里只把服务器的原话转给用户。
- *
- * @param {Object} cell - 被调的课次（`/schedule` 的 cells 元素；被停掉的那一周由调整行合成等价对象）
- * @returns {void}
+ * **本节** → 只影响第 N 周这一次，写一行调整（可撤销）；
+ * **此后全部** → 把这条课次在第 N 周处**劈成两条**，之后各走各的。
  */
 export function openTtAdjust(cell) {
   if (!cell || !cell.session_id) return;
@@ -373,7 +337,7 @@ export function openTtAdjust(cell) {
   const lo = Math.min(...periods);
   const cur = ((state.tt && state.tt.adjustments) || []).find((a) => Number(a.session_id) === Number(cell.session_id));
   const week = Number(cur && cur.week_no) || Number(state.tt && state.tt.week) || 1;
-  // ⭐ 跨周调课：目标周（没调过 / 同周调课 ⇒ 与源周相同）
+  // 跨周调课：目标周（没调过 / 同周调课 ⇒ 与源周相同）
   const toWeek = Number(cur && cur.to_week_no) || week;
   const isCancel = !!(cur && cur.kind === 'cancel');
   const opts = (sel) =>
@@ -381,10 +345,9 @@ export function openTtAdjust(cell) {
   const curWd = Number(cell.weekday) || Number(cell.origin_weekday) || 1;
   const curPs = Number(cell.period_start) || Number(cell.origin_period_start) || lo;
   const curPe = Number(cell.period_end) || Number(cell.origin_period_end) || curPs;
-  // ⚠️ `room` 要区分「没有这个属性」与「属性是空串」：点调整条上的「改」时传进来的是**调整行**，
-  //    它只有 `origin_room` —— 而那条路尤其重要，因为**被停课的那一周格子里什么都没有、点不到课条**，
-  //    那是它唯一能改回来的入口。不回落 `origin_*` 的话，弹层会预填成「星期一第 1 节」，
-  //    用户一保存就把课挪到了完全不相干的地方。
+  // `room` 要区分「没有这个属性」与「属性是空串」：点调整条上的「改」时传进来的是**调整行**，
+  // 那是它唯一能改回来的入口。不回落 `origin_*` 的话，弹层会预填成「星期一第 1 节」，
+  // 用户一保存就把课挪到了完全不相干的地方。
   const curRoom = cell.room === undefined ? cell.origin_room || '' : cell.room;
 
   openTtModal(
@@ -431,11 +394,9 @@ export function openTtAdjust(cell) {
     const kind = root.querySelector('input[name="tt-a-kind"]:checked').value;
     const scope = root.querySelector('input[name="tt-a-scope"]:checked').value;
     const w = Number($('#tt-a-week').value) || 1;
-    // ⭐ 「此后全部就不要显示调整到哪一周了」。两条都不谈目标周 ——
-    //    · 此后全部 = 从这一周起把课次劈开，周次压根不变；
-    //    · 停课 = 只是停掉这一次。
-    //    ⇒ 那颗输入框直接收起来，内部也按「与源周相同」算（⛔ 不再靠禁用那几个单选来挡，
-    //    那样「先填了第 8 周」就再也点不回此后全部了）。
+    // 「此后全部就不要显示调整到哪一周了」。两条都不谈目标周 ——
+    // 此后全部 = 从这一周起把课次劈开，周次压根不变；
+    // 停课 = 只是停掉这一次。
     const showTo = kind === 'move' && scope === 'one';
     $('#tt-a-toweek-wrap').classList.toggle('hidden', !showTo);
     const tw = showTo ? Number($('#tt-a-toweek').value) || w : w;
@@ -481,12 +442,12 @@ export function openTtAdjust(cell) {
     const kind = root.querySelector('input[name="tt-a-kind"]:checked').value;
     const w = Number($('#tt-a-week').value);
     if (!Number.isFinite(w) || w < 1 || w > totalWeeks) return toast(`第几周要在 1 到 ${totalWeeks} 之间`, true);
-    // ⭐ 「此后全部」不谈目标周（输入框此时是收起的，见 `hint()`）⇒ 按源周算
+    // 「此后全部」不谈目标周（输入框此时是收起的，见 `hint()`）⇒ 按源周算
     const tw = scope === 'one' ? Number($('#tt-a-toweek').value) || w : w;
     if (!Number.isFinite(tw) || tw < 1 || tw > totalWeeks) return toast(`调到第几周要在 1 到 ${totalWeeks} 之间`, true);
     const body = { kind };
     if (kind === 'move') {
-      // ⭐ 跨周调课：只有「本节」才带目标周（与源周相同就不带 —— 同周换时间的老形态）
+      // 跨周调课：只有「本节」才带目标周（与源周相同就不带 —— 同周换时间的老形态）
       if (scope === 'one' && tw !== w) body.to_week_no = tw;
       body.to_weekday = Number($('#tt-a-wd').value);
       body.to_period_start = Number($('#tt-a-ps').value);

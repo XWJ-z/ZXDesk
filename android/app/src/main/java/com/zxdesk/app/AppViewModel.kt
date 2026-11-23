@@ -139,7 +139,6 @@ data class OnboardingState(
      * 同一账号的其他地址（排除当前这个）：给「改用 xxx 连接」用。
      *
      * 为什么要有：FNID 解析失败时，账号清单里往往还有一条 DDNS 或局域网地址
-     * （真机 2026-11-03 09:05 就是手动「切换账号」两次才连上）。同一台设备的第二条路应该一键可达，
      * 而不是让用户翻抽屉、记住哪个地址是好的。
      */
     val alternatives: List<String> = emptyList(),
@@ -171,7 +170,7 @@ sealed interface AppScreen {
  * 全 App 唯一的 ViewModel：引导流程 + 会话保持都在这儿。
  *
  * 为什么不用 `rememberCoroutineScope`：那是 Composable 的作用域，切后台 / 旋转 / 进程内重建都会取消它，
- * 登录 WS 跟着断（0.2.6 之前「切到验证器再回来就废」就是这么来的）。ViewModel 活到 `onCleared`。
+ * 登录 WS 跟着断。ViewModel 活到 `onCleared`。
  *
  * ⛔ 密码默认只在这个对象的内存里；勾了「记住密码」才经 [CredentialStore] 加密落盘（Keystore AES-256-GCM）。
  * 落盘的还有 [SavedSession]（加密后）。
@@ -246,7 +245,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      *
      * 只为一件事：**给「访问码 → 重登 → 又 401」这条来回设上限**。
      * 没有它，网关一直要码时界面就会在「访问码页 ↔ 连接中」之间无限转
-     * （2026-11-03 老大报的「输入访问码过后一直在循环加载」）。
      * 新一轮连接在 [connect] 里清零；「访问码通过后重登」那一次**不清**。
      */
     private var accessCodeRounds = 0
@@ -285,7 +283,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      *
      * 冷启动那一秒里，WebView 正在加载同一个地址，探活再发一条请求没有收益；
      * 更糟的是这个窗口正是网络 / DNS 刚就绪、最容易拿到一次空结果的时候，
-     * 一旦判成「会话失效」就会与页面判定撞车（0.2.18 真机 2026-11-03 09:05 两条路同时触发）。
      */
     private val processStartedAt = System.currentTimeMillis()
     /** 上一次「回前台静默重连」的时间戳：30 秒内不重复换 token，⛔ 别把自己送进风控。 */
@@ -301,7 +298,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private var pendingRemember: Boolean? = null
 
     init {
-        // ⭐ 0.2.18：升级后清一次连接冷却。0.2.17 会把「网关要访问码」的 401 错记成登录失败，
+        // 升级后清一次连接冷却。会把「网关要访问码」的 401 错记成登录失败，
         // 而冷却**落盘、越试越久**（15s→30s→60s→120s）—— 不清的话，用户装完修复版仍要干等，
         // 看着就跟没修一样。只在新版本第一次启动时清，不影响同一版本内的风控保护。
         runCatching {
@@ -391,7 +388,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 withContext(Dispatchers.IO) {
                     // ⚠️ 局域网 IP 必须与「手动连接」走同一条选路：`resolve()` 对裸 IP 只会拼
                     //    `https://<ip>`（443），而飞牛网关在局域网的端口是 64999。
-                    //    0.2.17 这里直接 resolve ⇒ 静默启动对局域网用户永远连不上，
+                    //    这里直接 resolve ⇒ 静默启动对局域网用户永远连不上，
                     //    表现是「自动登录失败」然后回登录页，手动点一下又是好的。
                     val parsed = InputParser.parse(address)
                     val lanIp = (parsed as? Target.Host)?.takeIf {
@@ -707,7 +704,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: AccessCodeRequiredException) {
-                // ⭐ 0.2.18：WS 握手被网关 401 —— 访问码闸门，不是账号错。
+                // WS 握手被网关 401 —— 访问码闸门，不是账号错。
                 // 局域网有直连出口就先用直连（8990 不经网关，闸门管不到它）。
                 running.close()
                 flow = null
@@ -777,7 +774,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             is FnLoginOutcome.NeedTwoFactor -> {
                 // 两步验证要人来输：启动动画必须让位，⛔ 不能一直转圈把人挡在外面
                 _autoRecovering.value = false
-                // ⭐ 0.3.1：这一轮「自动恢复」到此交给人了 —— 不放开这道闸，之后真断线时
+                // 这一轮「自动恢复」到此交给人了 —— 不放开这道闸，之后真断线时
                 //    `recoverSession` 会永远打出「恢复会话已在跑，忽略重复触发」，静默重连彻底失效。
                 recovering = false
                 // 静默重连时起点是浏览页：update 在那儿是空操作，必须借 updateOrStart 建这一屏
@@ -1048,7 +1045,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 2FA 的每个动作都走这里。
      * ⚠️ `busy` 必须在 finally 复位：超时抛的是 CancellationException，写在 onFailure 里跑不到，
-     * 界面就会永远停在「验证中…」（0.2.5 的真 bug）。
+     * 界面就会永远停在「验证中…」。
      */
     private fun twoFaAction(block: suspend () -> FnSession) {
         viewModelScope.launch {
@@ -1078,7 +1075,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         flow = null
         pendingEntry = null
         resendJob?.cancel()
-        // ⭐ 0.3.1：放弃 2FA 同样是「这一轮恢复结束」。不放开这道闸，
+        // 放弃 2FA 同样是「这一轮恢复结束」。不放开这道闸，
         //    之后真断线时 `recoverSession` 会一直判「已在跑」，静默重连再也不发起。
         recovering = false
         update {
@@ -1209,7 +1206,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * - **还没有会话**（登录前就被 WS 401 挡回来，见 [AccessCodeRequiredException]）⇒
      *   网关凭据这时已种进 CookieManager，回连接页把登录重走一遍，WS 就能拿到 101。
      *
-     * ## 2026-11-03：两道闸，专治「输入访问码后一直循环加载」
      *
      * ⓐ **自动判定整轮只准用一次**。自动判据看的是页面长相（见 `PageProbeJs`），
      *   白屏、中继空壳、网关的「正在校验」过渡页都可能让它攒够次数。
@@ -1294,7 +1290,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * 网关要访问码：送到第 ④ 步，**不记失败、不进冷却**。
      *
      * 这不是账号问题 —— 记进 [ConnectGuard] 只会让用户越试越久（15s → 30s → 60s → 120s），
-     * 最后连访问码页都进不去。这就是 0.2.17 上「输入访问码后报错、之后再也登不了」的成因。
+     * 最后连访问码页都进不去。这就是 上「输入访问码后报错、之后再也登不了」的成因。
      */
     private fun gotoAccessCode(entry: Entry, note: String? = null) {
         stopCooldownNotice()
@@ -1417,8 +1413,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun onLoginPageBlocked(): Boolean {
         if (_screen.value !is AppScreen.Browsing) return false
-        /* ⭐ 0.3.1：**不再要求 `browsing.entry.fnSession != null`**。
-           老大 2026-11-05：「局域网＋端口访问也得登陆飞牛拿到凭证才能登陆 zxdesk，
+        /* **不再要求 `browsing.entry.fnSession != null`**。
            要不然飞牛会返回 token 白屏界面」—— 手里**没有**会话的那一次，恰恰是最该续的一次，
            原来那句 `return false` 把它直接放过去跳到登录页了。
            现在交给 `recoverSession` 自己判：有 longToken 走换新，没有就落到「记住的密码」那一段；
@@ -1476,7 +1471,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val browsing = _screen.value as? AppScreen.Browsing
         if (saved == null || browsing == null) {
             recovering = false
-            // ⚠️ 0.3.1 补：这也是一个「没有原因」的出口 —— 「保存的会话没了」（别处已 dropSaved）
+            // 补：这也是一个「没有原因」的出口 —— 「保存的会话没了」（别处已 dropSaved）
             //    与「界面已经不在浏览页」（另一条路把它切走了）是两回事，日志必须分开写，
             //    否则真机上只能看到「自动重连失败」，猜不出卡在哪一段。
             AppLog.w(
@@ -1490,7 +1485,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         if (!triedLongToken && !saved.longToken.isNullOrBlank()) {
             triedLongToken = true
-            // ⚠️ 0.3.1：这里原来是 `saved.longToken ?: return` —— 那是一个**不复位 `recovering`** 的出口。
+            // 这里原来是 `saved.longToken ?: return` —— 那是一个**不复位 `recovering`** 的出口。
             //    一旦走到，本进程之后所有自动恢复都会被开头那道闸挡掉（日志里只剩「已在跑，忽略」）。
             //    现在拿不到就直接按「这条走不通」处理，交给密码那一档。
             val longToken = saved.longToken
@@ -1518,7 +1513,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 )
                 pendingAddress = saved.address
                 pendingEntry = entry
-                // ⚠️ 0.3.1：赋新值前先关旧的。原来的写法直接 `flow = running`，
+                // 赋新值前先关旧的。原来的写法直接 `flow = running`，
                 //    上一次没走完的 FnLoginFlow（WS ＋ 心跳协程 ＋ OkHttp dispatcher）就再没人关得掉 ——
                 //    每恢复一次多一条连接，飞牛那边看到的是同一个设备反复建连。
                 flow?.close()
@@ -1560,7 +1555,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         val cred = credentials.load(saved.address, saved.user)
         if (cred == null) {
-            // ⚠️ 0.3.1 补：这条以前是**没有日志的出口** —— 日志里只剩一句「自动重连失败，请重新登录」
+            // 补：这条以前是**没有日志的出口** —— 日志里只剩一句「自动重连失败，请重新登录」
             //    气泡，看不出是「密码没记住」还是「密码错了」。真机排查最费时间的就是这种。
             AppLog.w(TAG, "自动重连：本机没记住这个账号的密码，无法静默重登（$reason）")
             failRelogin(silent)
@@ -1801,7 +1796,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (_autoRecovering.value) return
         if (probeJob?.isActive == true) return
         // 启动宽限期：冷启动那一秒 WebView 正在加载同一个地址，探活再发一条没有收益，
-        // 而且此时网络 / DNS 刚就绪，最容易拿到一次空结果（0.2.18 真机 2026-11-03 09:05）。
         // 会话真的失效时由页面的正文判定兜住，不会漏。
         if (System.currentTimeMillis() - processStartedAt < PROBE_STARTUP_GRACE_MS) {
             AppLog.i(TAG, "启动宽限期内不探活，交给 WebView 的页面判定")
@@ -1843,7 +1837,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                         AppLog.w(TAG, "回前台探活：疑似 invalid token")
                         // ⭐ 冷启动从盘里恢复的快照常常已经过期（服务端会续期，快照里是旧 token）。
                         //    此时页面停在纯文本 `invalid token` 上，**根本不会跳 401** ——
-                        //    「等页面 401 再兜」在这条路上永远等不到（真机 2026-11-03 07:45）。
                         //    判据收紧到「这一轮还没成功进过应用」：进过应用之后仍按旧口径只记日志，
                         //    免得一次探活误判就把人踢回登录页。
                         if (!enteredApp) {
@@ -1906,9 +1899,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * ① 距上次**成功**不到 10 分钟 ⇒ 直接用缓存，不请求；
      * ② 距上次**尝试**不到 60 秒 ⇒ 防抖，别让三个入口连着打三条。
      *
-     * ⚠️ 0.2.18 修：原来成功后有个 `noticeAutoChecked` 把「本次进程」永久锁死，
+     * 修：原来成功后有个 `noticeAutoChecked` 把「本次进程」永久锁死，
      * 结果服务端刚部署/刚改表时，用户不重启应用就永远看不到新公告或新跑马灯
-     * （真机 2026-11-03 16:02 就是：服务端 16:00 生效，客户端进程还拿着 15:20 的旧响应）。
      * 现在改成按时间窗口判，服务端改动最多 10 分钟 ＋ 一次回前台就能生效。
      */
     fun checkNoticeOnLaunch() {
@@ -1920,7 +1912,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 公告页的「刷新」：**同样守 10 分钟窗口**（老大 2026-11-03 15:24 要求）。
      *
      * 与自动检查的差别只在「谁触发」：都受 `noticeCheckedAt` 约束 ——
      * 服务端那条接口没有单独的风控额度，客户端连着刷只会让作者服务器白扛。
@@ -2065,7 +2056,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
          *
          * 一轮 = 进一次访问码页。允许两轮是为了兼容「访问码通过 → 网关跳登录页 → 又要一次码」；
          * 第三轮还 401 就说明凭据根本没生效，继续自动跳只会让界面一直转圈
-         * （2026-11-03「输入访问码后一直在循环加载」）。这时停下来，把选择权交回给人。
          */
         const val MAX_ACCESS_CODE_ROUNDS = 2
 

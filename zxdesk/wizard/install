@@ -1,0 +1,74 @@
+[
+  {
+    "stepTitle": "数据位置（安装后不可修改）",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "选择数据库存放位置，默认位置在：文件管理-应用文件-zxdesk，卸载时默认选择保留数据"
+      },
+      {
+        "type": "radio",
+        "field": "wizard_data_dir_mode",
+        "label": "数据位置",
+        "initValue": "default",
+        "options": [
+          {
+            "label": "使用默认位置（推荐）",
+            "value": "default"
+          },
+          {
+            "label": "自定义目录（请输入绝对路径）",
+            "value": "custom"
+          }
+        ],
+        "rules": [
+          {
+            "required": true,
+            "message": "请选择一个数据位置"
+          }
+        ]
+      },
+      {
+        "type": "text",
+        "field": "wizard_data_dir",
+        "label": "自定义目录的绝对路径",
+        "initValue": "",
+        "rules": [
+          {
+            "pattern": "^(/.*)?$",
+            "message": "请填绝对路径，以 / 开头，例如 /vol1/1000/zxdesk-data"
+          }
+        ]
+      },
+      {
+        "type": "tips",
+        "helpText": "⚠️ 只有选了「自定义目录」才需要填写；选默认位置的留空即可"
+      },
+      {
+        "type": "tips",
+        "helpText": "不可填写系统路径，如：/usr、/etc、/var 等这些会被拒绝。"
+      },
+      {
+        "type": "tips",
+        "helpText": "若安装时路径创建/读取失败：回退默认路径，并在应用日志里写明原因。"
+      },
+      {
+        "type": "checkbox",
+        "field": "wizard_data_dir_ack",
+        "label": "数据位置确认",
+        "options": [
+          {
+            "label": "我已知晓：数据位置在安装后不可修改，要更换需卸载重装",
+            "value": "yes"
+          }
+        ],
+        "rules": [
+          {
+            "required": true,
+            "message": "请先勾选上面的确认，才能继续安装"
+          }
+        ]
+      }
+    ]
+  }
+]

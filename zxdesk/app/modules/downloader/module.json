@@ -1,0 +1,14 @@
+{
+  "name": "downloader",
+  "title": "视频下载器",
+  "icon": "📥",
+  "order": 26,
+  "defaultEnabled": true,
+  "switchField": null,
+  "apiPrefix": "downloader",
+  "tables": ["downloader_settings"],
+  "depends": [],
+  "archDoc": "31-快手下载器.md",
+  "test": "downloader.test.js",
+  "database": "lab"
+}

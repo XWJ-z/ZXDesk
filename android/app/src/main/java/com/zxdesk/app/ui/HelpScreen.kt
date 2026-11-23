@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：HelpScreen.kt
- * 职责：帮助页 —— 各端与更新、交流群、问题反馈、官网与源码
  */
 
 package com.zxdesk.app.ui
@@ -69,11 +67,6 @@ import java.util.Locale
 /**
  * 帮助页（整屏，从抽屉底部「帮助」进）。
  *
- * 内容与飞牛端的 `core/about.js` 同源（官网 / 开源地址 / 群与问卷二维码 / 各端口径），
- * ⛔ 不在壳里另写一份 —— 那边改了这边要跟着改。
- *
- * ⭐ 「各端与更新」的版本号**只在用户点「检查」时**才出网（许可协议 §四.2/3：
- *    除版本检查外不发起任何对外连接，且必须由人触发）。成功之后 10 分钟内再点只回一句话、不再请求。
  */
 @Composable
 internal fun HelpScreen(version: String, onClose: () -> Unit) {
@@ -81,8 +74,7 @@ internal fun HelpScreen(version: String, onClose: () -> Unit) {
     val prefs = remember { Prefs(context) }
     val scope = rememberCoroutineScope()
 
-    // ⭐ 上一次的结果**从落盘的缓存读**：10 分钟窗口会挡住重复请求，
-    //    只在内存里放一份的话，重进这一页就只剩一排「—」（真机反馈 2026-11-02 11:51）。
+    // 上一次的结果**从落盘的缓存读**：10 分钟窗口会挡住重复请求，
     var versions by remember { mutableStateOf(VersionCache.decode(prefs.versionsCache)) }
     var busy by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf<String?>(null) }
@@ -95,16 +87,14 @@ internal fun HelpScreen(version: String, onClose: () -> Unit) {
         if (busy) return
         val now = System.currentTimeMillis()
         val passed = now - prefs.versionsCheckedAt
-        // ⚠️ 只有**手里真有上一次的结果**时才拦：否则会出现「刚查过 → 请 10 分钟后再试 → 页面却一排—」
-        //    的死角（真机反馈 2026-11-02 12:19）。没有结果就放它去查，拦截毫无意义。
         if (versions.isNotEmpty() && prefs.versionsCheckedAt > 0 && passed in 0 until VERSIONS_INTERVAL_MS) {
             Toast.makeText(context, "检测成功，请10分钟后再试", Toast.LENGTH_SHORT).show()
             return
         }
         busy = true
         failed = null
-        // ⚠️ 接口必须带 channel，不带会被服务端 400（`invalid channel`）；
-        //    ⛔ 别手工拼 `?channel=` —— 走 UpdateUrls 那套，非 https 也一并挡住。
+        // 接口必须带 channel，不带会被服务端 400（`invalid channel`）；
+        // 别手工拼 `?channel=` —— 走 UpdateUrls 那套，非 https 也一并挡住。
         val target = UpdateUrls.withChannel(VERSIONS_API, "stable")
         if (target !is UrlCheck.Ok) {
             busy = false
@@ -153,7 +143,6 @@ internal fun HelpScreen(version: String, onClose: () -> Unit) {
                     .padding(bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                // 链接放最前（老大 2026-11-03 18:44：「最后的两个链接放到最前面」）——
                 // 官网与源码是最常被点的两个入口，压在两张二维码下面要滚一屏才看得到。
                 HelpCard {
                     HelpSectionTitle("链接")
@@ -195,10 +184,8 @@ internal fun HelpScreen(version: String, onClose: () -> Unit) {
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     // 鸿蒙不在 `/api/version` 的四端白名单里，所以正常情况下拿不到它的版本与状态。
-                    // ⭐ 一旦服务端把 `harmonyos` 加进白名单，这里**不用改代码**就会显示（见 OPTIONAL_PLATFORMS）；
-                    //    拿不到时才退回「— / 规划中」，⛔ 不编版本号。
-                    //    ⚠️ 拿得到时状态**照服务端给**：它没配 status 就不显示徽章，
-                    //    ⛔ 不要回落到「规划中」—— 有版本号却写「规划中」自相矛盾。
+                    // 拿不到时才退回「— / 规划中」，⛔ 不编版本号。
+                    // 拿得到时状态**照服务端给**：它没配 status 就不显示徽章，
                     val harmony = versions["harmonyos"]
                     PlatformRow(
                         name = "鸿蒙",
@@ -212,8 +199,8 @@ internal fun HelpScreen(version: String, onClose: () -> Unit) {
                     Text(
                         when {
                             failed != null -> "检查失败：$failed"
-                            // ⚠️ 有检查时间就写出来（哪怕一行版本号都没有）——
-                            //    「查过但没结果」与「从没查过」是两种故障，界面必须分得开
+                            // 有检查时间就写出来（哪怕一行版本号都没有）——
+                            // 「查过但没结果」与「从没查过」是两种故障，界面必须分得开
                             checkedAt > 0 ->
                                 "上次检查 ${SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(checkedAt))}"
                             else -> "点「检查」获取各端最新版本"
@@ -310,13 +297,6 @@ private fun HelpSectionTitle(text: String, modifier: Modifier = Modifier) {
 /**
  * 一个端的一行：**三列对齐** —— 名称（左）｜版本号（固定 72dp、右对齐）｜状态徽章（固定 52dp、右对齐）。
  *
- * ⚠️ 说明文字住在名称那一列的第二行，⛔ 不另起一列 —— 它长短不一，一进列就会把三列顶歪。
- *
- * @param status 由服务端下发（`app_version.status`）。**空 = 服务端没配 ⇒ 不显示徽章**，
- *               ⛔ 不要在这里补一个默认值 —— 编出来的状态比空着更误导。
- * @param previous 上一个不同版本的摘要。**只在当前这版还拿不到时才显示**（见下）——
- *                 一个端可能同时在售两个版本：0.9.7 在审核、0.9.6 已上线，
- *                 只写「0.9.7 审核中」用户不知道现在能装什么。
  */
 @Composable
 private fun PlatformRow(
@@ -327,7 +307,6 @@ private fun PlatformRow(
     previous: PreviousRelease? = null,
 ) {
     // 当前版可用（已上线 / 可用 / 内测）⇒ 用户直接装最新版就行，再标上一版是噪音；
-    // 当前版拿不到（审核中 / 规划中 / 状态未知）⇒ 补一行「上一版 0.9.6 · 已上线」，
     // 让人知道退而求其次能装哪个。
     val previousRelease = previous?.takeIf { !statusIsOnline(status) }
     val previousText = previousRelease?.let {
@@ -386,8 +365,6 @@ private fun PlatformRow(
 /**
  * 状态徽章：「已上线 / 可用 / 内测」走品牌浅底，其余（审核中 / 规划中 / 已下架…）走中性灰。
  *
- * ⚠️ 宽度固定 52dp、单行省略：状态文案由库里的 `app_version.status` 决定，
- *    建议写 2~4 个字（已上线 / 审核中 / 可用 / 规划中），太长会在这里被截。
  */
 @Composable
 private fun StateBadge(status: String) {
@@ -410,9 +387,6 @@ private fun StateBadge(status: String) {
 /**
  * 徽章配色：只看文案里的关键词，**这不是业务判据**。
  *
- * 服务端以后加「内测中」「已下架」这类新状态时，最坏结果只是配色变灰，
- * 文案本身照常显示 —— ⛔ 不要为了配色在这里维护一张状态白名单，
- * 那张表一旦和服务端不同步，就会出现「审核中」被染成可用色的错。
  */
 private fun statusIsOnline(status: String): Boolean =
     status.contains("上线") || status.contains("可用") ||
@@ -421,8 +395,6 @@ private fun statusIsOnline(status: String): Boolean =
 /**
  * 二维码图 ＋ 图注。
  *
- * ⚠️ 群卡片是竖长的、问卷是方的（480×853 / 480×617），⛔ 不要并排 ——
- *    并排会把竖的那张压成一条缝，扫不出来（前端 `about.js` 记过同一条）。
  */
 @Composable
 private fun QrFigure(resId: Int, caption: String, description: String) {

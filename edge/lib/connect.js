@@ -1,19 +1,12 @@
 /**
  * connect.js —— 连接编排（host 与 FNID 两条路并存、互相不猜）
- *
  * 功能：`connect` 按输入选路；`status` 每次真握手后报 connected / need_login / failed；
  *      `disconnect` 清本地记录（⛔ 不碰浏览器 Cookie）。
  *      状态机：idle → resolving → connected / need_login / failed。
  * - host：UI 解析并授权 ⇒ 握手（网关前缀优先）⇒ health 判登录 ⇒ 未登录开 `{base}/login.html`；
- * - FNID：`resolveFnId` ⇒ `https://<relay>` ⇒ 同一套握手；443 失败 ⇒ 端口兜底 `:httpsPort`；
- *   未登录**开门户** `https://fnos.net/<fnid>/`（中继根是灰屏桌面壳，不是登录页）。
- * - 网关未登录会回 `200 + text/plain "invalid token"` ⇒ 按 `need_nas_login` / 门户处理；
- *   访问码 HTML ⇒ `access_code`。
- *
- * ⚠️ `conn:status` 每次真握手，重启后如实报 need_login，⛔ 不拿 storage 里的旧状态假装已连接。
- *
+ * - FNID：`resolveFnId` ⇒ `https://<relay>` ⇒ 同一套握手；443 失败 ⇒ 端口兜底 `:httpsPort`…
  * @author zx
- * @since 0.1.0
+ * @since
  * 相关：Project/Edge/README.md
  */
 import { fetchHealth } from './api.js';
@@ -32,9 +25,9 @@ let loginWait = null; // { base, tick, timer, deadline }
 
 /**
  * 功能：候选 base 依次握手（网关前缀优先）。
- * ⚠️ 授权刚 resolve 时 SW 的 fetch 偶发「权限尚未生效」⇒ 首轮全败，表现为「每次都要连两次」。
- *    **全盲失败（无 hit 且无网关信号）整轮重试一次**（隔 500ms）；
- *    有明确信号（网关要登录 / 访问码）说明请求通了，不重试直接报。
+ * 授权刚 resolve 时 SW 的 fetch 偶发「权限尚未生效」⇒ 首轮全败，表现为「每次都要连两次」。
+ * **全盲失败（无 hit 且无网关信号）整轮重试一次**（隔 500ms）；
+ * 有明确信号（网关要登录 / 访问码）说明请求通了，不重试直接报。
  * @returns {Promise<{base:?string, mode?:'gateway'|'direct', needNasLogin:boolean, accessCode:boolean}>}
  */
 async function handshake(origin) {
@@ -140,7 +133,7 @@ async function connectHost(p) {
 /** FNID 路：解析 ⇒ `https://<relay>` ⇒ 握手（443 失败用 `:httpsPort` 兜底）⇒ 登录开门户。 */
 async function connectFnid(p) {
   const seed = { input: p.input, fnid: p.id, hostPermGranted: true, isValid: false };
-  // ⚠️ 解析失败（权限传播延迟 / 瞬时网络）自动重试一次 —— fn_id_not_found 是明确答案，不重试
+  // 解析失败（权限传播延迟 / 瞬时网络）自动重试一次 —— fn_id_not_found 是明确答案，不重试
   let r;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {

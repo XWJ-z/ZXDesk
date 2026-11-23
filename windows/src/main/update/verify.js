@@ -1,15 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：verify.js
- * 职责：下载结果核对：**这个包到底是不是清单上说的那一版**
- *
- * SHA256 能证明「字节没被换过」，但证明不了「服务器记录本身写对了」——
- * 发版时把旧包的 hash 填进新版本记录，hash 照样能过，装上去还是旧版。
- * 所以再往里看一层：绿色包（zip）里带着 `resources/app.asar`，
- * asar 头里的 `package.json` 有真实版本号，读出来跟清单比一比。
- *
- * 读不出来（安装包 exe 没有 asar、zip 结构变了、文件坏了）⇒ 返回 null，
- * 由调用方决定怎么处理 —— ⛔ 这里不猜、不抛，免得一个可选检查把正常更新拦死。
  */
 
 import fs from 'node:fs';
@@ -85,10 +75,6 @@ function readZipEntry(file, suffix) {
 /**
  * 从 asar 字节里取完整文件系统的 JSON 头。
  *
- * 实际布局（照 `@electron/asar` 现造一个包对照过字节）：
- *   [4B 第一个 pickle 的长度(=4)] [4B 头部 pickle 总长 N] [头部…]
- *   头部 = [4B pickle 载荷长度] [4B 字符串长度 L] [JSON 字符 L] [补齐到 4 字节]
- * ⇒ 内容区起点 = 8 + N，JSON 从头部第 8 个字节开始。
  */
 function readAsarHeader(buf) {
   if (!buf || buf.length < 16) return null;
@@ -113,7 +99,7 @@ function readAsarFile(buf, header, parts) {
     if (!node) return null;
   }
   if (node.link) return null;
-  // ⚠️ offset 在 asar 头里是**字符串**（"0"），不是数字 —— 直接比 typeof 会全部落空
+  // offset 在 asar 头里是**字符串**（"0"），不是数字 —— 直接比 typeof 会全部落空
   const offset = Number(node.offset);
   const size = Number(node.size);
   if (!Number.isFinite(offset) || !Number.isFinite(size)) return null;
@@ -125,9 +111,7 @@ function readAsarFile(buf, header, parts) {
 
 /**
  * 读包内真实版本号（只认绿色 zip；安装包 exe 返回 null）。
- *
  * @param {string} file
- * @returns {string|null} 形如 `0.2.2`；读不出来给 null
  */
 export function readPackageVersion(file) {
   try {

@@ -2,25 +2,18 @@
  * modules/tasks/desktop-tasks.js —— 任务写操作（勾选 / 删除可撤销 / 快速添加）
  *
  * 功能：任务与项目的写操作，外加「快速添加」栏的偏好与提交。
- *      `taskPath()` 拼出两种作用域共用的任务接口路径；`toggleTask()` / `editTask()` / `delTask()`
- *      分别是单条任务的勾选、打开编辑、删除（删除带可撤销）；`deleteProject()` 删项目并把它的任务
- *      一并快照以便整份重建；`refreshAfterWrite()` 按当前视图决定写完之后刷新哪一块；
- *      `loadQaPrefs()` / `saveQaPrefs()` / `bindQuickAddDefaults()` / `quickAdd()` 负责快速添加栏的
- *      偏好读写、回填与提交。另导出偏好所用的 localStorage 键名常量 `QA_KEY`。
- *
- * ⭐ 0.5.0：本文件从 `public/desktop/views/tasks.js` **原样搬进任务板模块目录**。
- *    一个模块一个文件夹 —— 这一屏只服务任务板这一个模块，所以它的家是 `modules/tasks/`，
- *    不该留在跨端共用的 `views/` 里。⚠️ 只改了 import 路径与本节注释，渲染逻辑一个字没动。
- *    命名约定（一个模块不止一屏时用 `<端>-<屏名>.js`）见 `modules/tasks/README.md` 与 `07-前端`。
+ * `taskPath()` 拼出两种作用域共用的任务接口路径；`toggleTask()` / `editTask()` / `delTask()`
+ * 分别是单条任务的勾选、打开编辑、删除（删除带可撤销）；`deleteProject()` 删项目并把它的任务
+ * 一并快照以便整份重建；`refreshAfterWrite()` 按当前视图决定写完之后刷新哪一块…
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.9
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/05-任务板.md
  */
 
 import { api } from '../../core/api.js';
-// ⭐ 0.7.1：新建任务统一走这个对外入口（不再各自拼 POST，见它的文件头）
+// 新建任务统一走这个对外入口（不再各自拼 POST，见它的文件头）
 import { createTask } from '../../core/task-create.js';
 import { todayStr } from '../../core/date.js';
 import { $ } from '../../core/dom.js';
@@ -43,15 +36,10 @@ export const taskPath = (scope, id) => (scope === 'daily' ? `/api/daily/${id}` :
 
 /**
  * 功能：切换一条任务的完成状态 —— 取反当前 `status` 后 `PUT` 回同一路径，再按当前视图刷新。
- *      数据层只读时直接返回，不发任何请求。
+ * 数据层只读时直接返回，不发任何请求。
  * @param {(string|number)} scope - 作用域，`'daily'` 或项目 id
  * @param {(string|number)} id - 任务 id
  * @param {string} [knownStatus] - 调用方**已知**的当前状态（`'todo'` / `'done'`）。
- *      ⚠️⭐ 0.8.9加：`findTask()` 要能从 `state.itemMap` / 首页看板 /
- *      `state.tasks` 三处之一找到这条任务，而**从日历（或看板卡片）打开的详情**里它可能三处都不在
- *      ⇒ 从前 `if (!t) return` 会静默退出（一个请求都不发、也不报错）。详情弹窗本来就拿着那条任务，
- *      让它把状态显式传下来，这条写路径就**不再依赖任何缓存**。
- * @returns {Promise.<void>}
  */
 export async function toggleTask(scope, id, knownStatus) {
   if (!assertWritable()) return;
@@ -74,13 +62,10 @@ export function editTask(scope, t) {
 
 /**
  * 功能：删除一条任务并给用户留一条退路 —— 先留一份去掉 id 的快照，删除成功后按当前视图刷新，
- *      再用 toast 给出「撤销」；撤销时用快照重新创建该任务，并把完成时间按原值补写回去。
+ * 再用 toast 给出「撤销」；撤销时用快照重新创建该任务，并把完成时间按原值补写回去。
  *
  * 说明：删除不再弹确认框，改成 toast 里的「撤销」（先删、再给 7 秒撤销窗口）。
  *
- * @param {(string|number)} scope - 作用域，`'daily'` 或项目 id
- * @param {Object} t - 待删除的任务对象，同时作为撤销时重建的快照来源
- * @returns {Promise.<void>}
  */
 export async function delTask(scope, t) {
   if (!assertWritable()) return;
@@ -111,12 +96,10 @@ export async function delTask(scope, t) {
 
 /**
  * 功能：删除当前项目 —— 先把项目自身与其全部任务各留一份快照（去掉 id 与 project_id），
- *      删除成功后切回日常任务板，再用 toast 给出「撤销」；撤销时先重建项目、再逐条重建任务，
- *      并把每条任务的完成时间按原值补写回去。
+ * 删除成功后切回日常任务板，再用 toast 给出「撤销」；撤销时先重建项目、再逐条重建任务，
+ * 并把每条任务的完成时间按原值补写回去。
  *
  * 说明：项目删除连带其任务一起快照，撤销时整份重建。
- *
- * @returns {Promise.<void>}
  */
 export async function deleteProject() {
   if (!assertWritable()) return;
@@ -152,7 +135,6 @@ export async function deleteProject() {
       const np = await api('POST', '/api/projects', pSnapshot);
       for (const t of tSnapshots) {
         const created = await api('POST', `/api/projects/${np.id}/tasks`, t);
-        // 同 delTask：完成时间必须原样恢复，否则撤销回来的任务完成日变成今天
         if (t.completed_at) {
           await api('PUT', `/api/projects/${np.id}/tasks/${created.id}`, { completed_at: t.completed_at });
         }
@@ -166,22 +148,19 @@ export async function deleteProject() {
 
 /**
  * 功能：写操作完成后按当前所在视图决定刷新哪一块 —— 搜索页重跑当前搜索、首页看板重取看板、
- *      任务板重载看板、其余情况刷新项目列表。
+ * 任务板重载看板、其余情况刷新项目列表。
  * @param {(string|number)} scope - 本次写操作的作用域，`'daily'` 或项目 id
  * @returns {Promise.<void>}
  */
 export async function refreshAfterWrite(scope) {
   if (state.view === 'search' && state.search) return doSearch(state.search);
-  // ⭐ 0.5.5：首页看板上的任务**能就地改**（点一条 → 弹详情 → 标记完成 / 删除），
-  //    改完这一屏当然也要跟着变。⚠️ 放在 board 那条之前：首页不是任务板，
-  //    `scopeKey(scope) === state.scope` 这种判据在首页没有意义（看板上的任务来自不同项目）。
+  // 首页看板上的任务**能就地改**（点一条 → 弹详情 → 标记完成 / 删除），
+  // 改完这一屏当然也要跟着变。⚠️ 放在 board 那条之前：首页不是任务板，
+  // `scopeKey(scope) === state.scope` 这种判据在首页没有意义（看板上的任务来自不同项目）。
   if (state.view === 'home') return refreshHome();
-  // ⚠️⭐ 0.6.4 修：**汇总任务视图**（`state.scope === 'all'`）下，每条任务的作用域是它**自己**
-  //    那个项目 id，与 `state.scope`（`'all'`）永远不相等 ⇒ 原来会掉进最后那行 `loadProjects()`，
-  //    而它只重画侧栏、并且**拿没更新的 `state.tasks` 再 `renderBoard()` 一次** ——
-  //    用户看到的就是「勾选闪一下就回去了、状态没变，切走再进来才对」。
-  //    汇总视图也是任务板，写完之后该刷新的是任务板本身（`loadBoard()` 按 `state.scope`
-  //    自己会走 `'all'` 那条「一次请求拿全部」的分支）。
+  // 修：**汇总任务视图**（`state.scope === 'all'`）下，每条任务的作用域是它**自己**
+  // 那个项目 id，与 `state.scope`（`'all'`）永远不相等 ⇒ 原来会掉进最后那行 `loadProjects()`，
+  // 而它只重画侧栏、并且**拿没更新的 `state.tasks` 再 `renderBoard()` 一次** ——
   if (state.view === 'board' && (scopeKey(scope) === state.scope || state.scope === 'all')) return loadBoard();
   return loadProjects();
 }
@@ -192,7 +171,7 @@ export const QA_KEY = 'zxdesk.qa';
 
 /**
  * 功能：读取「快速添加」栏的两个开关偏好（重要 / 紧急）；键不存在或内容不是合法 JSON 时，
- *      一律回落到「两个都关」。
+ * 一律回落到「两个都关」。
  * @returns {{ imp: boolean, urg: boolean }} 快速添加栏的开关偏好
  */
 export function loadQaPrefs() {
@@ -239,9 +218,9 @@ export function bindQuickAddDefaults() {
 
 /**
  * 功能：提交「快速添加」栏里的任务 —— 标题为空时聚焦输入框并提示；日期留空则用今天；
- *      按当前作用域分别 POST 到日常任务或项目任务接口；成功后清空输入框与日期、重载看板，
- *      并把焦点交回输入框。
- *      数据层只读时直接返回，不做任何请求。
+ * 按当前作用域分别 POST 到日常任务或项目任务接口；成功后清空输入框与日期、重载看板，
+ * 并把焦点交回输入框。
+ * 数据层只读时直接返回，不做任何请求。
  * @returns {Promise.<void>}
  */
 export async function quickAdd() {
@@ -262,8 +241,8 @@ export async function quickAdd() {
     status: 'todo',
   };
   try {
-    // ⭐ 0.7.1：统一走「任务创建」的对外入口（两套字段名它都认）—— 快速添加栏只填了标题与日期，
-    //    正文留空（日常落 `content`）；`body` 里已经有 title / 四象限 / 两个日期 / status
+    // 统一走「任务创建」的对外入口（两套字段名它都认）—— 快速添加栏只填了标题与日期，
+    // 正文留空（日常落 `content`）；`body` 里已经有 title / 四象限 / 两个日期 / status
     await createTask(state.scope, Object.assign(body, { content: '' }));
     input.value = '';
     $('#qa-date').value = '';

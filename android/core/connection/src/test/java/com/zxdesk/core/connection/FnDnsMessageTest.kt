@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：FnDnsMessageTest.kt
- * 职责：解析失败文案的回归测试，三态各说各的、都不许漏内部异常名
  */
 
 package com.zxdesk.core.connection
@@ -13,10 +11,6 @@ import org.junit.Test
 /**
  * 这条文案会进失败卡片，用户据此决定下一步，所以三态必须**处置不同**：
  * 域名有记录却是系统解析不通 → App 自己已经绕过去了；
- * 中继没记录 → 只能等；没网 → 先修网络。
- *
- * ⛔ 一律不许出现「缓存」「飞行模式」「破折号」「括号」——
- * 那些是把环境问题说成用户能一键修好的假办法。
  */
 class FnDnsMessageTest {
 

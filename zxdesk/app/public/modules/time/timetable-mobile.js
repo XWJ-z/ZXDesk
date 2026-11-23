@@ -2,24 +2,9 @@
  * modules/timetable/mobile.js —— 课表（含导入向导）
  *
  * 功能：手机版课表视图的全部界面逻辑，分三块 ——
- *      ① 主视图：`renderTimetable()` 拉取学期与课表快照，画出「周日期条 + 当天课次列表」，
- *         并把「正在上」的那门课高亮、显示倒计时与课间文案、上完的加 `is-done` 半灰
- *         （⭐ 课表 2 期：判定与文案全在 `core/timetable.js` 一份，这里只写文本与切 class；
- *         原来私有的 `ttNowPeriod()` 已收编进去）；`ttGridSheet()` 提供整周格子的补充视图；
- *      ② 导入向导：`ttImportSheet()` 选来源（课表文件 / **内置高校模板**）与导入方式
- *         （新建 / 覆盖 / 追加），`ttPreviewAndShow()` 只解析不入库、让用户校对学期名与开学日期，
- *         `ttCommit()` 把校对结果组装成载荷提交入库；
- *      ③ 维护：`ttSettingsSheet()` 编辑作息时段块、`ttTermSheet()` 新建或编辑学期、
- *         `ttSessionSheet()` 改单条课次的教室 / 教师 / 周次或删除它。
- *
- * 说明：周次与作息都来自导入时求解出来的数据 —— 本文件只负责展示，
- *      并把用户改过的内容原样交回服务端，不在前端重算开学日期或节次时间。
- *
- * ⚠️ 手机版与电脑版是**两套不同的课表实现**：要解决的问题一样（同一份导入数据、
- *    同一套 REST 接口），但版式与代码**刻意不共享**，各自维护，改一端不影响另一端。
- *
- * ⭐ 0.5.0 模块化重构：本文件从 `public/mobile/views/timetable.js` **原样搬进模块目录**
- *    （方案 `09-模块化重构` §七，纯搬运不改逻辑）。只改了 import 的相对路径。
+ * ① 主视图：`renderTimetable()` 拉取学期与课表快照，画出「周日期条 + 当天课次列表」，
+ * 并把「正在上」的那门课高亮、显示倒计时与课间文案、上完的加 `is-done` 半灰
+ * （⭐ 课表 2 期：判定与文案全在 `core/timetable.js` 一份，这里只写文本与切 class…
  *
  * @author zx
  * @date   2026-09-11
@@ -30,6 +15,8 @@
 import { api, backToLogin, BASE } from '../../core/api.js';
 import { addDays, fmtDuration, fmtLong } from '../../core/date.js';
 import { $, esc, skeletonHtml } from '../../core/dom.js';
+// ⭐ 自动草稿：课次详情（含本节备注）/ 学期表单的键与重开方式
+import { registerResume } from '../../core/draft.js';
 import {
   ttCellTimeTexts,
   ttDayLessons,
@@ -649,6 +636,11 @@ export function ttSessionSheet(sid) {
       c.course_id
     }" data-date="${esc(dnDate)}">保存</button>
      <button class="btn" data-act="tt-adj" data-id="${sid}" data-course="${c.course_id}">🔁 调课 / 停课</button>`,
+    {
+      // 「本节备注」的身份是 (课次, 日期)：键里两者都带上，免得换个日子写的时候看到上一天没保存的字
+      draft: `tt-detail:${sid}:${dnDate || 'nodate'}`,
+      resume: { kind: 'tt-session', payload: { sid: Number(sid) } },
+    },
   );
 }
 
@@ -1110,6 +1102,11 @@ export function ttTermSheet(term) {
       term ? '保存' : '创建'
     }</button>
      <button class="btn ghost" data-act="sheet-close">取消</button>`,
+    {
+      // 学期表单同一时间只服务一个学期，但仍按 id 分键：新建那份不该顶着上一个学期的名字
+      draft: `tt-term:${term ? term.id : 'new'}`,
+      resume: { kind: 'tt-term', payload: { term: term || null } },
+    },
   );
 }
 
@@ -1330,3 +1327,7 @@ export async function ttDayRuleDel(id) {
     toast((e && e.message) || '删除失败', true);
   }
 }
+
+// 重载恢复：课次详情与学期表单各自登记再打开一次（草稿由 `openSheet()` 自动回填）
+registerResume('tt-session', (p) => ttSessionSheet((p && p.sid) || 0));
+registerResume('tt-term', (p) => ttTermSheet((p && p.term) || undefined));

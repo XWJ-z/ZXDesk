@@ -3,45 +3,9 @@
  * modules/teamwork/desktop-teamwork-board.js —— 协作看板在**电脑版主区**的插槽片段
  *
  * 功能：`teamwork-board` 槽的电脑版实现 —— 点开左栏「协作项目」组里的一条 ⇒ 主区（**聊天窗口位置**）
- *      让位给这个共享项目的看板：
- *      ① 页头：`已完成 n / 共 m` ＋ 一条细进度条 ＋【⚙ 状态】（仅所有者）＋【协作成员管理】【💬 评论】【活动】；
- *         ⭐ 2026-10-23：「新建任务」从这一排**挪到右下角悬浮**（`fabHtml()`，与首页看板那颗同款）；
- *         ⚠️ 项目名与「← 返回」由**宿主**画在 `#teamwork-conv-head`（与插槽会话同一个位置感）；
- *      ② 成员块：收成一颗【协作成员管理】按钮 —— 点开弹层里**显示和设置**成员
- *         （分「成员」与「项目操作」两组；成员**一行一个**：名字 ＋ `我`/`发起人` ＋ 移出 ·
- *         ＋加成员 · 移出协作 · 转让 · 那句说明 · 最底一行上传用量）；
- *      ③ 看板：一张**按周列的甘特时间轴** —— ⭐ 照任务板 `modules/tasks/desktop-board.js` 的
- *         `renderTimeline()` 那一套（「照着抄任务-甘特图」）：一行 `«` 周区间 `»`
- *         ＋ 一颗 `今天`；下面**一天一列**，列头＝星期几 ＋ `M/D`；⭐ **条里直接写任务名**的彩色药丸，
- *         同一时段重叠的条**自动错行**（贪心分道，见 `lanesOf`），⛔ **没有左侧名字列**；
- *         顶部一排状态图例可只看某一组的任务。⚠️ 负责人 / 截止日 / `💬 n` / `📎 n` 收进条的
- *         `title`（悬停可见）与任务详情弹层里本来就有（条里放不下）；
- *         ⭐ 进入时默认显示**本周**（自己点「»」翻走之后听用户的，`今天` 拨回本周）；
- *         ⛔ 任务条下沿**不再画时间节点小圆点**（移除 —— 流水仍在卡片弹层的
- *         「活动」栏里，信息一个字没丢）；
- *      ④ 卡片四样：标题 / 负责人（`未认领` 兜底）/ 截止日 / 两个角标（评论 / 附件，缺失按 0）；
- *      ⑤ ⭐ 2f / 2g：卡片弹层里 —— **活动**流水每条带自己的附件（挂在 `report_id` 上，不变）；
- *         **评论**做成「短视频评论区」样式（头像首字 / 名字 / 时间 `MM-DD HH:mm` / 右上角删除），
- *         ⭐ 附件跟着评论走（挂在 `comment_id` 上，紧贴正文下面画，`📎 文件名 · 大小` 可下 / 可删），
- *         底部一条输入条（`＋` 选文件 · 单行输入 · `发送`，先建评论再挂附件）；没挂评论的老附件
- *         归到评论列表最下面的「其他附件」块；＋ 成员块里一行「每个成员上传了多少」（只统计、不限额）。
- *
- * ⭐ 谁负责哪一半（与 `desktop-teamwork-page.js` 分工，别搞混）：
- *      · **本文件**只画「一个项目」的看板与它那几个弹层（状态 / 新建任务 / 转让 / 加成员）；
- *      · 「协作项目列表 + 添加共享项目弹层 + 往左栏登记条目」全在 `desktop-teamwork-page.js`。
- *      两者都建立在 `teamwork` 模块的留白事件上，**谁都不认识 `teamwork` 模块的内部**。
- *
- * ⚠️ **判权全在服务端**：非成员 / 项目没共享 / 项目不存在，服务端一律 404 —— 前端按「看不到」处理，
- *    ⛔ 不去猜原因。⛔ **界面只做可见性**（例如非所有者不摆「改到已完成」那一项），
- *    真动到越界的动作时**照常把服务端那句话弹出来**，⛔ 不静默吞掉。
- *
- * ⚠️ **看板取数一次到位**：`GET /api/collab/projects/:pid/board` ⇒ `{project, states, groups,
- *    progress, members, unknown}` —— 本文件不再分别取任务 / 上报 / 成员（那些是旧形态）。
- *
- * ⚠️ **项目编号从挂载上下文拿**：宿主 `mountSlots(..., 'teamwork-board', { collabPid })` 把「点开的
- *    是哪一条」随 `ctx` 传进来（`render()` 里读 `ctx.collabPid`）—— 本文件不认识左栏、也不认识宿主。
- *
- * ⚠️ 本文件**自包含**（只 import core 与宿主 ui），不依赖任务板别的片段。
+ * 让位给这个共享项目的看板：
+ * ① 页头：`已完成 n / 共 m` ＋ 一条细进度条 ＋【⚙ 状态】（仅所有者）＋【协作成员管理】【💬 评论】【活动】；
+ * 项目名与「← 返回」由**宿主**画在 `#teamwork-conv-head`（与插槽会话同一个位置感）…
  *
  * @author zx
  * @date   2026-10-04
@@ -51,17 +15,14 @@
 
 import { api, BASE, backToLogin } from '../../core/api.js';
 import { esc } from '../../core/dom.js';
-// ⭐⭐ 0.8.17：甘特条的**区间语义**照任务板 —— 终点走共用层的 `visEnd()`
-//    （已完成止于完成日 · 逾期未完成顺延到今天）；周期任务画成「**一期一段**」，它的三个判据
-//    （哪几期 · 欠没欠 · 打卡进度）全住共用层 `core/recur.js`。
-//    ⚠️ 这三个都是 **core 共用层**（与任务板 `desktop-board.js:43-44` 同一批 import），
-//    ⛔ 不是「import 别的模块的实现」。
+// 甘特条的区间语义照任务板：终点走共用层的 `visEnd()`（已完成止于完成日、逾期顺延到今天），
+// 周期任务的三条判据（哪几期 · 欠没欠 · 打卡进度）住 `core/recur.js`；两者都是 **core 共用层**，
+// ⛔ 不是 import 别的模块的实现。
 import { visEnd } from '../../core/task.js';
 import { missedPeriods, parseRule, periodsBetween, tickProgress } from '../../core/recur.js';
 import { COLORS } from '../../core/constants.js';
 import { toast } from '../../desktop/ui.js';
-// ⭐⭐ 0.8.53（没有适配周期和窗口两个任务类型）：任务类型块**两端共用一份**
-//    （三选一 ＋ 时间窗 ＋ 两个时刻 ＋ 周期规则；规则编辑器本身来自任务板的 `shared.js`）。
+// 任务类型块两端共用一份（三选一 ＋ 时间窗 ＋ 两个时刻 ＋ 周期规则；规则编辑器来自任务板 `shared.js`）。
 import { bindKindBlock, kindBlockHtml, readKindFields } from './teamwork-taskkind.js';
 
 /** 五组 → 组名（与契约 §3.2 逐字一致，⛔ 一个字都不许改）。 @type {Object.<string,string>} */
@@ -198,7 +159,6 @@ function delErrText(e) {
 }
 
 /**
- * 功能：把一个时间戳裁成「日期 时分」（`2026-10-04T12:34:56Z` ⇒ `2026-10-04 12:34`）。
  * 说明：⚠️ `created_at` 是带连字符的字符串，⛔ 不许对它包 `Number()`。
  * @param {*} s - 服务端给的时间戳
  * @returns {string} 展示用时间（空值回空串）
@@ -353,7 +313,7 @@ function cardsOf(b, g) {
 }
 
 /**
- * 功能：取某一组里**用来当默认落点**的状态键（0.8.53）。
+ * 功能：取某一组里**用来当默认落点**的状态键。
  *
  * 说明：⭐ 「待排期 → 转为任务」要把状态从 backlog 组挪出去，落点取该组里
  *      `is_default` 的那一条（没有就取第一条）—— 状态集是**每个项目自配**的，
@@ -455,7 +415,6 @@ function allBoardTasks(b) {
 /**
  * 功能：当前要显示的那一周的**周一**天序号 —— 没手动翻过（`weekStart` 为空）就是**本周**。
  *
- * 说明：⭐⭐ 2026-10-20：**进来显示的应该是本周**，⛔ 不是「撑到有任务的那一周」。
  *      原来那套「撑周」（为「10 月的周里看不到 9 月的任务」而加的那个函数）有个说不通
  *      的地方：那块页头明明写着 `今天`、列头也标着「今天」那一列，进去却不是本周 ——
  *      用户第一眼看到的日期与「今天」无关，翻周按钮的起点也跟着落在别人的周上。
@@ -498,8 +457,8 @@ function cmpByDue(a, c) {
 /**
  * 功能：按当前图例筛选（`all` 之外只看当前在该组的任务）并按截止日排序。
  *
- * 说明：⭐⭐ 0.8.53（待排期单列）：**待排期不进甘特图** —— 它在看板甘特图下面
- *      单独一块列表里（没有日期、可「转为任务」；0.8.54 起从页头下面挪到甘特图下面），所以这里先把它剔掉。
+ * 说明：（待排期单列）：**待排期不进甘特图** —— 它在看板甘特图下面
+ *      单独一块列表里，所以这里先把它剔掉。
  *      ⚠️ 剔的判据是**组**（`backlog`）而不是状态键：项目状态集是自配的，
  *      落在 backlog 组里的自定义状态同样不该出现在时间轴上。
  * @param {Object} st - 状态
@@ -514,7 +473,7 @@ function visibleTasks(st, b) {
 }
 
 /**
- * 功能：一条任务的横条端点 —— ⭐⭐ 0.8.17 起照任务板的区间语义：
+ * 功能：一条任务的横条端点 —— 起照任务板的区间语义：
  *      **起点 = `start_date || created_at`**，**终点 = `visEnd(t, s, today)`**。
  *
  * 说明：⭐ 为什么要换口径：原来画的是「创建日 → 截止日」——
@@ -549,11 +508,10 @@ function barSpanOf(t, group) {
     start = end;
     end = tmp;
   }
-  // ⭐⭐ 0.8.17：终点照任务板套 `visEnd()` 截断 / 顺延。
+  // 终点照任务板套 `visEnd()` 截断 / 顺延。
   //    ⚠️⭐ `today` 这一参数**必须传** —— 漏传不报错，只是「逾期顺延到今天」静默失效
   //    。
   //
-  // ⚠️⭐ 2026-10-20（本版质检）：`visEnd()` 有两处**不适用于协作看板**，这里按组补两条：
   //    ① **自定义的「已完成」状态**：`visEnd()` → `doneInfo()` 只认 `status === 'done'` 这个**字面量**，
   //       而协作的状态集是**每个项目自配**的——「验收通过」这类 key 落在
   //       `completed` 组里，`doneInfo()` 认不出 ⇒ 条会一直铺到截止日。
@@ -731,7 +689,6 @@ function taskFileCount(st, tid) {
 }
 
 /**
- * 功能：我能不能删这个附件 —— ⭐ **上传者自己 ＋ 项目所有者**（与评论刻意不同，方案 §戊-8-1）。
  * @param {Object} st - 状态
  * @param {Object} b - 看板响应
  * @param {Object} f - 附件行
@@ -793,14 +750,14 @@ function createState(ctx) {
     filter: 'all',
     // ⭐ 本轮：周视图当前翻到的那个**周一**（天序号）；为空 ⇒ 跟着「今天」走（本周）
     weekStart: null,
-    // ⭐ 0.8.17：点列选中的那一天（**天序号**；`-1` = 没选）。
+    // 点列选中的那一天（**天序号**；`-1` = 没选）。
     //    ⚠️ 它只驱动**列头高亮**（就地改 class，⛔ 不换屏、不重画整块）—— 不参与筛选。
     selected: -1,
     // ⭐ 2d：点卡片开的那张「任务详情」弹层（评论 ＋ 活动都在它里面）
     cardFor: 0,
-    // ⭐ 0.8.53：待排期列表里点【转为任务】开的那条任务（0 = 没开）
+    // 待排期列表里点【转为任务】开的那条任务（0 = 没开）
     promoteFor: 0,
-    // ⭐ 0.8.54：待排期列表里点 ✕ 要删的那条任务（0 = 没开确认弹层）
+    // 待排期列表里点 ✕ 要删的那条任务（0 = 没开确认弹层）
     delFor: 0,
     cardComments: null,
     cardCommentsErr: '',
@@ -822,7 +779,6 @@ function createState(ctx) {
     friends: null,
     friendErr: '',
     busy: false,
-    // ⭐ 2026-10-20（本版质检）：看板取数的**请求序号** —— 每发一次自增，`await` 回来只有
     //    「我还是最新那一趟」才允许写 `st.board`。没有它，「连点两次重试」或「取数途中改了状态」
     //    这种并发下，**后 resolve 的旧快照会盖掉新状态**（进度条 / 分组 / 💬 n 退回旧值，
     //    刷新之后才对 —— 典型的「看着像没保存」）。⚠️ `desktop.js` 的会话消息用
@@ -840,7 +796,6 @@ function createState(ctx) {
  * @returns {Promise.<void>}
  */
 async function loadBoard(root, st) {
-  // ⚠️⭐ 2026-10-20：带序号取数 —— 慢回来的旧响应不许盖掉新状态（见 `createState().seq` 的说明）
   const my = ++st.seq;
   st.board = null;
   st.boardErr = '';
@@ -884,7 +839,6 @@ async function reloadBoard(root, st) {
   else {
     st.board = data;
     st.boardErr = '';
-    // ⚠️⭐ 2026-10-20：**角色降级要收掉仅所有者的弹层** —— 另一个标签页把项目转让给别人之后，
     //    本页会走 `visibilitychange → reloadBoard()`；原先 `statusOpen` / `transferOpen` /
     //    `addOpen` 原样留着 ⇒ 弹层还在、还能编辑，一保存就弹服务端 404（「看着能用，其实不能用」）。
     if (st.board && st.board.project && st.board.project.role !== 'owner') {
@@ -984,7 +938,6 @@ async function loadProjectActivity(st) {
  * 功能：取一次项目的附件清单与每成员用量（`GET .../files` ⇒ `{items, used}`）。
  *
  * 说明：⚠️ 只取附件，不碰看板 —— 上传 / 删除后只重取这一块（避免整屏闪一下）。
- *      `used` 是「每个成员上传了多少」（uid ⇒ 字节）；⭐ 只统计、不限额（方案 §戊-8-2）。
  * @param {Object} st - 状态
  * @returns {Promise.<void>}
  */
@@ -1014,7 +967,6 @@ async function loadFiles(st) {
  * @returns {void}
  */
 function ensureFiles(root, st) {
-  // ⚠️⭐ 2026-10-20（本版质检）：这里原来写的是 `if (st.files !== null || st.filesErr) return;` ——
   //    一旦**取附件失败过一次**，`filesErr` 就把它自己锁死：之后再开任务卡片 / 评论弹层 /
   //    成员弹层都不会重取（而唯一能清掉错误的那条路是「上传或删除一个附件」，可附件区本身
   //    正显示着错误句、连文件框都没有）⇒ 网络恢复之后只能**退出看板再重进**。
@@ -1051,7 +1003,6 @@ async function sendComment(root, st, scope) {
   }
   st.busy = true;
   let created = false;
-  // ⚠️⭐ 2026-11-05（「待排期-转为任务：点击无反应」排查中顺带发现的**放大器**）：
   //    这里原先是「try/catch 收尾，`st.busy = false` 摆在 catch 之后」—— 只要 catch 后面那一段
   //    （清输入 / 补附件 / 重取评论 / 就地改角标）抛一次，`busy` 就**永久**停在 true。
   //    后果不是这一处坏，而是**本片段所有写操作**的 `if (st.busy) return;` 从此全部静默失效 ——
@@ -1265,7 +1216,6 @@ async function deleteFile(root, st, fid) {
 /**
  * 功能：下载一个附件 —— 用一次临时 `<a>` 点击（⛔ 不开新窗口内联渲染）。
  *
- * 说明：⚠️ 服务端那条路带 `Content-Disposition: attachment`（方案 §戊-7），所以浏览器**只下载**、
  *      ⛔ 不会把 PDF / HTML 内联画出来；这里**刻意不加** `download` 属性（文件名由服务端那个头给）。
  * @param {number|string} fid - 附件 id
  * @returns {void}
@@ -1403,7 +1353,7 @@ function kindChanged(t, kf) {
  * 功能：新建任务 —— 弹层里的标题 / 状态 / 负责人 / 任务日与截止日 / **任务类型** / 描述
  *      ⇒ `POST .../tasks`。
  *
- * 说明：⭐⭐ 0.8.53：状态落在 **backlog 组（待排期）** 时**日期与类型整块不发**
+ * 说明：状态落在 **backlog 组（待排期）** 时**日期与类型整块不发**
  *      （服务端对 backlog 组也不写日期，见 `collabAddTask()`）—— 待排期就是「还没排期」；
  *      要排期走待排期列表里那条【转为任务】。
  *      ⚠️ 窗口任务的两个时刻必填、同一天要比先后（与任务板同一套前置校验）。
@@ -1478,7 +1428,7 @@ async function createTask(root, st) {
 /**
  * 功能：待排期任务【转为任务】—— 读任务日 / 截止日 ＋ 任务类型块，`PUT` 一次就把它挪出待排期。
  *
- * 说明：⭐⭐ 0.8.53（待排期可以转为任务，类似随手记，转的时候选任务类型和日期时间）：
+ * 说明：（待排期可以转为任务，类似随手记，转的时候选任务类型和日期时间）：
  *      · 状态落到「未开始」组里那条默认状态（`stateKeyOfGroup()`，⛔ 不写死 `todo`）；
  *      · 日期与类型**一次发全**：`start_time` / `due_time` / `recur_rule` 按类型给空串或 null，
  *        否则「周期改回普通」会留着上一次的循环规则（服务端 `allowedCols` 认这四列，改得动）；
@@ -1490,14 +1440,12 @@ async function createTask(root, st) {
  */
 async function promoteTask(root, st, tidArg) {
   if (st.busy) return;
-  // ⭐⭐ 2026-11-05：**编号从按钮上取**（`data-tid`），与手机端同一口径 —— 不再靠
   //    `st.promoteFor` ＋ `st.board` 去「找」那条任务（状态对象换过一份就必然落空）。
   const tid = Number(tidArg) > 0 ? Number(tidArg) : Number(st.promoteFor);
   if (!(tid > 0)) {
     toast('这条待排期已经不在了，关掉弹层重开一次', true);
     return;
   }
-  // ⚠️⭐ 2026-11-05：电脑端的弹层**就住在 root 里**（`showModal()` 的壳由 `paint()` 拼进
   //    root.innerHTML）⇒ 这里按 root 查是对的，⛔ 别照抄手机端那份（那边正文搬到了宿主
   //    的 `#sheet-body`，DOM 里根本没有 `.collab-modal*`，见 `mobile-teamwork-board.js`）。
   //    ⚠️ 取不到时**必须吭声**：静默 return 在界面上与「按钮坏了」完全同形。
@@ -1578,7 +1526,6 @@ async function promoteTask(root, st, tidArg) {
  * @returns {Promise.<void>}
  */
 async function saveCard(root, st) {
-  // ⚠️⭐ 0.9.8 第 18 轮（手机端「点确定无反应」同源）：这三处原来是**纯静默 return**，
   //    点了「保存」什么都不发生、也不报错。现在每一处都要说话。
   if (st.busy) {
     toast('正在保存，请稍候');
@@ -1614,7 +1561,7 @@ async function saveCard(root, st) {
   // ---- 状态 / 负责人：沿用原来的两条口径（空值不发、未知状态不发）
   const sEl = card.querySelector('[data-role="card-status"]');
   const aEl = card.querySelector('[data-role="card-assignee"]');
-  // ⭐⭐ 0.8.53：**保存后的组**决定「日期与类型要不要发」——
+  // **保存后的组**决定「日期与类型要不要发」——
   //    落进 backlog 组（待排期）＝ 还没排期：日期由服务端清空、类型也不该带着，
   //    否则一条待排期任务会在库里留着日期/循环规则，转任务时又冒出来。
   const curState = statesOf(st.board).find((s) => String(s.key) === String(t.status == null ? '' : t.status));
@@ -1651,7 +1598,6 @@ async function saveCard(root, st) {
       body.recur_rule = kf.recur_rule;
     }
   }
-  // ⚠️⭐ 2026-10-20（本版质检）：状态**只发一个真的选中的状态键**。
   //    病根在 `cardStatusPickHtml()`：任务的状态**不在这个项目的状态集里**（老脏数据 / 状态被删过）时，
   //    下拉里会多出一项 `value=""` 的占位（写着「未知状态」），而它带着 `selected` ⇒ 下拉的 `value` 是空串。
   //    原先的判据只比「与 `data-init` 是否相等」（`data-init` 是那个未知键）⇒ 空串 ≠ 未知键 ⇒
@@ -1668,7 +1614,6 @@ async function saveCard(root, st) {
   }
   if (aEl && aEl.value !== (aEl.dataset.init || '') && aEl.value !== '') body.assignee_id = Number(aEl.value);
   if (!Object.keys(body).length) {
-    // ⚠️⭐ 0.9.8 第 18 轮：**电脑端这里从前连弹层都不关** —— 打开一条任务、什么都不改点「保存」，
     //    屏幕上一个像素都不动，用户只能反复点。现在关掉并说一句「没有改动」。
     toast('没有改动');
     st.cardFor = 0;
@@ -1676,7 +1621,6 @@ async function saveCard(root, st) {
     return;
   }
   st.busy = true;
-  // ⭐ 0.9.8 第 18 轮：按下到返回之间要有可见状态（照手机端同一条）。
   const saveBtn = root.querySelector('[data-act="collab-card-save"]');
   if (saveBtn) {
     saveBtn.disabled = true;
@@ -1841,7 +1785,7 @@ async function transferProject(root, st) {
 /**
  * 功能：看板页头 —— 第一行「进度 ＋ 翻周」、第二行那一排按钮（成员 / 状态 / 评论 / 活动）。
  *
- * 说明：⭐⭐ 0.8.17：翻周那一行（`weekNavHtml()`）**并进页头**（第一行的右半）——
+ * 说明：翻周那一行（`weekNavHtml()`）**并进页头**（第一行的右半）——
  *      同一屏从此只剩一处翻周；版式照任务板页头 `« 区间 » 今天` 的位置感（左进度、右翻周）。
  *      它自己那三个 `data-act` 与委托分支原样不动（只搬家，⛔ 不改键名）。
  * @param {Object} st - 状态
@@ -1880,7 +1824,6 @@ function boardHeadHtml(st, b) {
 /**
  * 功能：**右下角悬浮的 ＋**（新建任务）—— 与任务板 `#btn-new-task` / 首页看板那颗 **逐字同款**。
  *
- * 说明：⭐⭐ 2026-10-23（「变为和首页一样的悬浮图标，两端都是」）：从页头按钮排里挪出来，
  *      直接复用宿主的 `.btn-fab` ＋ `.btn-fab-float`（54px 圆 / `fixed` / 距右 32 / 距底 28 / z 30）
  *      —— ⛔ 别再单写一份色值（能借宿主组件就借）。
  *      ⚠️ 它仍住在看板片段里（⛔ 不挪到宿主）：宿主切走时整块 `hidden`，`display: none` 会连带
@@ -1896,7 +1839,6 @@ function fabHtml() {
 /**
  * 功能：成员名单**一行一个**（名字 ＋ `我`/`发起人` 标记 ＋（所有者）右侧「移出」）。
  * 说明：⭐ 本轮要求「排版好看一点」⇒ 从挤在一排的 chips 改成逐行列表，层级清楚。
- *      ⚠️⭐ 2026-10-20（本版质检）：**「发起人」标记看的是「这一行是不是名单第一行」**
  *      （服务端 `collabMembers()` 恒把所有者排在第一位，见 `[owner].concat(members)`），
  *      ⛔ 不是「这一行是不是我自己」。原先写的是 `owner && isMe` ⇒ 两处错：
  *      ① 普通成员打开成员弹层，**永远看不到谁是发起人**（他看不到任何标记）；
@@ -1941,7 +1883,6 @@ function memberRowsHtml(st, b) {
 }
 
 /**
- * 功能：上传用量那一行的内容 —— `上传用量` ＋ 逐成员「名字 大小」（方案 §戊-8-2：只统计、不限额）。
  * 说明：⚠️ 上传者不在成员名单里（已注销）时显示 `已注销成员`；⭐ 没有任何用量时**整行不画**（回空串）。
  * @param {Object} st - 状态
  * @param {Object} b - 看板响应
@@ -2002,8 +1943,8 @@ function addMemberHtml(st) {
 /**
  * 功能：看板正文 —— 页头 ＋ 一张甘特图 ＋ **待排期列表**（`unknown` 的任务也照画，只是没有横条颜色归属）。
  *
- * 说明：⭐⭐ 0.8.53（待排期单列）：待排期任务**不在甘特图上** —— 甘特图下面单独一块列表
- *      （⭐ 0.8.54 起从页头下面挪到这里），
+ * 说明：（待排期单列）：待排期任务**不在甘特图上** —— 甘特图下面单独一块列表
+ *      （起从页头下面挪到这里），
  *      没有日期，每条可以「转为任务」（选任务类型与日期时间），见 `backlogHtml()`。
  * @param {Object} st - 状态
  * @returns {string} 看板 HTML
@@ -2018,7 +1959,7 @@ function boardHtml(st) {
   }
   if (!st.board) return '<div class="collab-hint">正在读取看板…</div>';
   const b = st.board;
-  // ⭐ 0.8.54（「待排期应该显示在任务下面」）：待排期那块从**页头下面**
+  // （「待排期应该显示在任务下面」）：待排期那块从**页头下面**
   //    挪到**甘特图下面** —— 主视图（任务）在上、待排期（还没排期的）在下。
   //    ⚠️ 只改拼接顺序，`backlogHtml()` 本身一个字没动。
   return '<div class="collab-board">' + boardHeadHtml(st, b) + ganttHtml(st, b) + backlogHtml(st, b) + fabHtml() + '</div>';
@@ -2029,7 +1970,7 @@ function boardHtml(st) {
 /**
  * 功能：按当前可用宽度算甘特单列宽（px），夹在 44 ~ 160 之间 —— 照任务板 `computeColW()` 的口径。
  *
- * 说明：⭐⭐ 0.8.17：原先这一屏的条一律走 `flex: 1 1 0` 的百分比 7 等分
+ * 说明：原先这一屏的条一律走 `flex: 1 1 0` 的百分比 7 等分
  *      （那时刻意「不必量宽」）—— 但那样**几何与任务板对不上**，而本轮要的正是「和任务板一样」。
  *      ⇒ 改成实测列宽：量 `#teamwork-board-mount`（本片段的挂载点，是**静态骨架** ⇒ paint 时
  *      已经在文档里、有真实宽度），减掉这一块的左右留白就是甘特卡片的可用宽度。
@@ -2055,7 +1996,7 @@ function collabColW() {
 }
 
 /** 甘特条高度（px）—— 必须与 `desktop/app.css` 里 `.collab-tl-bar` 的 `height` 一致。
- *  ⭐⭐ 0.8.17：**30 → 28**，照任务板 `.tl-taskbar` 的值 —— 本轮的
+ *  **30 → 28**，照任务板 `.tl-taskbar` 的值 —— 本轮的
  *    协作甘特图是「照任务板重写」，条高 / 字号 / 圆角 / 内边距四项必须与它**逐字同值**
  *    （护栏：`ttt/test/frontend-modules.test.js` 的跨模块数值对账）。
  *  ⚠️ 30 是上一轮的值，那时候条里要**分两段**塞下时间节点（上 23px 名字 / 下 7px 节点带）
@@ -2063,7 +2004,6 @@ function collabColW() {
 const TL_BAR_H = 28;
 
 /** 道与道之间的间距（px）—— 与 `.collab-tl-bar` 的 `top` 一起排错行。
- *  ⭐⭐ 2026-10-20：时间节点小点**已移除**（原先它挂在条下沿外侧、为此还把道距从 6 加到 12）。
  *    ⇒ 道距回到**与任务板同值**的 6px（`modules/tasks/desktop-board.js` 的 `TL_BAR_GAP`）——
  *    条与条之间不再需要为小点让出那条轨道，一屏还能多放一道。 @type {number} */
 const TL_BAR_GAP = 6;
@@ -2074,7 +2014,7 @@ const TL_PAD = 6;
 /**
  * 功能：周视图的翻周那一行 —— `«` 周区间 `»` ＋ 一颗 `今天`（照契约 §1 的版式图）。
  *
- * 说明：⭐⭐ 0.8.17：这一行从**甘特卡片里**搬到了**看板页头**（见 `boardHeadHtml()`），
+ * 说明：这一行从**甘特卡片里**搬到了**看板页头**（见 `boardHeadHtml()`），
  *      同一屏从此**只剩一处**翻周 —— 原先卡片里自带一份、页头在卡片外，一屏两处既重复、
  *      又让人不知道该按哪个。
  *      ⚠️ 三个 `data-act`（`collab-gweek-*`）**与委托分支同进同出**：这里只搬位置，⛔ 键名一个字不改。
@@ -2121,7 +2061,7 @@ function legendBtn(key, label, n, cur) {
 /**
  * 功能：顶部那排状态图例（四组 ＋ 全部，各带当前条数）。
  *
- * 说明：⭐⭐ 0.8.53（待排期单列）：图例**不再有「待排期」** —— 它已经不在时间轴上了，
+ * 说明：（待排期单列）：图例**不再有「待排期」** —— 它已经不在时间轴上了，
  *      留着那颗只会让人点了之后看到一张空图（「全部」的条数也同步剔掉它）。
  * @param {Object} st - 状态
  * @param {Object} b - 看板响应
@@ -2152,7 +2092,7 @@ function isWendIndex(i) {
  * 功能：周视图的列头那一行 —— **一天一列**（星期几 ＋ `M/D`），每一列可点（点列只高亮列头）。
  * 说明：⚠️ 与下面那条 7 等分轨道按天对齐；**今天那列用品牌色**、**周末那两列转灰**。
  *      形状 / 字号 / 描边照任务板 `renderTimeline()` 的 `.tl-col-head`。
- *      ⭐ 0.8.17：列头支持 `.sel` 高亮 ＋ 带上点列的落点
+ *      列头支持 `.sel` 高亮 ＋ 带上点列的落点
  *      （`data-act="collab-gcol"` ＋ `data-col`）—— 点哪一列就把它自己的 `.sel` 加上、其余摘掉，
  *      **只改 class、不重画整块**（重画会把横向滚动位置打回最左）。
  * @param {Object} st - 状态（读 `selected`，天序号；`-1` = 没选）
@@ -2209,7 +2149,7 @@ function lanesOf(list, ws) {
     if (s > e) continue;
     const si = s - ws;
     const ei = e - ws;
-    // ⭐⭐ 0.8.17：**删掉「最小宽度加宽」**（原 `TL_MIN_COLS = 2`）——
+    // **删掉「最小宽度加宽」**（原 `TL_MIN_COLS = 2`）——
     //    它当年是为了「1 天的条太窄、名字被截、节点没处放」才加的；现在两件事都变了：
     //    ① 起点改口径（`start_date || created_at`）之后短条本来就少；
     //    ② 时间节点**搬到条下沿外侧的小轨**上（见 `ganttHtml()`），不再需要条内空间。
@@ -2255,7 +2195,7 @@ function barTip(b, x) {
  * 功能：一条任务在甘特图上的**条** —— 照任务板形态：**单段**、条里直接写任务名、按**画出来的先后**
  *      轮流取 `COLORS`（`--tlc`）、三类任务形状齐全；**点这条**开**协作卡片弹层**（D4：⛔ 不换成任务详情）。
  *
- * 说明：⭐⭐ 0.8.17三类形状：
+ * 说明：三类形状：
  *      · **普通** —— 一条到底，无前缀；
  *      · **窗口**（`task_kind === 'window'`）—— 加 `tl-win`（条两端各 3px 橙竖线 ＋ 条首 ⏱）；
  *      · **周期**（`task_kind === 'cycle'`）—— **一期一段**（`tl-cyc tl-seg`）：每一期单独一条，
@@ -2275,7 +2215,7 @@ function barHtml(b, row, i, ws, colw) {
   const tid = esc(t && t.id != null ? String(t.id) : '');
   const top = TL_PAD + row.lane * (TL_BAR_H + TL_BAR_GAP);
   // ⭐ 配色照任务板：按**画出来的先后**轮流取 `COLORS`（相邻必然不同）。
-  //    ⚠️ 0.8.17 起**不再按组着色**（原 `barClass()`）—— 顶部那条状态图例从此只管**筛选**，
+  //    起**不再按组着色**（原 `barClass()`）—— 顶部那条状态图例从此只管**筛选**，
   //    不再兼任「条色说明书」。
   const tlc = COLORS[i % COLORS.length];
   const done = row.x.group === 'completed';
@@ -2360,11 +2300,10 @@ function barHtml(b, row, i, ws, colw) {
  *
  * 说明：⚠️ 一周之外的任务不画（照参照实现的口径）—— 默认周就是**本周**（`weekStartOf`）；
  *      要看别周的任务用页头那颗 `« / »` 翻，或点 `今天` 回来。一条任务都没有时才画那句空态。
- *      ⭐⭐ 0.8.17几何从「百分比 7 等分」改成**实测 px**（`collabColW()`）——
+ *      几何从「百分比 7 等分」改成**实测 px**（`collabColW()`）——
  *      与任务板同一口径，条才能与日期轴严格对齐（也才能与任务板做「起止列号逐条相等」的对账）。
  *      ⚠️ 翻周那一行（`weekNavHtml()`）**不在这一块里**了 —— 它已并进看板页头（见 `boardHeadHtml()`），
  *      同一屏只剩一处翻周。
- *      ⭐ 2026-10-20：条下沿那排时间节点小点**已移除** —— 轨迹高度回到「与任务板同一套」
  *      （上下留白 ＋ 车道 × 条高 ＋ 空档 × 道距），⛔ 不再为小点多留那 10px。
  * @param {Object} st - 状态
  * @param {Object} b - 看板响应
@@ -2395,7 +2334,6 @@ function ganttHtml(st, b) {
   laid.forEach((row, i) => {
     bars += barHtml(b, row, i, ws, colw);
   });
-  // ⭐ 2026-10-20：默认周回到本周之后，可能出现「有任务、但这一周一条都不在」——
   //    那时整条轨道是空的，**必须说一句人话**，⛔ 别让画面看着像坏了（从前靠「撑周」永远不会空）。
   let empty = '';
   if (!list.length) empty = '<div class="collab-gempty">还没有任务</div>';
@@ -2424,10 +2362,10 @@ function ganttHtml(st, b) {
   );
 }
 
-// ================================================================ 画界面：待排期（0.8.53）
+// ================================================================ 画界面：待排期
 
 /**
- * 功能：**待排期列表** —— **甘特图下面**单独一块（待排期不在甘特图中显示；0.8.54 起从页头下面挪下来，
+ * 功能：**待排期列表** —— **甘特图下面**单独一块（待排期不在甘特图中显示；从页头下面挪下来，
  *      单独列表显示，没有日期，可以转为任务）。
  *
  * 说明：⭐⭐ 这几条都是**刻意**的：
@@ -2460,7 +2398,7 @@ function backlogHtml(st, b) {
         '<button class="collab-btn primary" type="button" data-act="collab-promote-open" data-tid="' +
         tid +
         '">转为任务</button>' +
-        // ⭐ 0.8.54（「团队协作的待排期任务没有删除功能」）：待排期是「随手记」——
+        // （「团队协作的待排期任务没有删除功能」）：待排期是「随手记」——
         //    记错了必须能撤。一颗小 ✕，点了先问一句（不可撤销）。
         '<button class="collab-bl-x" type="button" data-act="collab-task-del" data-tid="' +
         tid +
@@ -2488,7 +2426,7 @@ function backlogHtml(st, b) {
 }
 
 /**
- * 功能：删待排期前的**确认弹层**（⭐ 0.8.54）—— 删除不可撤销，而且会连带上报 / 评论 / 附件。
+ * 功能：删待排期前的**确认弹层**（）—— 删除不可撤销，而且会连带上报 / 评论 / 附件。
  *
  * 说明：⭐ 走本模块既有的 `showModal()` 外壳（与【转为任务】同一套），⛔ 不去开全局 `#modal`
  *      —— 两套弹层叠在一起时，关闭顺序与层级都要重新想一遍，不值。
@@ -2513,7 +2451,7 @@ function delModalHtml(st, b) {
 }
 
 /**
- * 功能：真的删掉那条待排期（`DELETE /api/collab/projects/:pid/tasks/:tid`，⭐ 0.8.54）。
+ * 功能：真的删掉那条待排期（`DELETE /api/collab/projects/:pid/tasks/:tid`，）。
  *
  * 说明：⚠️ 判权（**所有者 ＋ 创建者**）在服务端；这里只把它的原话（404「这条任务」）弹出来。
  *      ⚠️ 删完必须 `reloadBoard()` —— 待排期、进度、"共 N 条"三处都跟着变，就地改一处就会留旧值。
@@ -2561,7 +2499,6 @@ function promoteModalHtml(st, b) {
     '</div>' +
     kindBlockHtml('pm', t) +
     '<div class="collab-modal-foot">' +
-    // ⚠️⭐ 2026-11-05：`data-tid` 是这个弹层**唯一的任务身份来源**（与手机端同一口径）——
     //    保存时按它发请求，不再靠 `st.promoteFor` 回查（状态对象换过一份就查不到）。
     '<button class="collab-btn primary" type="button" data-act="collab-promote-save" data-tid="' +
     esc(t.id != null ? String(t.id) : '') +
@@ -2675,7 +2612,7 @@ function stateModalHtml(b) {
 /**
  * 功能：新建任务弹层 —— 标题 / 状态 / 负责人 / 任务日与截止日 / **任务类型** / 描述。
  *
- * 说明：⭐⭐ 0.8.53：
+ * 说明：
  *      · 补上「任务类型」块（普通 / 窗口 / 周期）与「任务日」—— 从前只能建普通任务、
  *        起止日期只靠截止日兜底，周期与窗口在协作侧根本建不出来；
  *      · 状态选在 **backlog 组（待排期）** 时**日期与类型整块隐藏** —— 待排期的语义就是
@@ -3239,7 +3176,6 @@ function cardAssigneePickHtml(t, members) {
  * 功能：任务详情弹层 —— 最上面是**任务本身**（标题 / 描述 / 任务日 / 截止日 / 状态 / 负责人），
  *      **下面依次是评论、活动**。
  *
- * 说明：⭐ 2026-10-20（「团队协作的任务详情，也要可以编辑任务」）：从前这里只有「状态 / 负责人」
  *      两颗下拉 —— 协作里的人能替别人改状态，却改不了自己建的那条任务的标题和日期。
  *      现在补成**与任务板同一组字段**，一次「保存」只发改动过的那几格（⛔ 不整行覆盖：
  *      四象限 / 标签 / 任务类型 / 绑定网址这些协作侧看不见的列，一个字节都不许动）。
@@ -3393,7 +3329,6 @@ function bindCardModal(root) {
 /**
  * 功能：把整块重画一遍（正文整块替换；根节点上的事件委托不受影响）。
  *
- * ⚠️⭐ 2026-10-20（本版质检）：重画之前要**先收两样东西**，重画之后放回去 —— 这里原来是无条件
  *      `root.innerHTML = …`，于是两件很显眼的毛病：
  *      ① **正在打的字没了**：评论输入框 / 【＋ 新建任务】弹层里的标题与截止日只活在 DOM 里
  *         （`st` 里没有草稿），而切窗回来（`visibilitychange` → `reloadBoard()`）、点图例、翻周
@@ -3408,7 +3343,7 @@ function bindCardModal(root) {
  */
 function paint(root, st) {
   if (!root) return;
-  // ⚠️⭐ 0.8.51 修订：卡片弹层里那几格（标题 / 描述 / 两个日期）是**按任务**的草稿，
+  // 修订：卡片弹层里那几格（标题 / 描述 / 两个日期）是**按任务**的草稿，
   //    而 `keep` 是按 `data-role` 收的 —— 换一条任务重画时，会把**上一条任务**的字填进新弹层
   //    （看板数据没变，用户的字就这么「搬」到别人那条上了）。⇒ 收之前先认「画着的还是不是同一条」：
   //    弹层里那颗「保存」带着 `data-tid`。
@@ -3465,7 +3400,7 @@ function paint(root, st) {
       }
     }
   }
-  // ---- ④ 弹层联动（0.8.53）：任务类型块 ＋「待排期时藏起日期与类型」。
+  // ---- ④ 弹层联动：任务类型块 ＋「待排期时藏起日期与类型」。
   //    ⚠️ 每次重画都是**新节点**，所以监听随新节点重建；旧的随旧节点一起丢掉，不会累积。
   if (st.taskOpen) bindTaskModal(root);
   if (st.cardFor) bindCardModal(root);
@@ -3634,7 +3569,6 @@ function fillUsage(root, st) {
  * @returns {void}
  */
 function refreshBarTip(root, st, tid) {
-  // ⚠️⭐ 2026-10-20（本版质检）：**周期任务在甘特图上是「一期一段」**（同一个 `data-tid` 有多条条），
   //    而这里原来只取 `querySelector()` 命中**第一条**、并用普通的 `barTip()` 覆盖它的 `title` ——
   //    于是发 / 删一条评论之后，周期的第一段提示从
   //    「🔁 名（3/10）· 本期 10/5~10/7：已打卡」变成「名 · 负责人 · 截止 … 💬 1 · 📎 0」，
@@ -3718,7 +3652,7 @@ function onClick(root, st, e) {
   const act = t.dataset.act;
   if (act === 'collab-board-reload') loadBoard(root, st);
   else if (act === 'collab-gcol') {
-    // ⭐⭐ 0.8.17：点某一列 ⇒ **只**把那一列的列头高亮 ——
+    // 点某一列 ⇒ **只**把那一列的列头高亮 ——
     //    ⛔ 不换屏（照任务板「点日期只选中、不换屏」）、⛔ 不新增筛选语义。
     //    ⚠️⭐ 必须**就地改 class**（`classList.toggle`），⛔ 别调 `paint()` 整块重画 ——
     //    重画会把 `.collab-tl` 的横向滚动位置打回最左（与任务板 `renderTimeline()`
@@ -3741,7 +3675,6 @@ function onClick(root, st, e) {
     st.weekStart = curWeekStart(st) + WEEK_DAYS;
     paint(root, st);
   } else if (act === 'collab-gweek-today') {
-    // ⭐⭐ 2026-10-20：进来的默认周就是**本周**（`weekStartOf()`），这颗按钮的语义
     //    就是「翻回本周」—— 必须写死本周的周一，⛔ 不要写 `null`（`null` 的含义是「还没翻过」，
     //    虽然结果同样是本周，但少了这一步之后就没法一眼看出「用户已经手动看过别的周了」）。
     st.weekStart = mondayOfIndex(todayIndex());
@@ -3789,7 +3722,7 @@ function onClick(root, st, e) {
   else if (act === 'collab-unshare') unshareProject(root, st);
   else if (act === 'collab-card-open') openCardModal(root, st, t.dataset.tid);
   else if (act === 'collab-promote-open') {
-    // ⭐ 0.8.53：待排期列表里那一颗【转为任务】—— 先关掉别的弹层，再开它
+    // 待排期列表里那一颗【转为任务】—— 先关掉别的弹层，再开它
     closeAllModals(st);
     st.promoteFor = Number(t.dataset.tid) || 0;
     paint(root, st);
@@ -3797,7 +3730,7 @@ function onClick(root, st, e) {
     st.promoteFor = 0;
     paint(root, st);
   } else if (act === 'collab-promote-save') promoteTask(root, st, t.dataset.tid);
-  // ⭐ 0.8.54：删待排期 —— 先开确认弹层（记下是哪条），确认后才真删
+  // 删待排期 —— 先开确认弹层（记下是哪条），确认后才真删
   else if (act === 'collab-task-del') {
     closeAllModals(st);
     st.delFor = Number(t.dataset.tid) || 0;
@@ -3866,7 +3799,7 @@ export function render(ctx) {
   });
   paint(root, st);
   const loaded = loadBoard(root, st);
-  // ⭐⭐ 0.8.53（团队协作的项目里也要有 + 图标可以新建任务）：宿主从**项目行**那颗
+  // （团队协作的项目里也要有 + 图标可以新建任务）：宿主从**项目行**那颗
   //    ＋ 进来时，看板挂载上下文带 `openNew` —— 等看板数据到手再把【新建任务】弹层打开
   //    （新建弹层要用状态集与成员名单，数据没到就弹不出来）。
   if (ctx && ctx.openNew) {

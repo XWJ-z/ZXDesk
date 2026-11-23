@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：Model.kt
- * 职责：数据源模式、账号作用域与登录入口的模型定义
  */
 
 package com.zxdesk.core.datasource
@@ -17,9 +15,6 @@ enum class AccountScope { NAS, LOCAL }
 /**
  * 连接流程。
  *
- * - [DIRECT]：`http://<IP>:8990` 直连 ZXDesk，不需要飞牛登录；
- * - [GATEWAY]：走飞牛网关（64999 / 自定义域名 / FNID 中继），
- *   **必须先登录飞牛**，否则 `/app/zxdesk` 下的请求一律返回纯文本 `invalid token`。
  */
 enum class EntryFlow { DIRECT, GATEWAY }
 
@@ -42,21 +37,17 @@ data class Entry(
     /**
      * FNID 的官方门户（`https://fnos.net/<fnid>/`）：**先在这里登录飞牛**，
      * 登录完它会跳到中继主机，App 再换成 [zxDeskLoginUrl]。
-     * ⚠️ 中继根本身不是登录页（是 NAS 桌面 SPA 的空壳），⛔ 别再直接加载它。
      */
     val portalUrl: String? = null,
     /** 明文 HTTP（只可能是私网 8990）。 */
     val cleartext: Boolean = false,
     /**
-     * 原生 WS 登录拿到的会话（0.2.2）。非空 ⇒ WebView 直接写 Cookie 进 ZXDesk，
-     * ⛔ 不再走门户、⛔ 也不等那个根本不存在的 `Trim-MC-token`。
+     * 不再走门户、⛔ 也不等那个根本不存在的 `Trim-MC-token`。
      */
     val fnSession: FnSession? = null,
     /**
      * FNID 解析时顺带拿到的**局域网地址**（`data.ipv4` 里的第一个），没有就为 null。
      *
-     * 只用于排障文案：中继域名在手机侧解析失败 / 连不上时，把「你在家的话可以填这个」说出来。
-     * ⚠️ 不自动切换 —— 局域网走的是设备自签证书，要人确认指纹；偷偷换过去等于绕过那道确认。
      */
     val lanHint: String? = null,
 ) {
@@ -64,7 +55,6 @@ data class Entry(
     val startUrl: String
         get() = when {
             flow == EntryFlow.DIRECT -> zxDeskLoginUrl
-            // ⚠️ 已有原生会话就直奔 ZXDesk —— 别再把门户加载一遍（否则白转一圈又回到登录）
             fnSession != null -> zxDeskLoginUrl
             portalUrl != null -> portalUrl
             else -> "${baseUrl.trimEnd('/')}/"

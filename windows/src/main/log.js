@@ -1,10 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：log.js
- * 职责：日志（`data/logs/boot.log`）与脱敏
- *
- * 规矩：日志里**永不出现**密码 / token / Cookie 值 / 完整 FNID。
- * 所有写日志的入口都先过 `redact()` —— ⛔ 不允许「这条应该没问题」直接拼字符串。
  */
 
 import fs from 'node:fs';

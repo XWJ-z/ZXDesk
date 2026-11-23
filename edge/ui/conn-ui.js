@@ -1,21 +1,13 @@
 /**
  * conn-ui.js —— UI 侧共享的连接交互（发消息 / 连接流程 / 授权并连接 / 状态轮询）
- *
  * 功能：`send` 给消息加超时；`connectFlow` 走「已授权就直接连」；
  *      `authorizeAndConnect` 在用户手势里申请权限再连接；`pollWhile` 在登录等待期间收割状态。
  *
- * ⚠️ 设置不是独立标签页，而是 popup / 侧边栏里的一个视图（`app.js` 的 cardSettings）。
+ * 设置不是独立标签页，而是 popup / 侧边栏里的一个视图（`app.js` 的 cardSettings）。
  *    `permissions.request` 的授权点在本模块，必须在点击事件里发起；
  *    手势丢失时回 `need_settings`，让用户在设置视图再点一次。
- * ⚠️ 本模块**任何异常都收敛成确定状态**（failed / need_settings），⛔ 不能有「无限转圈」。
- * ⚠️ 授权成功后要自己再发一次 `conn:start`：只靠 SW 的 `permissions.onAdded` 续跑，
- *    在权限传播延迟时会失败。onAdded 只作为「popup 在授权中被关掉」的兜底，
- *    两边用 `takePending` 取走即删做防双跑。
- *
- * ⛔ UI 不发任何网络请求 —— 解析用纯函数 `lib/address.js`，其余全走消息。
- *
  * @author zx
- * @since 0.1.4
+ * @since
  * 相关：Project/Edge/README.md
  */
 import { parseInput, originsFor } from '../lib/address.js';
@@ -75,7 +67,7 @@ async function harvest(tries = HARVEST_TRIES) {
     if (st && (st.state === 'connected' || st.state === 'failed' || st.state === 'need_login')) return st;
   }
   const last = await send(MSG.lastConn).catch(() => null);
-  // ⚠️ 只认 2 分钟内的结果：更早的那条是上一次连接的遗留，拿它当本次结果会说错话
+  // 只认 2 分钟内的结果：更早的那条是上一次连接的遗留，拿它当本次结果会说错话
   const fresh = last && last.status && last.at && Date.now() - last.at < LAST_CONN_FRESH_MS;
   return fresh ? last.status : { state: 'idle' };
 }
@@ -101,12 +93,10 @@ export async function connectFlow(input) {
 
 /**
  * 功能：授权并连接（一步到位）：
- *   1. 连接意图先落 `storage.session`（pendingConnect —— popup 被授权弹窗关掉也不丢）；
- *   2. 手势内 `permissions.request`（手势丢了 ⇒ 回 need_settings，不静默失败）；
- *   3. 授权成功 ⇒ 等 300ms ⇒ **自己发 `conn:start`**（主路径，真机验证过）；
- *   4. `takePending` 取不到 ⇒ 说明 SW 的 `permissions.onAdded` 已抢先接手 ⇒ 只收割它的结果。
- * @param {string} input - 用户输入
- * @returns {Promise<object>} Status（终态：connected / failed / need_login / need_settings）
+ * 1. 连接意图先落 `storage.session`（pendingConnect —— popup 被授权弹窗关掉也不丢）；
+ * 2. 手势内 `permissions.request`（手势丢了 ⇒ 回 need_settings，不静默失败）；
+ * 3. 授权成功 ⇒ 等 300ms ⇒ **自己发 `conn:start`**；
+ * 4. `takePending` 取不到 ⇒ 说明 SW 的 `permissions.onAdded` 已抢先接手 ⇒ 只收割它的结果。
  */
 export async function authorizeAndConnect(input) {
   let o;
@@ -149,7 +139,6 @@ export async function authorizeAndConnect(input) {
   try {
     return await send(MSG.start, { input, kind: p.kind, origin: p.origin, id: p.id });
   } catch (e) {
-    // SW 不可达 / 超时：先看一眼是不是 onAdded 那边成了，否则如实报失败（⛔ 不假装在连）
     const st = await harvest(3);
     return st && st.state !== 'idle' ? st : { state: 'failed', error: 'network', detail: String((e && e.message) || e) };
   } finally {
@@ -159,7 +148,7 @@ export async function authorizeAndConnect(input) {
 
 /**
  * 功能：need_login 期间的 2 s 轮询 —— SW 的登录轮询不推 UI，UI 自己收割状态。
- * ⚠️ 有上限（与 SW 侧 10 分钟同口径）：侧边栏可以一直开着，⛔ 不能永远每 2 s 打一次真握手。
+ * 有上限（与 SW 侧 10 分钟同口径）：侧边栏可以一直开着，⛔ 不能永远每 2 s 打一次真握手。
  * @param {(status: object) => boolean} onStatus - 返回 false 停止轮询
  * @param {number} [maxMs] - 轮询上限，缺省 10 分钟
  * @returns {() => void} 停止函数

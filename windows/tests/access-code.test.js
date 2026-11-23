@@ -1,10 +1,5 @@
 /**
- * 0.2.4：访问码登录修复 ＋ 静默启动 ＋ 静默重连（照 Android 0.2.17 / 0.2.18 口径）。
- *
- * 三条现场问题，各钉几条用例：
- * 1. 开了访问码的 NAS：原生 WS 握手被网关 401 ⇒ 以前报「登录失败」，用户怎么输都进不去；
- * 2. 冷启动没有会话快照、但本机记着密码 ⇒ 以前先甩一屏登录表单；
- * 3. 会话过期 ⇒ 以前要等用户点东西才发现，或者整页跳回登录页。
+ * ：访问码登录修复 ＋ 静默启动 ＋ 静默重连。
  */
 
 import assert from 'node:assert/strict';
@@ -341,13 +336,12 @@ test('过码后网关回 invalid token ⇒ 轮询两次自动重走登录（⛔ 
   await controller.action('connect.submit', { address: '10.1.2.3', https: true, user: 'myaccount', password: 'p@ss' });
   assert.equal(controller.getState().screen, 'access');
 
-  // 还在访问码页：轮询多久都不该走（否则用户还没输就跑）
   state.viewPage = GATEWAY_PAGE.ACCESS_CODE;
   await controller.pollAccessPage();
   await controller.pollAccessPage();
   assert.equal(controller.getState().screen, 'access');
 
-  // ⭐ 真机现场：访问码过了，但网关对「没有 fnOS 会话」的请求回纯文本 invalid token。
+  // 真机现场：访问码过了，但网关对「没有 fnOS 会话」的请求回纯文本 invalid token。
   // 这一页不会再有加载事件，只能靠轮询；两次确认后必须自己重走登录。
   state.viewPage = GATEWAY_PAGE.LOGIN_REQUIRED;
   await controller.pollAccessPage();
@@ -387,7 +381,7 @@ test('探网关走分区 fetch：Cookie 先落盘、不手拼 Cookie 头（修�
   await controller.action('connect.submit', { address: '10.1.2.3', https: true, user: 'myaccount', password: 'p@ss' });
   assert.equal(controller.getState().screen, 'browsing');
 
-  // 0.2.6 起是三次：① 访问码预检 ② `/app/ticket` 认领 ③ 登录成功后探网关。
+  // 起是三次：① 访问码预检 ② `/app/ticket` 认领 ③ 登录成功后探网关。
   // ② 之所以也必须走分区：`net.fetch` 跑在默认 session 上，**不走分区的 TOFU** ——
   // 局域网自签证书的 NAS 上认领必然失败，页面就只剩 WS 令牌、没有 `fnos-token`（白屏 / invalid token）。
   assert.equal(state.partitionProbes.length, 3, '预检一次 + ticket 认领一次 + 登录后探测一次');
@@ -504,7 +498,6 @@ test('会话过期 ⇒ 静默重连：不切屏、换新会话后重载页面', 
   await controller.boot();
   assert.equal(controller.getState().screen, 'browsing');
   // 前提：这一轮**真的进过应用**（探针判过一次 APP）—— 只有这种「用着用着过期」才走静默口径；
-  // 一进来就是 invalid token 的冷启动由 0.2.5 改成回登录页（见 regression-0.2.5.test.js）。
   await controller.onProbe('APP');
 
   const loadsBefore = state.loads.length;
@@ -597,7 +590,6 @@ test('退出登录会记下 signedOut；重新登录后清掉', async () => {
   assert.equal(controller.prefs.get().signedOut, false, '登录成功要清掉「主动退出」标记');
 });
 
-// ---------------------------------------------------------------- 0.2.6：访问码的两道闸
 
 /**
  * 访问码 → 重登 → 又被 401，是可以无限转的（照 Android `MAX_ACCESS_CODE_ROUNDS`）。
@@ -653,10 +645,8 @@ test('访问码自动判定整轮只准用一次（第二次起只认人工点�
 });
 
 /**
- * 0.2.6：**没有会话也会拦下跳登录页**（照 Android 0.3.1 第十二条）。
  *
  * 旧代码 `if (!entry?.session?.token) return false` 把「手里没有会话、页面又被要求登录」
- * 这一次直接放过去了 —— 而那恰恰是最该拿本机凭据去换一份回来的时刻。
  */
 test('没有会话时也要拦下跳登录页（交给恢复流程自己判）', async () => {
   const saved = new SavedSession({
@@ -675,12 +665,10 @@ test('没有会话时也要拦下跳登录页（交给恢复流程自己判）',
   await new Promise((resolve) => setTimeout(resolve, 20));
 });
 
-// ---------------------------------------------------------------- 0.2.6：多账号切换
 
 /**
  * 多账号切换：一个窗口只能有一条飞牛会话，所以切换是「换人」而不是「并存」。
  * 口径：一个窗口一条飞牛会话 ⇒ 切换是「换人」——干净地退出 A，用 B 记住的密码重新登进去。
- * ⛔ 不是 `signedOut` 那种「主动退出」：换个人继续用，下次启动当然该自动登进 B。
  */
 test('切换账号：清掉当前会话，用目标账号记住的密码自动重登', async () => {
   const remembered = [];
@@ -740,13 +728,10 @@ test('切换账号：地址或账号为空 ⇒ ⛔ 不发起登录，但日志�
   );
 });
 
-// ---------------------------------------------------------------- 0.2.6：网页会话（zxdesk_sid）
 
 /**
  * 「ZXDesk 工作台的登录没有记住，每次都要重新登录」：两处一起坏才会这样。
  *
- * ① 抓不到 —— ZXDesk 账号登录是页面里的 XHR，成功后不整页导航，`onProbe` 不会再跑；
- * ② 回注被早退挡住 —— `session.token` 为空时（8990 直连 / 只过码没登录）整段 `applySessionCookies` 直接 return。
  */
 test('没有飞牛会话时也要回注 zxdesk_sid（8990 直连 / 只过码没登录）', async () => {
   const saved = new SavedSession({
@@ -804,7 +789,6 @@ test('网页会话 host 对不上就不回注（换 NAS ⛔ 不能把 A 的会�
   );
 });
 
-// ---------------------------------------------------------------- 0.2.6：切换账号弹窗
 
 /**
  * 切换账号的界面是一个弹窗，两个入口：连接页账号框右侧的「切换」按钮与菜单「文件 → 切换账号」。

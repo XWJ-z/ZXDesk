@@ -2,10 +2,9 @@
  * static.js —— 静态资源托管（路径解析 / ETag 协商缓存 / gzip / 免登录白名单）
  *
  * 功能：把 `public/` 下的文件发给浏览器 —— 解析并**夹住**路径（防目录穿越）、按
- *      「大小 + mtime」算 `ETag` 并在命中 `If-None-Match` 时回 304、对 ≥1KB 的
- *      html/css/js/svg/json 做 gzip（压好的字节按 ETag 缓存在内存），以及 `allowAnonStatic()`
- *      这份免登录判定（恢复态下静态资源全放行，其余情况只认 `PUBLIC_STATIC`）。
- *      对外导出 `serveStatic` / `allowAnonStatic` / `PUBLIC_STATIC`。
+ * 「大小 + mtime」算 `ETag` 并在命中 `If-None-Match` 时回 304、对 ≥1KB 的
+ * html/css/js/svg/json 做 gzip（压好的字节按 ETag 缓存在内存），以及 `allowAnonStatic()`
+ * 这份免登录判定（只认 `PUBLIC_STATIC`）。
  *
  * @author zx
  * @date   2026-09-12
@@ -19,38 +18,28 @@ const fs = require('node:fs');
 const path = require('node:path');
 const zlib = require('node:zlib');
 const { currentUser, mustSetupUser } = require('./routes/auth.js');
-// ⭐ 数据位置不可用时页面只有一张恢复引导页：其余页面一律 302 过去（业务接口那边回 503）
-const { repair } = require('./context.js');
-// ⭐ 统一网关的挂载前缀：本文件里「我们自己发出的地址」（302 去登录页、目录补斜杠）都要补上它，
-//    否则网关下未登录会被送去**系统根目录**的 /login.html（那是飞牛自己的地盘，不是我们的页面）。
+// 统一网关的挂载前缀：本文件里「我们自己发出的地址」（302 去登录页、目录补斜杠）都要补上它，
 const { localUrl } = require('./gateway.js');
 
-// ⭐ 0.5.0：本文件从 `server/static.js` 搬成 `app/core/static.js`，
-//    而前端静态页同时从 `server/public/` 提到了 `app/public/` —— 于是它与本文件**不再同级**。
-//    ⚠️ 这是本次改名里**唯一**一处「相对层级真的变了」的地方：`path.join(CORE_DIR, 'public')`
-//    会指到 `app/core/public`（不存在）⇒ 静态资源全部 404、页面直接白屏。
+// 本文件从 `server/static.js` 搬成 `app/core/static.js`，
+// 而前端静态页同时从 `server/public/` 提到了 `app/public/` —— 于是它与本文件**不再同级**。
+// 这是本次改名里**唯一**一处「相对层级真的变了」的地方：`path.join(CORE_DIR, 'public')`
 const CORE_DIR = __dirname;
 
 const PUBLIC_DIR = path.join(CORE_DIR, '..', 'public');
 
 /** 未登录也能访问的静态资源（登录页自身及其样式/脚本） */
-// ⭐ 恢复引导页必须在内：位置不可用时是**未登录**状态，没有它连修复入口都打不开
-const PUBLIC_STATIC = new Set(['/login.html', '/login.css', '/login.js', '/location.html', '/location.js']);
+const PUBLIC_STATIC = new Set(['/login.html', '/login.css', '/login.js']);
 
 /**
  * 功能：判断一个静态资源在**未登录**状态下能不能放行。
  *
- * 说明：⭐ 恢复态（`repair`）下**静态资源一律放行**，只拦页面。
- *      手工白名单每加一个前端依赖就漏一次（`/location.css` ＋ 五个 ESM 依赖就这么漏过），
- *      而漏掉的表现不是报错，是「页面渲染了但脚本没跑 / 没有样式」—— 极难自查。
- *      静态资源本身不含任何数据，页面这一层已经由 `serveStatic` 统一 302 到恢复页。
+ * 是「页面渲染了但脚本没跑 / 没有样式」—— 极难自查。
+ * 静态资源本身不含任何数据（数据都在 API 后面）。
  *
- * @param {string} rel - 已在 `public/` 内的相对路径（带前导斜杠）
- * @param {boolean} repairMode - 是否处于「数据位置不可用」的恢复态
- * @returns {boolean} 放行为 true
  */
-function allowAnonStatic(rel, repairMode) {
-  return !!repairMode || PUBLIC_STATIC.has(rel);
+function allowAnonStatic(rel) {
+  return PUBLIC_STATIC.has(rel);
 }
 
 // ---- 静态资源 ----
@@ -71,7 +60,6 @@ const MIME = {
  * 说明：返回 `{ ok:true, rel, filePath }` 或 `{ ok:false, code }`。
  *
  * @param {string} urlPath - 请求的 URL 路径（目录结尾会补 `index.html`）
- * @returns {{ ok: boolean, rel?: string, filePath?: string, code?: number }} 解析结果；越界时 `ok:false` 并带状态码
  */
 function resolveStaticPath(urlPath) {
   let rel = urlPath.split('?')[0];
@@ -80,9 +68,9 @@ function resolveStaticPath(urlPath) {
   if (rel.endsWith('/')) rel += 'index.html';
   const safe = path.normalize(rel).replace(/^(\.\.[/\\])+/, '');
   const filePath = path.join(PUBLIC_DIR, safe);
-  // ⭐ 009 报告 S7：前缀判定必须带**路径分隔符边界** —— `…\app\public` 是 `…\app\publicX` 的
-  //    前缀字符串，不带边界时同级的 `publicX/...` 会被当成 public 内部（当前目录布局下不可利用，
-  //    属纯加固：app/ 下目前没有 public* 兄弟文件，但加个 sep 一劳永逸）。
+  // 009 报告 S7：前缀判定必须带**路径分隔符边界** —— `…\app\public` 是 `…\app\publicX` 的
+  // 前缀字符串，不带边界时同级的 `publicX/...` 会被当成 public 内部（当前目录布局下不可利用，
+  // 属纯加固：app/ 下目前没有 public* 兄弟文件，但加个 sep 一劳永逸）。
   if (filePath !== PUBLIC_DIR && !filePath.startsWith(PUBLIC_DIR + path.sep)) return { ok: false, code: 403 };
   return { ok: true, rel, filePath };
 }
@@ -95,9 +83,6 @@ const COMPRESSIBLE = new Set(['.html', '.css', '.js', '.json', '.svg']);
 /**
  * gzip 结果的内存缓存（键 = ETag）。
  *
- * ⚠️ **为什么必须缓存**：这些文件在一次首屏里会被请求 20 次以上，而 gzip 是纯 CPU 开销
- *    （全部源码约 220 KB，每次现场压约 20 ms）。缓存键带上 size 与 mtime，
- *    源文件一变缓存自然失效 —— **运行期不生成文件，只缓存压好的字节**，铁律 1 不受影响。
  */
 const gzipCache = new Map();
 
@@ -108,16 +93,8 @@ const GZIP_CACHE_MAX = 128;
  * 功能：由文件 stat 生成 ETag 字符串，作为协商缓存的比对依据。
  *
  * 说明：取值 = 「路径摘要 + 大小 + mtime（毫秒）」。
- * ⚠️ **路径必须参与**（0.5.3 真机事故）：只按「大小 + mtime」算的话，两个**内容不同但
- *    大小相同**、又在同一毫秒落盘的文件（fpk 解包 / 批量脚本都会造成同刻 mtime）
- *    会算出**同一个 ETag** —— 而 gzip 缓存按 ETag 键存取，后到的请求会拿到**先到那个
- *    文件的压缩字节**（实测：`core/dom.js` 的请求被回了 `core/backup.js` 的内容，
- *    ESM 模块图在链接阶段炸掉，手机端整页永远停在「正在读取」且零报错）。
- *    掺入路径后每个文件的 ETag 天然不同，gzip 缓存随之安全。
- *
- * @param {Object} st - `fs.Stats` 对象，只用到 `size` 与 `mtimeMs`
- * @param {string} filePath - 该文件的绝对路径（参与摘要，防跨文件碰撞）
- * @returns {string} 带双引号的 ETag 值
+ * 大小相同**、又在同一毫秒落盘的文件（fpk 解包 / 批量脚本都会造成同刻 mtime）
+ * 会算出**同一个 ETag** —— 而 gzip 缓存按 ETag 键存取，后到的请求会拿到**先到那个
  */
 function etagOf(st, filePath) {
   const h = crypto.createHash('sha1').update(String(filePath)).digest('hex').slice(0, 8);
@@ -125,22 +102,8 @@ function etagOf(st, filePath) {
 }
 
 /**
- * 功能：发送一个静态文件 —— 先按 ETag 判协商缓存（命中直接回 304），否则读盘、按需 gzip 后回 200。
  *
  * 说明：**协商缓存（ETag / 304）+ gzip**。
- *
- * ⚠️ `Cache-Control: no-cache` **不是**「不缓存」，而是「可以缓存，但每次都要回来验证」。
- *    配合 ETag 的结果是：源文件没变 → 只回一个 304（**零字节**）；变了 → 立刻拿到新的。
- *    这一条同时拿到两个效果：**每次打开不再重下 200 KB**，而**升级后绝不会拿到旧 JS**。
- *    （本项目文件名里没有内容哈希，所以不能长缓存 —— 那会让升级后仍跑旧代码。）
- *
- * ⚠️ `Vary: Accept-Encoding` 必须发：否则中间层可能把压缩版回给不支持 gzip 的客户端。
- *
- * @param {Object} req - HTTP 请求对象（读取 `if-none-match` 与 `accept-encoding`）
- * @param {Object} res - HTTP 响应对象
- * @param {string} filePath - 待发送文件的绝对路径
- * @param {Object} st - 该文件的 `fs.Stats`（用于生成 ETag 与判断大小）
- * @returns {void}
  */
 function sendFile(req, res, filePath, st) {
   const ext = path.extname(filePath).toLowerCase();
@@ -186,7 +149,6 @@ function sendFile(req, res, filePath, st) {
  * @param {Object} headers - 基础响应头（ETag / `Cache-Control` / `Vary`）
  * @param {string} type - 响应体的 `Content-Type`
  * @param {Buffer} body - gzip 压缩后的字节
- * @returns {void}
  */
 function sendGzip(res, headers, type, body) {
   res.writeHead(200, {
@@ -202,39 +164,9 @@ function sendGzip(res, headers, type, body) {
  *
  * 说明：**静态托管 + 登录闸门**。
  *
- * ⚠️ 顺序至关重要：**先防穿越（404），再判登录（302）**。
- *    反过来的话，`/%2e%2e/package.json` 这类穿越尝试会先被 302 掉，
- *    看起来「被挡住了」其实挡它的是登录页而不是路径校验 ——
- *    `ttt/test/api.test.js` 的「目录穿越防护」用例断言 404，正是钉住这个顺序。
- *
- * ⚠️ 不存在的路径**直接 404**（不跳登录页）：与加闸门前的行为一致，
- *    且避免把「资源写错」误报成「未登录」。
- *
- * @param {Object} req - HTTP 请求对象（用于取当前登录账号）
- * @param {Object} res - HTTP 响应对象
- * @param {string} urlPath - 请求的 URL 路径
- * @returns {void}
+ * 顺序至关重要：**先防穿越（404），再判登录（302）**。
  */
 /**
- * 功能：按 `User-Agent` 判断请求方是不是**确定无疑的手机**。
- *
- * ⭐ 为什么服务端也要判一次：飞牛 App 的内置 WebView 会把指针报成 `pointer: fine`，
- *    连 `navigator.maxTouchPoints` 都给 0 ⇒ 前端那套「看着像手机就送去 /mobile/」
- *    在它面前整条失效，手机于是落在电脑版（搜索框、7 列日历挤在窄屏里，右边被裁）。
- *    **HTTP 请求头不依赖任何 JS 能力**：JS 被禁、被改、被拦都拦不住这一跳。
- *
- * ⭐⭐ 0.9.7：口径**收窄到只剩三种**，`Android` / `iPad` / 泛 `Mobile` 全部移除。
- *   现场：平板在飞牛桌面里打开应用，永远进手机版（窄卡片居中），前端 0.9.6 / 0.9.7 两次改判定都没效果 ——
- *   就是因为**这一跳先手把它送走了**，`public/index.html` 里的分流脚本根本没机会执行。
- *   平板的 UA 里普遍带 `Android`，不少国产 ROM 与定制 WebView 还带 `Mobile`（TXZ-W20 / Android 16 即如此），
- *   只靠 UA **原理上分不出手机与平板** ⇒ 服务端只处理「一眼就是手机、绝不可能是平板」的三种：
- *   `iPhone` / `iPod` / `Windows Phone`。iPad 明确排除：平板就该是桌面端。
- *   Android（含鸿蒙手机）一律交给前端：它能读到视口，判得比 UA 准。
- *   ⚠️ 前端那条兜底必须能独立站住（窄屏 `innerWidth <= 768` ＋ `Android.+Mobile` UA 兜底），
- *      否则手机会落回电脑版 —— `ttt/test/routing.test.js` 钉着这两条。
- *   触屏笔记本的 UA 是 `Windows NT` / `Macintosh`，一个都不命中。
- * @param {string} ua - `req.headers['user-agent']`
- * @returns {boolean} 是手机则为 true
  */
 function isPhoneUA(ua) {
   const s = String(ua || '');
@@ -249,30 +181,17 @@ function serveStatic(req, res, urlPath) {
     res.end('Forbidden');
     return;
   }
-  /* ⭐ 数据位置不可用：所有**页面**一律送去恢复引导页。
-     ⚠️ 只拦页面（`/`、`/xxx/`、`*.html`），静态资源照常发 —— 否则引导页自己也会变成无样式白底黑字。
-     ⚠️ 用 302 而不是直接改写 `rel`：页面里的资源链接是相对路径，跳到一个固定的 `/location.html`
-        才能让 `./location.js` 算对基准目录。 */
-  const isPage = r.rel === '/' || r.rel.endsWith('/') || r.rel.endsWith('.html');
-  if (repair && isPage && r.rel !== '/location.html') {
-    const q = urlPath.indexOf('?');
-    res.writeHead(302, { Location: localUrl('/location.html') + (q < 0 ? '' : urlPath.slice(q)) });
-    res.end();
-    return;
-  }
-  // ⚠️ 这里用**异步** stat：它是每个静态请求都要过的第一道关口，
-  //    同步版会阻塞事件循环 —— 首屏 20+ 个静态请求排队时会把同时到达的 API 一起拖慢，
-  //    这是「局域网内也卡」的成因之一（node:sqlite 的查询本身也是同步的）。
+  // 这里用**异步** stat：它是每个静态请求都要过的第一道关口，
+  // 同步版会阻塞事件循环 —— 首屏 20+ 个静态请求排队时会把同时到达的 API 一起拖慢，
+  // 这是「局域网内也卡」的成因之一（node:sqlite 的查询本身也是同步的）。
   fs.stat(r.filePath, (err, st) => {
     if (err || (!st.isFile() && !st.isDirectory())) {
       res.writeHead(404);
       res.end('Not Found');
       return;
     }
-    // ⭐ 目录式地址补结尾斜杠再重定向（0.3.5 网关改造）：页面里的静态资源链接是**相对路径**，
-    //    而相对路径要靠 URL 的结尾斜杠算基准目录 —— `/app/zxdesk/mobile` 不补斜杠的话，
-    //    页面里的 `../core/api.js` 会算到 `/app/core/api.js`（404）。`/mobile` 同理。
-    //    ⚠️ 重定向目标必须用 `localUrl()` 补回网关前缀，否则会跳到系统根目录。
+    // 而相对路径要靠 URL 的结尾斜杠算基准目录 —— `/app/zxdesk/mobile` 不补斜杠的话，
+    // 页面里的 `../core/api.js` 会算到 `/app/core/api.js`（404）。`/mobile` 同理。
     if (st.isDirectory()) {
       const q = urlPath.indexOf('?');
       const search = q < 0 ? '' : urlPath.slice(q);
@@ -281,13 +200,10 @@ function serveStatic(req, res, urlPath) {
       return;
     }
     const user = currentUser(req);
-    if (!allowAnonStatic(r.rel, repair) && !user) {
-      // ⚠️ 302 目标要补网关前缀（见文件头 require 处的说明），局域网直连时前缀为空、地址与从前逐字一致
-      // ⭐ **带 `next`** —— 否则从文件管理器双击 `.zxdesk` 进来的人，
-      //    登录完会落在工作台首页，刚才那个文件还得自己再找一遍（方案 §十一）。
-      //    ⚠️ `next` 是**应用内相对地址**（不含网关前缀；`login.js` 会补 `BASE`），
-      //    并且**连查询串一起带走**：整页跳转丢查询串时，FN Connect 中继下会重新弹访问码
-      //    （与页面里 `carrySearch()` 同一条理由）。
+    if (!allowAnonStatic(r.rel) && !user) {
+      // 302 目标要补网关前缀（见文件头 require 处的说明），局域网直连时前缀为空、地址与从前逐字一致
+      // `next` 是**应用内相对地址**（不含网关前缀；`login.js` 会补 `BASE`），
+      // 并且**连查询串一起带走**：整页跳转丢查询串时，FN Connect 中继下会重新弹访问码
       const qi = urlPath.indexOf('?');
       const search = qi < 0 ? '' : urlPath.slice(qi);
       const next = r.rel + search;
@@ -296,8 +212,8 @@ function serveStatic(req, res, urlPath) {
       return;
     }
     /* ⭐ 首登强制（静态页拦截 ②）：内置管理员还没完成设置时，**页面**一律送去 `/setup.html`。
-       ⚠️ 只拦「页面」，不拦静态资源 —— 早先这里连 `/login.css` 都 302 走了，
-          浏览器拿到一张 HTML 当样式表，设置页直接变成无样式的白底黑字（真机截图即此）。
+ * 只拦「页面」，不拦静态资源 —— 早先这里连 `/login.css` 都 302 走了，
+ * 浏览器拿到一张 HTML 当样式表，设置页直接变成无样式的白底黑字。
        判据用**路径形状**而不是 `Accept` 头：`/`、`/xxx/`、`*.html` 是页面；`.css/.js/.png` 是资源。 */
     const isPage = r.rel === '/' || r.rel.endsWith('/') || r.rel.endsWith('.html');
     if (user && mustSetupUser(user) && isPage && r.rel !== '/setup.html') {
@@ -306,8 +222,8 @@ function serveStatic(req, res, urlPath) {
       return;
     }
     /* ⭐⭐ 桌面版入口的手机分流 —— 服务端按 UA 直接 302 到 /mobile/。
-       ⚠️ 只拦 `/index.html` 这一个入口：手机版的 rel 是 `/mobile/index.html`，不会命中，跳不过去也回不来。
-       ⚠️ `?view=desktop` 仍是最优先的逃生出口（与 public/index.html 里那段分流同一口径）。
+ * 只拦 `/index.html` 这一个入口：手机版的 rel 是 `/mobile/index.html`，不会命中，跳不过去也回不来。
+ * `?view=desktop` 仍是最优先的逃生出口（与 public/index.html 里那段分流同一口径）。
        ⚠️ 放在登录闸门**之后**：未登录的手机先去 login.html，别白跳两趟。 */
     if (r.rel === '/index.html' && (req.method === 'GET' || req.method === 'HEAD')) {
       const qi = urlPath.indexOf('?');

@@ -2,37 +2,23 @@
 
 /**
  * modules/idea/backend/sqlite.js —— 灵感库的**SQLite 版原语**
- *
  * 功能：本模块自己的存储原语（SQLite），与另一个后端**同名同参** ——
- *      「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，
- *      少一个 / 打错名 / 形参个数不一致 = 启动即抛。
- *
- * 说明：⭐ **检索与筛选刻意不在这一层做** —— 它们放在 `modules/idea/store.js`，这样两个后端
- *      （SQLite / JSON）的筛选语义**逐字一致**，不会出现「装的是哪个后端、搜出来的就不一样」这种漂移
- *      （与收藏夹的检索、硬件的寿命推算同一条理由）。
- *
- * ⚠️ ops 里的 `this` 是 **Store 实例**（门面用 `.apply(store, …)` 调用），所以照常访问
- *    `this.db` / `this.data` / `this._saveJson()` / `this._listSql()`。
- *
+ * 「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，
  * @author zx
  * @date   2026-09-17
- * @since 0.8.15
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/19-灵感库.md、docs/公共/架构文档/02-存储层与数据模型.md
  */
 
 const { nowStamp } = require('../../../core/store/helpers.js');
 
 const ops = {
-  // ---- 灵感库（0.7.1）----
   /**
    * 功能：列出该账号的全部灵感（新的在前）。
    *
    * 说明：⚠️ **一次全取回来**（未归档与归档都在里面）—— 筛选、检索、分组全在业务层做。
-   *      灵感是本模块唯一的数据，量级是「个人随手记」，一次取回比多开几个接口简单得多，
-   *      而且两个后端的语义天然一致。
-   *
-   * @param {number} uid - 用户 id
-   * @returns {Array.<Object>} 灵感行数组（按 created_at、id 倒序）
+   * 灵感是本模块唯一的数据，量级是「个人随手记」，一次取回比多开几个接口简单得多，
+   * 而且两个后端的语义天然一致。
    */
   listIdeas(uid) {
     return this._listSql('SELECT * FROM idea_items WHERE user_id=? ORDER BY created_at DESC, id DESC', [uid]);
@@ -62,17 +48,13 @@ const ops = {
    * 功能：删除一条灵感；返回是否真的删掉了一行。
    *
    * 说明：⚠️ 界面上**主推「归档」**（`archived_at`），删除是给「确实写错了」留的出口 ——
-   *      本表没有子表，所以不像 `deleteProject` / `deleteTag` 那样要连带清理。
+   * 本表没有子表，所以不像 `deleteProject` / `deleteTag` 那样要连带清理。
    *
-   * @param {number} uid - 用户 id
-   * @param {number} id - 灵感 id
-   * @returns {boolean} 删到行则为 true
    */
   deleteIdea(uid, id) {
     return this.db.prepare('DELETE FROM idea_items WHERE id=? AND user_id=?').run(id, uid).changes > 0;
   },
 
-  // ---- 随手记的标签（0.8.15）：照收藏夹那批原语逐字同构，只换表名 ----
   /**
    * 功能：列出该账号的全部标签，并带上**每个标签下有几条随手记**（列表筛选与设置页都要用）。
    * @param {number} uid - 用户 id
@@ -165,15 +147,10 @@ const ops = {
 
   /**
    * 功能：**整体替换**一条随手记的标签归属（新建 / 编辑保存时用）—— 收到的是**标签名数组**
-   *      （不存在就顺手建出来，即「智能新建」）。
+   * （不存在就顺手建出来，即「智能新建」）。
    *
    * 说明：⭐ 必须在**一个事务**里：只删了一半或只插了一半，用户看到的就是「保存成功了，
-   *      但标签少了一个」，而且没有任何报错。
-   *
-   * @param {number} uid - 用户 id
-   * @param {number} ideaId - 随手记 id
-   * @param {Array.<string>} names - 目标标签名数组（去重由这里兜一道）
-   * @returns {boolean} 恒为 true
+   * 但标签少了一个」，而且没有任何报错。
    */
   setIdeaTags(uid, ideaId, names) {
     const u = Number(uid);
@@ -224,16 +201,8 @@ const ops = {
   },
 
   /**
-   * 功能：取本模块进**个人备份**的那一份数据（含 0.8.15 新增的两张标签表）。
    *
    * 说明：⭐ 灵感是用户自己写的内容（常含私人情绪与工作想法）⇒ **必须进个人备份**
-   *      （报告 §三 3.1 末行）。走的是**本模块自己的原语**，所以删掉本模块目录时这一份自然消失，
-   *      备份里不会剩下一个「指向不存在模块」的键。
-   *      ⚠️ 三张表**各按自己表的原样行**导出（⛔ 不复用 `listIdeaTags` —— 它多带一个 `count` 列，
-   *      个人导入会去写一个不存在的列，照收藏夹 `exportBookmarks` 那条说明）。
-   *
-   * @param {number} uid - 用户 id
-   * @returns {{idea: Array.<Object>, idea_tags: Array.<Object>, idea_tag_links: Array.<Object>}} 备份里那三个键
    */
   exportIdeas(uid) {
     return {

@@ -1,19 +1,5 @@
 /**
  * 本地集成 mock（开发 / 联调用，**不进 `npm test`**）。
- *
- *   node tests/mock/server.js          # 默认 18990
- *   PORT=18991 node tests/mock/server.js
- *
- * ⚠️ 端口纪律：本机 `8990` 是**生产 ZXDesk**，⛔ 绝不占。mock 一律 18990 / 18991。
- * ⚠️ 本机（NAS 容器）里 `node:http` 会因 undici 的 llhttp WASM 分配失败而崩，
- *    所以这份 mock 是给**有正常 Node 的机器（Windows / 开发机）**用的；
- *    本机验证协议用的是 `tests/wsclient.test.js`（裸 socket）。
- *
- * 提供：
- *   GET  /api/health             → `{"ok":true,"mock":"zxdesk"}`
- *   GET  /app/zxdesk/login.html  → 一个假登录页（`?invalid=1` 时返回纯文本 `invalid token`；`?code=1` 返回访问码页）
- *   POST /app/ticket             → 回 `Set-Cookie: fnos-token=mock-token`
- *   WS   /websocket?type=main    → 读 Cookie 后回 101；`getRSAPub` / `user.login` / `2fa.loginVerify` 都回假包
  */
 
 import crypto from 'node:crypto';

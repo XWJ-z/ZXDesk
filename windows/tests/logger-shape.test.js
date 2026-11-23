@@ -1,11 +1,5 @@
 /**
- * logger 形态回归（0.1.2 首跑「第一步都点不了」的直接原因）。
- *
- * 生产里 `index.js` 传给 Controller / RemoteView 的是 **Logger 实例**（有 .info/.warn/.error），
- * 而代码里写的是 `this.logger('…')` ⇒ 点第一步就 `TypeError: this.logger is not a function`。
- * 之前测试全传的 `() => {}`（函数），跟生产不一样，所以一条都没咬住。
- *
- * 这里用**真实的 Logger 类**驱动一遍，并把「函数形态」也测一遍 —— 以后加日志不会再挑形态。
+ * logger 形态回归。
  */
 
 import assert from 'node:assert/strict';

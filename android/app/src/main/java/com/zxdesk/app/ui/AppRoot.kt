@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：AppRoot.kt
- * 职责：全 App 的壳，启动恢复、许可协议闸门、引导流程与浏览页的切换
  */
 
 package com.zxdesk.app.ui
@@ -48,11 +46,6 @@ import kotlinx.coroutines.delay
 /**
  * 全 App 的壳：启动恢复 → 许可协议 → 引导流程 / WebView 之间切换。
  *
- * ⚠️ 所有会「跨后台活下来」的状态都在 [AppViewModel] 里；这里只做路由与生命周期接线。
- * 回到前台时补一次 [AppViewModel.ensureAlive]，让「切到验证器取码再回来」这一步不至于踩到已断的 WS。
- *
- * 根 [Surface] 铺满全屏（含系统栏区域）：登录页底 = background（#F5F7FB），
- * 浏览页底 = surfaceVariant（#EEF1F6 = 网页 --zx-bg），上下两条与网页无缝。
  */
 @Composable
 fun AppRoot(vm: AppViewModel = viewModel()) {
@@ -72,9 +65,8 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
     var acceptedVersion by remember { mutableIntStateOf(prefs.eulaAcceptedVersion) }
 
     // 启动动画**统一在这一层**：
-    //    `Booting` 与 `Browsing` 各画一套时，两段视觉不同、底色还差一档（#F5F7FB / #EEF1F6），
-    //    表现为顶部闪一下。现在两个阶段共用同一条动画、同一个底色，
-    //    从恢复会话一直盖到 WebView 首帧（`contentReady`）。
+    // `Booting` 与 `Browsing` 各画一套时，两段视觉不同、底色还差一档（#F5F7FB / #EEF1F6），
+    // 表现为顶部闪一下。现在两个阶段共用同一条动画、同一个底色，
     var contentReady by remember { mutableStateOf(false) }
     var splashMinDone by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -96,10 +88,8 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // 许可协议未同意时先把下面的界面挂起：否则 WebView 会在协议还盖着的时候就去连 NAS
     val eulaPending = eulaText.isNotBlank() && acceptedVersion < eulaVersion
 
-    // 公告：**启动 1.2 秒后就拉**，不等进浏览页 —— 登录失败页也要能弹（老大 2026-11-03 15:35）。
     // 1.2 秒是让首屏先画出来，别和登录流程抢带宽；失败不置「已查」，回前台还会重试。
     LaunchedEffect(Unit) {
         delay(1_200)
@@ -141,7 +131,6 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
                 }
 
                 is AppScreen.Browsing -> {
-                    // 换了会话（新 token）就重建 WebView：否则 Web 内核会沿用旧的 Cookie 与历史栈
                     key(current.entry.fnSession?.token ?: "direct") {
                         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceVariant) {
                             WebViewScreen(
@@ -173,9 +162,8 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
         }
 
         // 启动动画：盖住「恢复会话 → WebView 首帧」这一段。
-        // ⚠️ 首帧到了也至少显示 SPLASH_MIN_MS —— 局域网下首帧常常 300~500ms 就到，
-        //    动画一闪而过反而像「屏幕上闪了一下」。
-        // ⭐ 静默自动登录（登录过的用户）也归这一段管：整段只有动画，成功直接进主界面。
+        // 首帧到了也至少显示 SPLASH_MIN_MS —— 局域网下首帧常常 300~500ms 就到，
+        // 动画一闪而过反而像「屏幕上闪了一下」。
         val splashWanted =
             !eulaPending &&
                 (
@@ -192,15 +180,14 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
 
     // 什么时候可以弹公告：
     // ① 主界面；② 登录页**已经失败**（失败卡片或红字）且不在连接中。
-    // ⛔ 登录过程中（选模式 / 填表 / 两步验证 / 访问码 / 正在连接）一律不弹 ——
-    //    那几步要人盯着键盘，盖一层弹窗只会让人以为卡住了。
+    // 登录过程中（选模式 / 填表 / 两步验证 / 访问码 / 正在连接）一律不弹 ——
     val flowState = (screen as? AppScreen.Flow)?.state
     val loginFailed = flowState != null && !flowState.busy &&
         (flowState.failure != null || flowState.error != null)
     val noticeAllowed = browsing || loginFailed
 
     // 同一进程里同一条公告只弹一次：用户没点「朕已阅」就关掉时，别在每次失败重试时再糊他一脸。
-    // ⚠️ 关闭**不等于已读** —— 不写 noticeReadIds，下次启动仍会提醒，新公告不会漏。
+    // 关闭**不等于已读** —— 不写 noticeReadIds，下次启动仍会提醒，新公告不会漏。
     var shownNoticeIds by remember { mutableStateOf(setOf<String>()) }
     var noticeDialog by remember { mutableStateOf<Notice?>(null) }
     LaunchedEffect(noticeAllowed, notice.popup?.id) {
@@ -247,7 +234,6 @@ fun AppRoot(vm: AppViewModel = viewModel()) {
     }
 
     // 首次启动（或协议版本变大）必须先同意许可协议；
-    // 正文读不到时（assets 异常）不弹窗 —— ⛔ 不能因为少一份文件就把人锁在门外
     if (eulaPending) {
         EulaGate(
             text = eulaText,

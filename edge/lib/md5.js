@@ -1,12 +1,11 @@
 /**
  * md5.js —— 纯 JS MD5（`md5Hex(text)`，UTF-8）
- *
  * 功能：给 FN Connect 的 `authx` 签名算 MD5。浏览器的 WebCrypto 没有 MD5，
  *      所以这里自己实现，⛔ 不引第三方库（本端零依赖）。
- * ⛔ 纯函数，不碰 `chrome.*`，可在 Node 里直接验向量。
+ * 纯函数，不碰 `chrome.*`，可在 Node 里直接验向量。
  *
  * @author zx
- * @since 0.1.2
+ * @since
  * 相关：Project/Edge/README.md
  */
 

@@ -1,10 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：prefs.js
- * 职责：本机偏好（`data/prefs.json`，明文 —— 里面没有凭据）
- *
- * 存：上次地址 / HTTPS 开关 / 上次账号 / 记住密码开关 / 设备 id（did）/ 窗口大小与位置。
- * ⛔ 不存密码（那是 `credential.bin`）、⛔ 不存 token（那是 `session.bin`）。
  */
 
 import crypto from 'node:crypto';
@@ -19,7 +14,6 @@ export const DEFAULT_PREFS = Object.freeze({
   autoLogin: true,
   /**
    * 上次是不是用户**主动**点了「退出登录」。
-   * 是 ⇒ 冷启动不静默自动登录（否则「退出」等于没退，重开又被送回主界面）。Android 同口径。
    */
   signedOut: false,
   /** 关闭到托盘：点窗口 X 只隐藏，托盘常驻。默认关（保持「关掉就是关掉」的习惯）。 */
@@ -33,7 +27,6 @@ export const DEFAULT_PREFS = Object.freeze({
   /**
    * 连接节流（照 Android `ConnectGuard`）：飞牛对短时间内的反复登录有风控，
    * 触发后一段时间直接不让连 —— 所以在本地先把自己拦住。
-   * 三个字段都落盘：只放内存等于留一条「杀进程重开继续撞风控」的路。
    */
   connectFailCount: 0,
   connectCooldownUntil: 0,

@@ -1,25 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：gateway.js
- * 职责：网关凭据（`data/gateway.bin`，**加密**）：访问码 Cookie 的跨启动副本
- *
- * ## 为什么需要这个文件
- *
- * Electron 的 `persist:` 分区只持久化**带有效期**的 Cookie，会话级 Cookie 应用一关就丢。
- * 而飞牛网关的访问码 Cookie 正是会话级 ⇒ 用户每次启动都要重新输一遍访问码。
- *
- * ## 为什么不塞进 `session.bin`
- *
- * 那是**登录会话**的快照，「退出登录」会整份清掉。但「退出登录」不等于「这台设备没通过访问码」——
- * 塞在一起会导致「退出一次，下次连访问码也要重输」。所以单独一份、按 baseUrl 存。
- *
- * ## 与 Android 的差异
- *
- * Android 的 `CookieManager.flush()` 会把整个 Cookie 库（含会话 Cookie）写到磁盘上，
- * 所以那边天然不用管。桌面端没有这个行为，只能自己补。
- *
- * ⛔ 只存「网关凭据」：`fnos-token` / `fnos-long-token` / `entry-token` / `zxdesk_sid` / `mode`
- * 都有自己的通道（`session.bin`），这里再存一份等于多一个泄漏面。
  */
 
 import { normalizeGatewayCookies } from './session.js';
@@ -62,9 +42,7 @@ export class GatewayCookieStore {
 
   /**
    * 存某台设备的网关凭据。
-   *
    * @param {string} baseUrl
-   * @param {Array<object>} list - `pickGatewayCookies()` 的结果
    */
   async save(baseUrl, list) {
     const key = keyOf(baseUrl);

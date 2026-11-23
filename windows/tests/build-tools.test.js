@@ -1,8 +1,5 @@
 /**
  * 打包工具链本身的护栏（`npm run doctor` / `npm run dist`，WIN-013）。
- *
- * 这些断言防的是「工具退化」：顺序被改、失败不再中止、sha 格式变了、校验被删掉。
- * ⛔ 不测「跑一次 dist」（那要 40 秒 + 300 MB），只锁结构与关键判据；真跑由 `npm run dist` 负责。
  */
 
 import assert from 'node:assert/strict';

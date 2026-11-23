@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：LogScreen.kt
- * 职责：日志页，查看、复制、清空本机日志
  */
 
 package com.zxdesk.app.ui
@@ -57,8 +55,6 @@ import java.time.format.DateTimeFormatter
 /**
  * 日志（整屏，从抽屉进）。
  *
- * 数据源是 [AppLog]：内存里最多 600 条、磁盘留一份可滚动的文件。这里只做展示与两个动作
- * （复制 / 清空），⛔ 不做筛选与搜索 —— 手机上一屏能翻完的东西，加控件只会更难用。
  */
 @Composable
 internal fun LogScreen(onClose: () -> Unit) {
@@ -144,8 +140,6 @@ internal fun LogScreen(onClose: () -> Unit) {
 /**
  * 单条日志：`时间 级别 标签 正文`，一行起、正文可自然折行。
  *
- * ⚠️ 时间只到秒：带毫秒时 `HH:mm:ss.SSS` 在窄屏上会被挤成两行（毫秒单独掉下去），
- * 看起来像数据错位。标签压成浅色的前缀，正文才是主角。
  */
 @Composable
 private fun LogRow(entry: LogEntry) {

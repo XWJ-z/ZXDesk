@@ -1,13 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：secure.js
- * 职责：加密落盘（`safeStorage`）
- *
- * ⚠️ 只用**异步 API**（`isAsyncEncryptionAvailable` / `encryptStringAsync` / `decryptStringAsync`）：
- * 同步那三个在 Electron 46 移除，且同步版在部分平台会阻塞主线程。
- * 解密失败一律当「没有会话」处理并清掉坏文件 —— ⛔ 不猜、不重试、不把密文当明文用。
- *
- * 平台现实：Windows 用 DPAPI（绑当前用户 + 机器）⇒ 整个绿色目录拷到另一台电脑解不开，需重新登录（预期）。
  */
 
 import fs from 'node:fs';
@@ -67,8 +59,7 @@ export class SecureStore {
     if (!String(payload).startsWith(HEADER)) throw new Error('存储格式不认识');
     const raw = Buffer.from(String(payload).slice(HEADER.length), 'base64');
     if (typeof api.decryptStringAsync === 'function') {
-      // ⚠️ Electron 45 的 `decryptStringAsync` 解析成 `{ result, shouldReEncrypt }`，**不是字符串**。
-      // 0.1.0～0.1.6 直接把它当字符串交给 JSON.parse ⇒ 每次启动都当「文件坏了」，
+      // Electron 45 的 `decryptStringAsync` 解析成 `{ result, shouldReEncrypt }`，**不是字符串**。
       // 于是「记住密码 / 自动登录」永远读不回来（prefs.json 是明文，所以地址账号又记得住）。
       // 这里两种返回都认；`shouldReEncrypt`（密钥轮换）不影响本次读取，下次保存自然会用新密钥。
       const out = await api.decryptStringAsync(raw);

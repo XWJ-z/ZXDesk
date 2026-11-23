@@ -1,10 +1,5 @@
 /**
- * 0.1.6 收尾（WIN-008）：**FNID 只走中继**，错误页只说人话。
- *
- * 0.1.5 曾在 FNID 分支里读 `fn/con` 的 `ipv4`、拼 `https://<ip>:64999` 先试局域网，
- * 失败再回中继 —— 那是自创机制：Android 的 `NasDataSource.fromFnId` 只有中继，
- * 而 `ipv4` 未必是 NAS 的内网地址（实测拼出 `10.1.2.4:64999` 根本连不上）。
- * 这一组用例把「只中继」「界面不露地址」钉死。
+ * 收尾（WIN-008）：**FNID 只走中继**，错误页只说人话。
  */
 
 import assert from 'node:assert/strict';
@@ -295,7 +290,6 @@ test('旧快照里的 lanBaseUrl 被忽略：仍按 baseUrl 进，且保存后�
     relayHost: 'my-nas.fnos.net',
     session: { token: 'T' },
   });
-  // 手工塞一个旧字段（模拟 0.1.5 存下来的快照）
   const legacy = SavedSession.fromJSON(JSON.stringify({ ...saved.toJSON(), lanBaseUrl: 'https://10.1.2.4:64999' }));
   assert.equal(legacy.lanBaseUrl, undefined, '读的时候就不该认这个字段');
   assert.ok(!('lanBaseUrl' in legacy.toJSON()), '写回时也不该带上');

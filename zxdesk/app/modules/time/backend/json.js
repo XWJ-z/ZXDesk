@@ -1,13 +1,11 @@
 'use strict';
 /**
- * modules/time/backend/json.js —— **番茄钟与日程表**（`0.8.13`）的 JSON 回退版原语**拼装层**
- *
+ * modules/time/backend/json.js —— **番茄钟与日程表**的 JSON 回退版原语**拼装层**
  * 功能：与 `sqlite.js` **同名同参**地拼出同一套 `ops`（少一个 / 多一个 / 撞名一律启动即抛）。
- *      判据与说明见 `sqlite.js` 的同名文件头 —— 两份必须逐字同口径。
- *
+ * 判据与说明见 `sqlite.js` 的同名文件头 —— 两份必须逐字同口径。
  * @author zx
  * @date   2026-10-05
- * @since 0.8.13
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/27-番茄钟与日程表.md、02-存储层与数据模型.md
  */
 

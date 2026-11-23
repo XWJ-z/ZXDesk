@@ -1,21 +1,8 @@
 'use strict';
 /**
- * modules/secrets/lib/receive.js —— **把上传的字节流边收边加密落盘**（0.9.8 / 方案 42 §2.7·4）
- *
+ * modules/secrets/lib/receive.js —— **把上传的字节流边收边加密落盘**
  * 功能：从 `IncomingMessage` 读原始字节，按 1 MiB 一块 `seal()` 后写进 `.part` 文件，
- *      写完 `fsync`，把「落在哪、多大、几块」交回调用方（由它 `rename` 成 `<id>.zxdesk`）。
- *
- * ⭐⭐ **三条硬规矩（照抄 `core/http-util.js` 的 `readBodyToFile()`，但它写的是明文）**：
- *   ① **超限先回 413、再把请求体自然读掉**（⛔ 不能 `req.destroy()` —— 客户端看到的是「连接被重置」
- *      而不是那句 413）；
- *   ② 临时名 `.part`，**任何失败都不留半个文件**；
- *   ③ 不把整个文件读进内存 —— 峰值 ≈ 1 块明文 ＋ 1 块密文。
- * ⚠️⛔ **绝不复用 `readBodyToFile()` / `readRawBody()`**：前者把**明文**写进临时文件
- *   （那就等于"明文落盘"，本模块存在的意义直接没了）；后者把整个文件压进内存（200 MB 立刻 OOM）。
- *
- * ⭐ **为什么块大小是常量**：`frameOffset(i)` 是算出来的（见 `blob.js`），只有每块一样大才成立；
- *   而且内存峰值也由它兜住。⛔ 别按文件大小动态调整。
- *
+ * 写完 `fsync`，把「落在哪、多大、几块」交回调用方（由它 `rename` 成 `<id>.zxdesk`）。
  * @author zx
  * @date   2026-11-07
  * @since 0.9.7
@@ -27,7 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const blob = require('./blob.js');
 
-/** 单文件上限：200 MB（老大 2026-11-07 拍板；**账号不设总量上限**） @type {number} */
+/** 单文件上限：200 MB @type {number} */
 const MAX_FILE = 200 * 1024 * 1024;
 
 /** 磁盘余量下限：低于它就 507（按**目标目录所在文件系统**算，不按数据目录那个盘） @type {number} */
@@ -60,7 +47,6 @@ function freeOf(dir) {
 
 /**
  * 功能：为一个待上传的附件准备临时文件（`<root>/<uid>/.tmp/<rand>.part`）。
- *
  * 说明：⚠️ 临时目录放在 `<uid>/` 下面（而不是系统 /tmp）：同盘 `rename` 才是原子的 ——
  *      跨盘 rename 会退化成「复制 ＋ 删除」，200 MB 就是两次全量 IO，还会在中间暴露一份半成品。
  * @param {string} root - 附件根（已校验过）
@@ -74,15 +60,6 @@ function tempOf(root, uid) {
 }
 
 /**
- * 功能：把请求体**边收边加密**写进临时文件。
- *
- * 说明：⭐⭐ `plainSize` 必须**收之前**就知道（它进文件头，而文件头进每块的 AAD）——
- *      所以 `Content-Length` 是硬要求，缺了直接 400（分块上传不在本版）。
- *      ⚠️ 客户端少发了字节（断连 / 撒谎）⇒ 收完时对不上，按失败处理并清掉 `.part`；
- *      多发则超限 413。
- *      ⚠️ 本函数**同步写盘**（`fs.writeSync`）：块是 1 MiB，写入次数少；换来的是
- *      「不会在 await 之间丢事件」这种确定行为。单用户 NAS 上这个取舍是划算的。
- *
  * @param {Object} p - 参数
  * @param {import('node:http').IncomingMessage} p.req - 请求
  * @param {string} p.tmpPath - 临时文件路径
@@ -90,7 +67,6 @@ function tempOf(root, uid) {
  * @param {Object} p.meta - 写进文件头的元信息（身份：应用 / 种类 / 模块 / 账号 / 条目 / 时间）
  * @param {Function} p.seal - `(buf, aad) => {iv, tag, cipher}`，由调用方绑定到某个账号
  * @returns {Promise<{size: number, frameCount: number, headerBuf: Buffer, sha256: string}>} 落盘结果
- *      （`sha256` = **落盘后整文件**的指纹，与 `blob.digestOf()` 重算的结果必须一致）
  * @throws {Error} 断连 / 字节数与 `Content-Length` 不符 / 写盘失败（`ENOSPC`）时抛出
  */
 function receiveInto(p) {

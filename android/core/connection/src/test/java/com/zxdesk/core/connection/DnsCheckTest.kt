@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：DnsCheckTest.kt
- * 职责：解析诊断各条分流的回归测试
  */
 
 package com.zxdesk.core.connection
@@ -18,9 +16,6 @@ import org.junit.Test
 /**
  * [DnsCheck] 的分流。
  *
- * 它**不拦人**：只要公共解析查到了地址就放行，由 [DohDns] 真的连上。
- * 所以这里的判据是「什么时候放行、什么时候才报错」，放错一次就是把一条能走通的路提前掐断。
- * 两个解析器都注入，不碰网络。
  */
 class DnsCheckTest {
 

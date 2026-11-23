@@ -2,20 +2,8 @@
 
 /**
  * modules/secrets/backend/json.js —— **加密信息**（`secrets_items` 密文行）的 JSON 版原语
- *
  * 功能：本模块自己的存储原语（JSON 回退），与另一个后端**同名同参** —— 「同名同参」由
- *      `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，
- *      少一个 / 打错名 / 形参个数不一致 = 启动即抛。
- *
- * ⚠️ ops 里的 `this` 是 **Store 实例**（门面用 `.apply(store, …)` 调用），所以照常访问
- *    `this.data` / `this._saveJson()`。⚠️ 而本模块 `database: "lab"` ⇒ 门面会在**调用这些 op
- *    之前**把 `this.data` 切到实验室库那一份、并在 finally 里还原（`Store._runOnDb()`）。
- *    所以下面每一句 `this.data` 读写的都是 `zxdesk-lab.json`，本文件**不需要知道**自己是分库的。
- *
- * ⭐ **返回的是副本，不是内存里的活引用** —— 与 SQLite 那边「每次查都是一份新对象」保持同义：
- *    业务层拿了它就去解密，若给的是活引用，后续任何一次写入都会让「正在解的那一行」跟着变
- *    （两边行为不一致就会变成「换个后端出怪事」的那类坑）。
- *
+ * `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，
  * @author zx
  * @date   2026-11-07
  * @since 0.9.7
@@ -25,16 +13,12 @@
 const { uidOf } = require('../../../core/store/helpers.js');
 
 const ops = {
-  // ---- 加密信息（0.9.8 · 实验室第一格）----
   /**
    * 功能：列出该账号的全部加密信息（**密文行**，按 `updated_at` 倒序、`id` 倒序）。
    *
    * 说明：⚠️ 排序口径必须与 SQLite 那条**逐字一致**（含 NULL 的兜底）：
-   *      SQLite 那边用 `COALESCE(updated_at,'')`，这里同理把 `null/undefined` 当空串比 ——
-   *      否则同一份数据在两个后端下会给出**不同的顺序**，而那种差异只在回退后端才出现。
+   * SQLite 那边用 `COALESCE(updated_at,'')`，这里同理把 `null/undefined` 当空串比 ——
    *
-   * @param {(number|string)} uid - 用户 id
-   * @returns {Array.<Object>} 条目行数组（`iv` / `cipher` / `tag` 都是密文）
    */
   listSecrets(uid) {
     const key = (r) => String(r && r.updated_at != null ? r.updated_at : '');
@@ -50,15 +34,13 @@ const ops = {
   /**
    * 功能：按页取该账号的加密信息（**密文行**），排序口径与 `listSecrets()` 逐字一致。
    *
-   * 说明：⚠️ 与 SQLite 侧同形：排序必须与 `listSecrets()` 一致，否则翻页会重复 / 漏条。
    * @param {(number|string)} uid - 用户 id
    * @param {number} limit - 每页条数
    * @param {number} offset - 跳过多少条
-   * @returns {Array.<Object>} 条目行数组
    */
   listSecretsPage(uid, limit, offset) {
-    // ⚠️ 不能写 `this.listSecrets(...)`：op 里的 `this` 是 Store 实例，`listSecrets` 挂在 ops 上
-    //    （与上面 `insert` / `addSecret` 同一条坑）⇒ 这里自己过滤＋排序，口径逐字照抄上面那条。
+    // 不能写 `this.listSecrets(...)`：op 里的 `this` 是 Store 实例，`listSecrets` 挂在 ops 上
+    // （与上面 `insert` / `addSecret` 同一条坑）⇒ 这里自己过滤＋排序，口径逐字照抄上面那条。
     const key = (r) => String(r && r.updated_at != null ? r.updated_at : '');
     const start = Math.max(0, Number(offset) || 0);
     const take = Math.max(1, Number(limit) || 50);
@@ -85,11 +67,8 @@ const ops = {
    * 功能：插入一条加密信息（密文行）；返回带回填 `id` 的那一行。
    *
    * 说明：⚠️ 不能写 `this.insert(...)`：op 里的 `this` 是 Store 实例，通用 `insert` 挂在 `ops` 上
-   *      （只能通过 `this._bk.insert(...)` 取到）。原语层内部一律自己写。
+   * （只能通过 `this._bk.insert(...)` 取到）。原语层内部一律自己写。
    *
-   * @param {(number|string)} uid - 用户 id
-   * @param {Object} row - 密文行（`iv` / `cipher` / `tag` / 时间戳）
-   * @returns {Object} 写入的行（已带 `id`）
    */
   addSecret(uid, row) {
     if (!Array.isArray(this.data.secrets_items)) this.data.secrets_items = [];
@@ -116,7 +95,6 @@ const ops = {
    * @param {(number|string)} id - 条目 id
    * @param {Array.<string>} setKeys - 要写入的列名
    * @param {Array.<*>} values - 与 `setKeys` 一一对应的新值
-   * @returns {boolean} 更新到行则为 true
    */
   updateSecret(uid, id, setKeys, values) {
     const i = (this.data.secrets_items || []).findIndex(
@@ -145,15 +123,12 @@ const ops = {
     return this.data.secrets_items.length < before;
   },
 
-  // ---- 附件（0.9.8 · 方案 42 §2.7）----
   /**
    * 功能：列出该账号的**全部**附件行（跨条目）—— 给用量统计与「附件位置」面板用。
    *
    * 说明：⚠️ 与 `listSecretFilesOfItem()` 分开的理由见 SQLite 侧同处的注释
-   *      （合成一个带可选参数的 op，「忘了传 itemId ⇒ 悄悄返回全量」是个越权面）。
+   * （合成一个带可选参数的 op，「忘了传 itemId ⇒ 悄悄返回全量」是个越权面）。
    *
-   * @param {(number|string)} uid - 用户 id
-   * @returns {Array.<Object>} 行数组（按 id 升序）
    */
   listSecretFiles(uid) {
     return (this.data.secrets_files || [])
@@ -219,15 +194,8 @@ const ops = {
    * 功能：改写一条附件行的 `rel`（**上传专用的收尾一步**）。
    *
    * 说明：⚠️ 为什么需要它：文件必须先落盘（`.part` ＋ fsync），而最终文件名是 `<id>.zxdesk` ——
-   *      `id` 只有插行之后才有。⇒ 插行时 `rel` 先写空串，拿到 id 后 `rename` 成最终名，
-   *      再用本 op 把真实的 `rel` 补上。失败方向：这中间崩掉只会留一条 `rel=''` 的行
-   *      （点开回 400「文件不在原位置」），⛔ 不会指向别人的文件。
-   * ⭐ 与 SQLite 侧同形：`rel` 与 `sha256` 一起写（两者都等文件落定才知道）。
-   * @param {number} uid - 用户 id
-   * @param {number} fid - 附件 id
-   * @param {string} rel - 新的相对路径
-   * @param {string} [sha256] - 整文件 SHA-256（小写 hex）
-   * @returns {boolean} 改到行则为 true
+   * `id` 只有插行之后才有。⇒ 插行时 `rel` 先写空串，拿到 id 后 `rename` 成最终名，
+   * 再用本 op 把真实的 `rel` 补上。失败方向：这中间崩掉只会留一条 `rel=''` 的行
    */
   updateSecretFileRel(uid, fid, rel, sha256) {
     const row = (this.data.secrets_files || []).find((v) => v.id === Number(fid) && uidOf(v) === Number(uid));
@@ -242,13 +210,8 @@ const ops = {
    * 功能：把一条附件行的 `root` 改到新位置（重新关联专用；`rel` 不动）。
    *
    * 说明：与 SQLite 后端同名同参（`backend/index.js` 在加载时逐个比对）；
-   *      ⚠️ 只改 `root`，理由见 SQLite 侧同处的注释。JSON 后端每改一行都整份落盘 ——
-   *      重新关联的行数一般是个位数到几十，可接受；真到几千行要改成批量，那是另一单的事。
-   *
-   * @param {(number|string)} uid - 用户 id
-   * @param {(number|string)} fid - 附件 id
-   * @param {string} root - 新的绝对根
-   * @returns {boolean} 改到行则为 true
+   * 只改 `root`，理由见 SQLite 侧同处的注释。JSON 后端每改一行都整份落盘 ——
+   * 重新关联的行数一般是个位数到几十，可接受；真到几千行要改成批量，那是另一单的事。
    */
   updateSecretFileRoot(uid, fid, root) {
     const row = (this.data.secrets_files || []).find((v) => v.id === Number(fid) && uidOf(v) === Number(uid));
@@ -310,11 +273,8 @@ const ops = {
    * 功能：写入 / 覆盖该账号的附件根目录（一个账号一行）。
    *
    * 说明：⚠️ 先删后插（保持「一个账号只有一行」这条与 SQLite 主键同义的不变量）——
-   *      JSON 后端没有主键约束，不这样做就会出现两行，而读的时候拿到哪一行是「先找到的那行」。
+   * JSON 后端没有主键约束，不这样做就会出现两行，而读的时候拿到哪一行是「先找到的那行」。
    * @param {(number|string)} uid - 用户 id
-   * @param {string} root - 已校验过的绝对路径
-   * @param {string} stamp - 时间戳
-   * @returns {boolean} 恒为 true
    */
   setSecretRoot(uid, root, stamp, meta) {
     if (!Array.isArray(this.data.secrets_settings)) this.data.secrets_settings = [];

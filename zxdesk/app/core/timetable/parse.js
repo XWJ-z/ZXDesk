@@ -1,25 +1,21 @@
 /**
-timetable/parse.js —— 课表模板解析（签名识别 → 五段式拆格 → 诊断）
+ * timetable/parse.js —— 课表模板解析（签名识别 → 五段式拆格 → 诊断）
  *
  * 功能：把网格 IR 解析成可落库的课表草稿 —— 模板签名识别（`detectTemplate`）、
- *      单元格条目解析（`parseCellEntries`，`[节次]节` 是从格子里读出来的）、
- *      课程配色（`colorOfCourse`）、元信息与行文本（`parseMetaFields` / `joinRowText`）、
- *      两个公开入口 `parseTimetable` 与 `buildTemplateCsv`。
- *
- * ⚠️ 设计前提**都是从真实样本上量出来的**，别按「应该长什么样」改：
- *    行不是「第 N 节」而是**时段块**且块内小节数可以不等（样本 2/2/3/2/3）；
- *    连堂课会**跨行重复印刷**，精确去重即可、**不做相邻合并**；格子里自带 `[节次]节`。
+ * 单元格条目解析（`parseCellEntries`，`[节次]节` 是从格子里读出来的）、
+ * 课程配色（`colorOfCourse`）、元信息与行文本（`parseMetaFields` / `joinRowText`）、
+ * 两个公开入口 `parseTimetable` 与 `buildTemplateCsv`。
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.8.4
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/06-课表.md
  */
 'use strict';
 
 const { WEEKDAY_NAMES, guessStartMonday, maxWeekOf, normalizeWeeks, weekdayOf } = require('./date-util.js');
 const { contiguousRuns, generatePeriods, parsePeriodNumbers, solveSchedule } = require('./schedule-solve.js');
-// ⭐ 0.8.3：CSV 序列化收口到共用层那一份（⛔ 本文件不再自带第二份 RFC 4180 转义）
+// CSV 序列化收口到共用层那一份（⛔ 本文件不再自带第二份 RFC 4180 转义）
 const { buildCsv } = require('../sheet/csv.js');
 
 /** 节次行：形如 `[01-02]节` / `1-2节` / `（3-4）节`，捕获组里是节次号串 */
@@ -32,13 +28,8 @@ const RE_ROOM = /(室|楼|馆|场|区|号|机房|教室|实验室|中心|校区)
  * 功能：把一个格子的文本解析成若干条目。
  *
  * 说明：五段式 `课程名 / 教师(职称) / 周次[周] / 教室 / [节次]节`，**条目之间用空行分隔**。
- *      ⚠️ 按**特征**认领而不是按位置取：别的系统可能没有教师或没有教室，
- *      按位置取会静默错位（把教室当教师）。
- *      ⚠️ 行内判定顺序要紧：「1-16[周]」既能匹配节次行也能匹配周次行，
- *      所以先判节次（要求以「节」结尾），避免把周次误当成节次。
- *
- * @param {string} text - 单元格原文（可含多行、多条目）
- * @returns {Array.<Object>} 条目数组，每项含 `course` / `teacher` / `room` / `weeksRaw` / `periods` / `lowConfidence`
+ * 按**特征**认领而不是按位置取：别的系统可能没有教师或没有教室，
+ * 按位置取会静默错位（把教室当教师）。
  */
 function parseCellEntries(text) {
   const raw = String(text === undefined || text === null ? '' : text);
@@ -64,7 +55,7 @@ function parseCellEntries(text) {
         periodsText = ln;
         continue;
       }
-      // ⚠️ 顺序要紧：「1-16[周]」既能匹配节次行也能匹配周次行，所以先判节次（要求以「节」结尾）
+      // 顺序要紧：「1-16[周]」既能匹配节次行也能匹配周次行，所以先判节次（要求以「节」结尾）
       if (/周/.test(ln) && (m = ln.match(/^(.*?)[[［(（]?\s*周\s*[\]］)）]?$/))) {
         weeksRaw = m[1] || ln.replace(/[[［(（\]）)］周]/g, '');
         continue;
@@ -115,12 +106,10 @@ const MAX_BLOCK_ROWS = 12;
 
 /**
  * 功能：识别「时段块网格式」模板，返回星期表头行、块标签列、星期列位置、
- *      各时段块以及标题行 / 元信息行 / 备注行的行号。
+ * 各时段块以及标题行 / 元信息行 / 备注行的行号。
  *
  * 说明：不匹配时**不是一句"格式不对"**，而是把「我看到了什么」一起返回（§8.9 的体检报告原则）。
  *
- * @param {Array.<Array.<*>>} rows - 网格数据（二维数组）
- * @returns {Object} 命中时含 `ok: true` 与各定位信息；未命中时含 `ok: false`、`code`、`message` 与 `saw`
  */
 function detectTemplate(rows) {
   const grid = Array.isArray(rows) ? rows : [];
@@ -239,8 +228,6 @@ const PALETTE = [
  * 说明：名字散列后取色，若该色已被本次导入占用则顺延到下一个。
  *
  * @param {string} name - 课程名
- * @param {Set.<string>} used - 已被占用的颜色集合；本函数会把选中的颜色加进去
- * @returns {string} 十六进制颜色值
  */
 function colorOfCourse(name, used) {
   let h = 0;
@@ -258,7 +245,6 @@ function colorOfCourse(name, used) {
  * 说明：字段之间用连续空格（2 个及以上）分隔。
  *
  * @param {string} text - 元信息行文本
- * @returns {Object.<string, string>} 键到值（均已去空白）的映射
  */
 function parseMetaFields(text) {
   const out = {};
@@ -274,10 +260,8 @@ function parseMetaFields(text) {
  * 功能：把一行的单元格拼成可读文本，并**去掉重复值**。
  *
  * 说明：⚠️ 必须去重：合并区（标题 `A1:H1`、元信息 `A2:H2`）被展开后，
- *      同一段文字会在 8 个格子里各出现一次，直接 join 会得到重复 8 遍的垃圾 meta。
+ * 同一段文字会在 8 个格子里各出现一次，直接 join 会得到重复 8 遍的垃圾 meta。
  *
- * @param {Array.<*>} row - 一行单元格
- * @returns {string} 去重后以单空格拼接的文本
  */
 function joinRowText(row) {
   const seen = new Set();
@@ -295,12 +279,8 @@ function joinRowText(row) {
  * 功能：课表导入主入口 —— 把网格 IR 解析成可落库的课表草稿，并附一份诊断报告。
  *
  * 说明：流程是 版式识别 → 逐块逐格解析 → 作息交叉求解 → 聚合去重 → 学期信息与诊断。
- *      去重只做**精确去重、不做相邻合并**（连堂课会跨行重复印刷，重复项精确相等）。
- *      凡是「没导进去的东西」都会在诊断里留一条带理由的记录（§8.9）。
- *
- * @param {Object} sheet - `sheet-parser.js` 产出的网格 IR：用到 `rows` / `source` / `sheetName` / `warnings`
- * @returns {Object} 成功时 `{ok: true, draft, diagnostics}`（课表草稿与诊断报告）；
- *          失败时 `{ok: false, code, message, saw}`（错误码、中文提示与「看到了什么」）
+ * 去重只做**精确去重、不做相邻合并**（连堂课会跨行重复印刷，重复项精确相等）。
+ * 凡是「没导进去的东西」都会在诊断里留一条带理由的记录（§8.9）。
  */
 function parseTimetable(sheet) {
   const rows = (sheet && sheet.rows) || [];
@@ -496,13 +476,8 @@ function parseTimetable(sheet) {
  * 功能：生成手输用的 CSV 模板文本（**与导入同一种网格语义**，所以能直接导回来）。
  *
  * 说明：分隔符用逗号，单元格内的换行按 RFC 4180 用引号包住 —— 由调用方负责加 UTF-8 BOM。
- *      ⭐ 0.8.3：序列化改成调**共用层**的 `buildCsv()`（`core/sheet/csv.js`）——
- *      从前这里自带一份 `q()` / `line()` 局部实现，那是同一段 RFC 4180 转义的**第二份拷贝**
- *      （项目，而漂移的是「导出的表是不是坏的」）。
- *      ⚠️ 输出与从前**逐字节一致**：`buildCsv()` 同样是「每个单元格加引号 ＋ 逗号 ＋ CRLF
- *      行尾（末行也带）」—— 所以 `ttt/test/timetable.test.js` 里的模板向量一个字都不用动。
- *
- * @returns {string} 模板 CSV 文本（CRLF 行尾）
+ * 序列化改成调**共用层**的 `buildCsv()`（`core/sheet/csv.js`）——
+ * 从前这里自带一份 `q()` / `line()` 局部实现，那是同一段 RFC 4180 转义的**第二份拷贝**
  */
 function buildTemplateCsv() {
   const rows = [];

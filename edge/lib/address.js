@@ -1,18 +1,13 @@
 /**
  * address.js —— 用户输入识别（FNID / 域名 / IP / 完整 URL）
- *
  * 功能：`parseInput` 把一行输入判成 host / fnid / invalid；`linkType` 推出链路徽标；
  *      `originsFor` 把解析结果翻成需要申请的 host 权限。
  *      **判定顺序不可改**：完整 URL → `[v6]:port` → `host:port` → 裸 IPv6 → IPv4 → 含 `.` 的域名 → FNID → 认不出。
  *
- * ⚠️ `localhost` / `nas` 这类不带点不带端口的名字会命中 FNID 形状 ⇒ 按 FNID 处理，
+ * `localhost` / `nas` 这类不带点不带端口的名字会命中 FNID 形状 ⇒ 按 FNID 处理，
  *    文案里提示「局域网请填 IP 或带端口」。与 Android 端同口径。
- * ⚠️ 「中继域名」≠ FNID：`my-nas.fnos.net` 走 host 直连路径，`my-nas` 走 fn/con 解析，两条路并存、互相不猜。
- *
- * ⛔ 纯函数、不碰 `chrome.*` —— UI 与 SW 共用这一份。
- *
  * @author zx
- * @since 0.1.0
+ * @since
  * 相关：Project/Edge/README.md
  */
 import { isFnId } from './fnid.js';
@@ -20,9 +15,6 @@ import { isFnId } from './fnid.js';
 /**
  * @param {string} raw - 用户输入
  * @returns {{kind:'host', origin:string, gatewayHint:boolean}
- *          |{kind:'fnid', id:string}
- *          |{kind:'invalid', error:'fn_id_invalid'}
- *          |null} `null` ⇒ 一律按 `address_invalid` 报
  */
 export function parseInput(raw) {
   const text = String(raw ?? '')
@@ -57,7 +49,6 @@ export function parseInput(raw) {
     const port = text.slice(idx + 1);
     if (!host || !/^\d+$/.test(port)) return null; // 端口不是数字 ⇒ 认不出（Android 同口径）
     // IP 一律 http；域名默认 https，但 **:80 要按 http 走** ——
-    // 否则 `example.com:80` 会被拼成 `https://example.com:80`（端口与协议对不上，必然连不上）。
     const scheme = isIpv4(host) || port === '80' ? 'http' : 'https';
     return { kind: 'host', origin: `${scheme}://${host}:${port}`, gatewayHint: false };
   }
@@ -138,9 +129,8 @@ export const FNID_ORIGINS = [
 
 /**
  * 功能：输入 → 授权用 origins（host 一条 / FNID 四条；解析不了返回 null，invalid 原样带回）。
- * ⚠️ **必须把解析结果 `p` 一起带回去**：调用方要用 `p.kind` 决定走哪条连接路，
- *    只回 `origins` 会让它在连接第一步就 TypeError（界面停在「连接中…」永不返回）。
- *    `p` 是调用方唯一该用的解析结果，⛔ 不要再各解析一遍。
+ * **必须把解析结果 `p` 一起带回去**：调用方要用 `p.kind` 决定走哪条连接路，
+ * `p` 是调用方唯一该用的解析结果，⛔ 不要再各解析一遍。
  * @returns {?{p:object, origins:string[]}|{invalid:string}}
  */
 export function originsFor(parsed) {

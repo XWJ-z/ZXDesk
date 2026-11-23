@@ -1,10 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：info.js
- * 职责：信息窗口：许可协议 / 打赏与支持 / 更新日志（一个窗口三种只读内容）
- *
- * 只负责画。正文全部来自主进程（`getDoc`，白名单 eula / releases）或随包图片，
- * ⛔ 不发网络请求、⛔ 不读写任何本地文件。
  */
 
 const api = window.zxdesk;

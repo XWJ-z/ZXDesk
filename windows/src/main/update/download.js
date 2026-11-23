@@ -1,16 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：download.js
- * 职责：安装包下载（https、重定向、断点续传、进度、SHA256）
- *
- * 传输层由调用方注入，形如：
- *   `transport(url, { headers, onResponse, onError }) => { abort?() }`
- * 生产实现走 Electron `net.request`（`update/net-transport.js`），测试实现走 `node:http`。
- * 本文件不 import electron，能在无显示器环境直接跑。
- *
- * 落地约定：
- * - 先写 `<dest>.part`，完成后再原子 rename 成 `<dest>`；中途断网 `.part` 留着当续传基础。
- * - 换镜像 / 校验失败必须删 `.part`：不同源的字节不能拼在一起。
  */
 
 import crypto from 'node:crypto';
@@ -25,7 +14,7 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
  * 把接口给的文件名收敛成可安全落盘的名字。
- * ⚠️ 不能直接用：接口字段来自网络，`..\..\x.exe` 或绝对路径会写到数据目录外面。
+ * 不能直接用：接口字段来自网络，`..\..\x.exe` 或绝对路径会写到数据目录外面。
  */
 export function safeFileName(name, fallback = 'zxdesk-update.bin') {
   const base = String(name ?? '')
@@ -53,14 +42,6 @@ export function sha256File(file) {
 /**
  * 探测一组下载地址，返回**可用且按快慢排序**的列表。
  *
- * 用 `Range: bytes=0-0` 只取 1 字节：既证明「能拿到数据」，又不浪费流量。
- * 3xx 也算通（真正的跳转交给下载流程自己跟）。
- * ⚠️ 探测只影响「用哪个源」，不影响校验：hash 仍以服务器下发的为准。
- *
- * @param {string[]} urls
- * @param {Function} transport
- * @param {{timeoutMs?:number}} [options]
- * @returns {Promise<{url:string, ms:number}[]>}
  */
 export async function probeUrls(urls, transport, options = {}) {
   const timeoutMs = Number(options.timeoutMs || 4000);
@@ -115,15 +96,7 @@ function probeOne(url, transport, timeoutMs) {
 
 /**
  * 下载到 `dest`，返回 dest。
- *
  * @param {object} input
- * @param {string} input.url
- * @param {string} input.dest
- * @param {Function} input.transport
- * @param {(progress:{received:number,total:number})=>void} [input.onProgress]
- * @param {number} [input.expectedSize] - 大于 0 时校验最终字节数
- * @param {number} [input.timeoutMs]
- * @returns {Promise<string>}
  */
 export async function downloadFile(input) {
   const { url, dest, transport, onProgress, expectedSize = 0, timeoutMs = DEFAULT_TIMEOUT_MS } = input;
@@ -145,7 +118,7 @@ export async function downloadFile(input) {
         const size = fs.statSync(dest).size;
         if (size !== expectedSize) {
           discard(part, dest);
-          // ⛔ 不重试同一个地址：大小是确定的，重试只会把 150MB 再拖一遍（这是「一直下载」的根源）
+          // 不重试同一个地址：大小是确定的，重试只会把 150MB 再拖一遍（这是「一直下载」的根源）
           throw new Error(`包大小不符（期望 ${expectedSize} 字节，实际 ${size} 字节）`);
         }
       }
@@ -188,9 +161,9 @@ function downloadOnce({ url, part, dest, transport, onProgress, timeoutMs, expec
         if (retryable) markRetryable(error);
         reject(error);
       };
-      // ⚠️ 不能直接 writer.destroy()：缓冲区里还没落盘的那几 KB 会被丢掉，
-      //    `.part` 变成 0 字节 ⇒ 下次「续传」其实是从头下，断流一次就白下。
-      //    先 end() 把已写入的刷下去，等 close（或 250ms 兜底）再 reject。
+      // 不能直接 writer.destroy()：缓冲区里还没落盘的那几 KB 会被丢掉，
+      // `.part` 变成 0 字节 ⇒ 下次「续传」其实是从头下，断流一次就白下。
+      // 先 end() 把已写入的刷下去，等 close（或 250ms 兜底）再 reject。
       if (writer && !writer.destroyed) {
         try {
           writer.once('close', settle);
@@ -243,7 +216,6 @@ function downloadOnce({ url, part, dest, transport, onProgress, timeoutMs, expec
         } catch {
           return fail(new Error('重定向地址不合法'));
         }
-        // 重定向同样只许 https：否则「https 入口 → 明文落点」就成了绕过手段
         const checked = checkUpdateUrl(next);
         if (!checked.ok) return fail(new Error(`重定向被拒绝：${checked.reason}`));
         cleanup();
@@ -334,10 +306,9 @@ function downloadOnce({ url, part, dest, transport, onProgress, timeoutMs, expec
         if (settled) return;
         // node 的 IncomingMessage 有 complete；Electron 的实现可能没有，那就只看 end
         if (stream.complete === false || !streamEnded) return fail(new Error('连接中断，响应没有读完'), true);
-        // ⚠️ 服务端「正常收尾」但字节不够（断流 / 被杀）—— 这一条以前漏了：
-        //    流 end 得像正常结束，后面的「大小不符」又被当成确定性问题直接放弃，
-        //    结果断一次网就得整包重下，然后再断一次就 give-up。
-        //    收的字节比声明的少 ⇒ 传输不完整，保留 .part 续传。
+        // 服务端「正常收尾」但字节不够（断流 / 被杀）—— 这一条以前漏了：
+        // 流 end 得像正常结束，后面的「大小不符」又被当成确定性问题直接放弃，
+        // 结果断一次网就得整包重下，然后再断一次就 give-up。
         if (totalIsFullSize && base + received < total) {
           return fail(new Error(`下载不完整（已收 ${base + received}/${total} 字节）`), true);
         }

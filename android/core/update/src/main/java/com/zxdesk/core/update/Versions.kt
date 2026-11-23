@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：Versions.kt
- * 职责：版本号的解析与比较，纯函数，可单测
  */
 
 package com.zxdesk.core.update
@@ -9,12 +7,6 @@ package com.zxdesk.core.update
 /**
  * 版本号的解析与比较（纯函数，不依赖网络与 Android）。
  *
- * ⚠️ 不能用字符串比较：`0.2.9` 的字典序排在 `0.2.13` 之后，用它判断「有没有新版」
- * 会把旧版当新版提示。必须逐段按数字比。
- *
- * 支持 `1.2.3`、`v1.2.3`、`1.2`（缺位补 0）、`1.2.3-beta.2`（预发布小于同号正式版）。
- * 解析失败返回 null、比较返回 null —— 调用方自己决定「不可比」时怎么办，
- * ⛔ 不要把它当成 0（当成 0 会得出「两个版本一样」的错误结论）。
  */
 data class ParsedVersion(
     /** 主版本三段，缺位补 0。 */
@@ -52,7 +44,6 @@ object Versions {
             if (a.nums[i] != b.nums[i]) return if (a.nums[i] > b.nums[i]) 1 else -1
         }
 
-        // 正式版高于同号预发布：1.2.3 > 1.2.3-beta.1
         if (a.pre.isEmpty() && b.pre.isEmpty()) return 0
         if (a.pre.isEmpty()) return 1
         if (b.pre.isEmpty()) return -1

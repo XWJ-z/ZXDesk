@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：AccessCodeScreen.kt
- * 职责：第 ④ 步，网关访问码页
  */
 
 package com.zxdesk.app.ui
@@ -59,28 +57,6 @@ import kotlin.coroutines.resume
 /**
  * 第 ④ 步：访问码。
  *
- * 「访问码」是**飞牛网关自己的页面**，本项目没有它的校验代码 ⇒
- * 底下直接把这个网关页原样显示出来，使用者按网关的提示输入；本端只在旁边判断「还在访问码页 → 已经过去了」。
- * ⛔ 不自己重造校验、⛔ 不去猜它的接口。
- *
- * 飞牛的闸门顺序是**先访问码、后密码**：网关先把整站拦住要访问码，通过之后才让到登录页。
- * 所以这一页可能看到三种东西：网关的访问码页 / 飞牛登录页 / 已经进了应用。
- *
- * ## 2026-11-03 修「输入访问码后一直循环加载」
- *
- * 三个原因叠在一起，缺一个都不会循环：
- * 1. **判定兜底错了**：`PageProbeJs` 原来最后一行是 `return 'APP'`，白屏 / 中继空壳 /
- *    Chrome 错误页全都算「应用页」⇒ 屏幕一白就算「访问码已通过」⇒ 自动跳走；
- * 2. **跳走之后必然被拒**：访问码并没真的过，[onEntered] 触发的重登又被网关 401 挡回来
- *    ⇒ 回到这一页 ⇒ 再白屏 ⇒ 再被判通过，转圈；
- * 3. **FNID 中继没种 `mode=relay`**：这段代码原来写在 `entry.fnSession?.let { }` 里，
- *    而「登录前被网关挡回来」这条路上 `fnSession` 是 null ⇒ 中继不认这次请求 ⇒ 白屏。
- *
- * 现在：白屏 / 认不出**一律不算通过**、中继无条件先种 `mode=relay`、加载失败要说出来、
- * 中继模式白屏 15 秒自动改加载站点根试一次，且自动通过**整轮只允许一次**（见 `AppViewModel.onAccessCodeDone`）。
- *
- * @param onEntered 回报「我认为已经过了访问码」。参数 true = 自动判定，false = 使用者点了按钮。
- *        **返回 false 表示上层没有接手**（例如自动判定这一轮已经用过），此时界面保持原样、等人工操作。
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -91,8 +67,8 @@ fun AccessCodeScreen(
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
     var loading by remember { mutableStateOf(true) }
-    // ⚠️ 用 MutableState 而不是 `by remember`：轮询循环每轮都要读它，
-    //    委托写法读到的是「本轮重组的快照」，状态一变就重启循环（永远攒不够两次确认）。
+    // 用 MutableState 而不是 `by remember`：轮询循环每轮都要读它，
+    // 委托写法读到的是「本轮重组的快照」，状态一变就重启循环（永远攒不够两次确认）。
     val entered = remember { mutableStateOf(false) }
 
     /** 这一页**加载失败**（网络 / HTTP / 证书）：失败期间的任何正文都不算「过访问码」。 */
@@ -137,7 +113,6 @@ fun AccessCodeScreen(
     }
 
     // 判据不能只看一次 —— 网关从访问码页往下跳时会经过中间页，单次判定会把它当成
-    // 「已经进去了」，于是自动重登又吃 401、又弹回这一页（0.2.17「反复加载」就是这么来的）。
     // 这里按标签分档：**只有真的看到应用页 / invalid token / 有正文的登录页**才攒计数，
     // 白屏（EMPTY）与认不出（UNKNOWN）一律清零。见 [PageProbeJs] 的表。
     LaunchedEffect(webView) {
@@ -207,7 +182,6 @@ fun AccessCodeScreen(
             Spacer(Modifier.weight(1f))
             // 手动「继续」只在**出过问题**时出现（自动判定被拒 / 页面报过错）：
             // 平时只有「返回 / 刷新」两颗，⛔ 不再和网关页里的「确定」并排成两个大按钮
-            // （老大 2026-11-03 22:31：「两个看着和怪」）。
             if ((autoTried || hint != null || pageFailed) && !entered.value) {
                 TextButton(onClick = { finishOnce(auto = false) }) {
                     Text("继续", fontSize = Ui.BodySize)
@@ -241,7 +215,6 @@ fun AccessCodeScreen(
                             settings.setSupportMultipleWindows(false)
                             CookieManager.getInstance().setAcceptCookie(true)
                             CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-                            // 收窄高度后不要多一层 WebView 自己的白底，否则卡片外会套一圈白
                             setBackgroundColor(android.graphics.Color.TRANSPARENT)
 
                             webViewClient = object : WebViewClient() {
@@ -253,18 +226,13 @@ fun AccessCodeScreen(
                                 }
 
                                 // 这里只收进度条：正文判定统一交给上面那条轮询 ——
-                                // onPageFinished 每跳一页都会来一次，拿它当判据正是旧版乱跳的原因。
                                 override fun onPageFinished(view: WebView?, url: String?) {
                                     loading = false
                                     AppLog.i(TAG, "访问码页加载完：" + url.orEmpty().take(120))
                                     val v = view ?: return
-                                    // ⭐ 加载完**立刻**判一次，不等 700ms 那轮轮询：
-                                    //    访问码通过之后网关会先回一屏纯文本 `invalid token`，
-                                    //    等到下一轮才判的话，这行字会明晃晃挂一秒多
-                                    //    （老大 2026-11-03 22:47 的截图二就是这么来的）。
-                                    //    在这里就切走，它基本来不及被看清。
-                                    //    ⚠️ 只认 `APP` 与 `LOGIN_REQUIRED` —— 两者都是网关给出的确定答复；
-                                    //    `OTHER`（登录页 / 过渡页）仍交给轮询攒够次数再判。
+                                    // 加载完**立刻**判一次，不等 700ms 那轮轮询：
+                                    // 访问码通过之后网关会先回一屏纯文本 `invalid token`，
+                                    // 等到下一轮才判的话，这行字会明晃晃挂一秒多
                                     quickCheck(v) { label ->
                                         if (!entered.value && !autoTried &&
                                             (label == PageProbeJs.LABEL_APP ||
@@ -274,7 +242,6 @@ fun AccessCodeScreen(
                                             finishOnce(auto = true)
                                         }
                                     }
-                                    // 顶部是不是被裁：只检查、不居中（老大 23:07「就顶部显示全吧」）。
                                     // 两次：200ms 抓首帧后的布局，1.2s 补一次慢加载的样式。
                                     // 脚本自己带标记，重复调用不会重复加 padding。
                                     v.postDelayed({ fixTopClip(v) }, 200)
@@ -337,17 +304,15 @@ fun AccessCodeScreen(
                                 }
                             }
 
-                            // ⭐ 中继凭据**无条件**先种：这段原来在 `fnSession?.let { }` 里，
-                            //    而「登录前被网关挡回来」这条路上 fnSession 是 null ⇒ 中继不认 ⇒ 白屏。
+                            // 中继凭据**无条件**先种：这段原来在 `fnSession?.let { }` 里，
+                            // 而「登录前被网关挡回来」这条路上 fnSession 是 null ⇒ 中继不认 ⇒ 白屏。
                             loadWithSession(this, entry, entry.zxDeskLoginUrl)
                         }
                     },
                     update = { webView = it },
                     /**
-                     * ⭐ 0.3.1：与 `WebViewScreen` 同一处坑 —— `AndroidView` 不销毁 WebView。
+                     * 与 `WebViewScreen` 同一处坑 —— `AndroidView` 不销毁 WebView。
                      * 访问码页是登录流程里**建得最勤**的一屏（每次要码都新开一个），
-                     * 不拆掉就是每输一次访问码留一个还在跑 JS 的实例。
-                     * 顺序：停加载 → 摘 client（切断回调）→ 摘出视图树 → destroy → 置空引用。
                      */
                     onRelease = { view ->
                         webView = null
@@ -370,15 +335,6 @@ fun AccessCodeScreen(
 /**
  * 修「内容顶部被裁」——**只做这一件事，不居中**。
  *
- * 老大 2026-11-03 23:07：「也别显示居中了，就顶部显示全吧」。
- * 居中那套是我想多了：网关页本来就是一张贴顶的卡片，硬把它挪到中间反而引出裁切问题。
- *
- * 现在只量一件事：`body` 所有直接子元素的**最上沿**如果小于 0，说明内容真的被推到视口之上
- * （页面自己用了负 margin / translate 之类），此时补一段 `padding-top` 把它推回来；
- * 如果最上沿 ≥ 0，说明**没被裁**，一个字节都不动 —— 这种情况下卡片顶部没有圆角是页面原本的设计，
- * 不是我们切掉的（日志会打 `ok`，下次再怀疑就能直接看这一行）。
- *
- * ⚠️ 只写入一次（`data-zx-top` 标记），避免反复累加 padding 把内容越推越下。
  */
 private fun fixTopClip(view: WebView) {
     view.evaluateJavascript(CLIP_JS) { result ->
@@ -390,14 +346,6 @@ private fun fixTopClip(view: WebView) {
 /**
  * 顶部检查脚本：**只保证内容不被裁、不贴边，不居中**。
  *
- * 三种情况：
- * - `minTop < 0` ⇒ 内容被推到视口之上（页面用了负 margin / translate），补 `padding-top` 推回来 → `fixed:-N`
- * - `0 ≤ minTop < 8` ⇒ 没被裁，但紧贴着顶边，看着像被切；补 12px 让它离开边缘 → `pad`
- * - `minTop ≥ 8` ⇒ 页面自己留了边距，一个字节都不动 → `ok`
- *
- * ⚠️ 只写入一次（`data-zx-top` 标记）：反复调不能反复加 padding，否则内容会一次次往下掉。
- * ⚠️ **不碰圆角、不碰颜色**：如果补完还是直角，那就是网关页原本的设计（底部圆角、顶部直角），
- *    不是我们切掉的 —— 要不要改飞牛页面的外观，由老大定，⛔ 我不擅自改。
  */
 private const val CLIP_JS: String = """(function(){try{
   var b=document.body; if(!b) return 'fail';
@@ -470,8 +418,6 @@ private const val PROBE_CONFIRM_HARD = 2
 /**
  * 软证据（有正文的登录页 / 门户页）连续多少次才算过。
  *
- * 比硬证据多要几次：网关卡在访问码之后会先给一个「正在校验」过渡页，那也是「有正文的真网页」。
- * 误判一次的代价是整轮重登白跑一趟（还会被 401 送回来）。
  */
 private const val PROBE_CONFIRM_SOFT = 5
 

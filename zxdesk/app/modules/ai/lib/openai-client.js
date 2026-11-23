@@ -1,39 +1,11 @@
 'use strict';
 /**
- * modules/ai/lib/openai-client.js —— ai辅助任务的**出网客户端**（0.6.0）
+ * modules/ai/lib/openai-client.js —— ai辅助任务的**出网客户端**
  *
  * 功能：本模块全部对外请求的唯一出口 —— 按 `base_url` 的协议选 `node:http` / `node:https`
- *      （**零 npm 依赖**，铁律 1 / 5），提供三个动作：
- *        · `listModels()`   测连通（GET `{base}/models`，省额度）；
- *        · `chatOnce()`     一次问答（POST `/chat/completions`，非流式 —— 指挥建任务用）；
- *        · `chatStream()`   流式问答（同一路径 + `stream:true`，SSE 逐帧回调 —— 对话页聊天用）；
- *      另导出 `parseLooseJson()`（模型回复的三层兜底 JSON 解析，指挥建任务用）。
- *
- * ⭐ **https 分档校验证书（0.9.8）**：本机 / 内网地址走 `rejectUnauthorized: false`
- *      （自签证书与内部 CA 在这些场景是常态，而 Node 只认内置 CA 包、不读系统信任库），
- *      公网域名仍按 Node 默认严格校验。判据只住 `tlsAllowInsecure()` **一处**；
- *      「https 打到明文端口」（EPROTO）与「证书类错误」各有一条**直指真因**的话术
- *      （`TLS_HTTP_HINT` / `TLS_CERT_HINT`）—— ⛔ 别把它们并回「连不上 AI 接口」那一档。
- *
- * ⭐ **双闸超时**：
- *      · **建连闸**：从发请求到收到上游响应头，超过 `CONNECT_TIMEOUT_MS` 就 `req.destroy()` ——
- *        它抓的是「地址填错 / 对方不在线」这种永远握不上手的情形；
- *      · **总时长闸**：`startGate()` 的**外挂守卫**与消费流程 `Promise.race` ——
- *        从请求发出到**响应体消费完**的全流程都受它管。⚠️ 两个实测过的坑，别改回去：
- *        ① `req.setTimeout` 是 **socket 空闲超时**，流式响应只要帧不断就永不触发，总时长必须外挂；
- *        ② 闸门不能在「响应头到达」时就拆 —— 那样流式主体就不受控了（实测踩过：30 秒的闸
- *        只护住了建连，模型慢慢吐字的整段过程无人看管）。
- *
- * ⭐ **停止也是闸门的一部分**：`shouldAbort()` 由调用方提供（客户端断开 / 用户点停止），
- *      守卫每 250ms 轮询一次，到真就 `req.destroy()` 掐掉上游 —— 人走了还继续烧上游的额度
- *      是最坏的静默浪费。
- *
- * ⭐ **错误转译在这里一次做完**：上游的状态码 / 网络错误 / 垃圾响应都翻成**用户能照着做**的中文
- *      （`kind` + `message`），`message` 会被接口层原样带给前端；⚠️ **上游的错误响应体绝不透传**、
- *      **本文件一次日志都不打**（key 与消息原文一个字都不落 —— 方案 §八 红线 6 / 7）。
- *
- * ⭐ **本文件是纯 lib**：不 require 数据库 / context / 路由，输入输出全是参数与 Promise ——
- *      可独立测试（`ttt/test/ai.test.js` 全部打本地 stub，绝不打真实外网）。
+ * （**零 npm 依赖**，铁律 1 / 5），提供三个动作：
+ * `listModels()`   测连通（GET `{base}/models`，省额度）；
+ * `chatOnce()`     一次问答（POST `/chat/completions`，非流式 —— 指挥建任务用）…
  *
  * @author zx
  * @date   2026-09-15
@@ -47,15 +19,12 @@ const toolsLib = require('./tools.js'); // ⭐ 只为了「已授权工具说明
 
 /**
  * 建连闸（毫秒）：从发出请求到收到**响应头**的上限。
- * 本机 RTT≈0.1ms 没有参考意义；跨公网到模型接口的正常握手在 1~3 秒，10 秒已经非常宽裕。
  * @type {number}
  */
 const CONNECT_TIMEOUT_MS = 10000;
 
 /**
  * 总时长闸（毫秒）：这一次请求**从发出到响应体消费完**最多等多久（外挂守卫，与消费流程竞速）。
- * 取 30 秒 = 调研报告 §3.3 的建议默认值：模型生成一条任务 JSON 通常几秒，聊天长答也在 20 秒内。
- * ⚠️ 前端的等待上界必须**大于**这个数（片段里用 90 秒），否则前端先超时、错误话术被抢成「请求超时了」。
  * @type {number}
  */
 const TOTAL_TIMEOUT_MS = 30000;
@@ -74,19 +43,13 @@ const MODELS_PATH = '/models';
 const GATE_TICK_MS = 250;
 
 /**
- * ⭐ 用户话术里的**配置入口提示**（唯一一份，2 期修正）—— 2 期起 AI 的配置**不再住在「设置页的一栏」**里，
- *    搬到了它自己的位置：电脑端是左侧栏的「AI 辅助任务」卡片，手机端在「更多」页里那一行。
- *    ⚠️ 后端不知道这次请求来自哪一端 ⇒ 话术里**两端的位置都要说**，别只写一侧。
- *    ⚠️ 别把「设置页」/「设置 → AI 辅助任务」写回任何**用户可见字符串**：用户照旧话术去设置页
- *      找不到那一栏（已搬走），可自愈的问题会变成死路。`ttt/test/ai.test.js` 有一条红线用例
- *      扫本文件与 `store.js` 里 `aiError(...)` / `badRequest(...)` 的字符串字面量咬住这件事。
- * @type {string}
+ * 用户话术里的**配置入口提示**（唯一一份，2 期修正）—— 2 期起 AI 的配置**不再住在「设置页的一栏」**里，
+ * 搬到了它自己的位置：电脑端是左侧栏的「AI 辅助任务」卡片，手机端在「更多」页里那一行。
  */
 const CFG_AT = '『AI 辅助任务』（电脑端左侧卡片 / 手机端在「更多」页）';
 
 /**
- * ⭐ 用户话术：填了内网 / 本机地址但没打开开关时用（009 报告 R1）。
- *    ⚠️ 与 `CFG_AT` 同一条规矩：**只有这一份**，别再各处手写（`ai.test.js` 有红线用例盯着）。
+ * 用户话术：填了内网 / 本机地址但没打开开关时用（009 报告 R1）。
  * @type {string}
  */
 const PRIVATE_HINT =
@@ -94,22 +57,16 @@ const PRIVATE_HINT =
   '（例如 http://127.0.0.1:11434 的 ollama），请先打开「允许访问内网地址」开关（就在接口地址下面）';
 
 /**
- * ⭐ 用户话术：`https://` 打到**只开明文 http** 的服务上（TLS 握手被对方当垃圾数据，报 EPROTO）。
- *    ⚠️ 这是「本地模型写了 https 就连不上」最常见的那一种，必须直说「把 https 改成 http」——
- *    兜底的「连不上 AI 接口，请检查地址与网络」指不到真因，用户会以为产品不支持本地模型。
- *    ⭐ 「**请使用 http 再次尝试**」这七个字是老大 2026-11-11 指定的口径，前后端都靠它判断该弹窗
- *    （`shared.js` 的 `TLS_RETRY_PHRASE`）—— ⛔ 改这句话要同步改前端那处常量与测试。
- * @type {string}
+ * 用户话术：`https://` 打到**只开明文 http** 的服务上（TLS 握手被对方当垃圾数据，报 EPROTO）。
+ * 这是「本地模型写了 https 就连不上」最常见的那一种，必须直说「把 https 改成 http」——
  */
 const TLS_HTTP_HINT =
   '这个地址的 https 握不上手 —— 多数是模型服务只开了 http://（本机 ollama / LM Studio / vLLM 默认就是这样）。' +
   '请使用 http 再次尝试：把地址开头的 https 改成 http，例如 http://127.0.0.1:11434/v1';
 
 /**
- * ⭐ 用户话术：`https://` 的证书没通过校验（自签 / 内网 CA / 过期 / 域名对不上）。
- *    ⚠️ 本机与内网地址的自签证书已由 `tlsAllowInsecure()` 自动放行，所以走到这句的一定是
- *    **公网域名**或**证书本身有问题**（过期、域名不匹配）—— 两种都得让用户有下一步动作。
- * @type {string}
+ * 用户话术：`https://` 的证书没通过校验（自签 / 内网 CA / 过期 / 域名对不上）。
+ * 本机与内网地址的自签证书已由 `tlsAllowInsecure()` 自动放行，所以走到这句的一定是
  */
 const TLS_CERT_HINT =
   '这个 https 地址的证书没通过校验（自签、内网 CA、已过期或域名对不上）。' +
@@ -117,7 +74,6 @@ const TLS_CERT_HINT =
 
 /**
  * 证书类错误代号的全集（`req.on('error')` 的 `e.code`）。
- * ⚠️ 别把这些并进「连不上」那一档：两句话要用户做的事完全不同（换协议 vs 查网络）。
  * @type {Set.<string>}
  */
 const TLS_CERT_CODES = new Set([
@@ -138,14 +94,8 @@ const TLS_CERT_CODES = new Set([
  * 功能：判断一个接口地址是不是指向**内网 / 本机 / 链路本地**（009 报告 R1）。
  *
  * 说明：⭐ 为什么要有它：接口地址是**成员自己填的**，而错误转译表能把「连不上 / 不存在 / 超时」
- *      分成三种文案 ⇒ 不拦的话，局域网里任何一个能注册的人都能拿它扫 NAS 所在内网
- *      （叠加「自主注册默认开」与出网节流，可达人群与速率都不小）。
- *      ⚠️ 判定只覆盖**地址段**（不看域名解析结果）—— 刻意如此：解析要在出网那一刻才知道，
- *      而这一层是**保存与出网前的静态判定**，宁可在 DNS 那侧漏（真要防到底得靠网络层策略）。
- *      ⚠️ 不做 IP 归一化（`2130706433` 这类十进制写法 `new URL()` 会自己处理成 `127.0.0.1`）。
- *
- * @param {string} baseUrl - 用户填的接口地址（可能不合法 —— 不合法时返回 false，交给地址校验去报错）
- * @returns {boolean} 命中内网 / 本机 / 链路本地返回 true
+ * 分成三种文案 ⇒ 不拦的话，局域网里任何一个能注册的人都能拿它扫 NAS 所在内网
+ * （叠加「自主注册默认开」与出网节流，可达人群与速率都不小）。
  */
 function isPrivateBaseUrl(baseUrl) {
   let host;
@@ -173,16 +123,9 @@ function isPrivateBaseUrl(baseUrl) {
 /**
  * 功能：这一次 https 出网要不要**校验证书** —— 只对「本机 / 内网地址」放行自签。
  *
- * 说明：⭐ 为什么需要它（0.9.8 · 缺陷索引第 33 条 ⑥）：本地模型与内网反代的自签证书、
- *      内部 CA 都是**用户在自己局域网里自己签的**；而 Node 用的是**内置 CA 包**、不读系统
- *      信任库（`NODE_EXTRA_CA_CERTS` 在界面上无处可配）⇒ 严格校验在这些场景里等于「必失败」，
- *      且报出来的话术指不到真因。私网地址本来就已经过 `allow_private` 这道显式授权，
- *      这里再按地址段放行证书，风险面留在「用户自己已经允许访问的那一段内网」里。
- *      ⚠️ 公网域名**一律严格校验**：那条链是公开可得的，放宽等于给中间人开门。
- *      ⚠️ 只对 `https:` 有意义；`http:` 返回 false（没有 TLS 可校）。
- *
- * @param {string} baseUrl - 用户填的接口地址（也可以是拼好的 URL 串）
- * @returns {boolean} true = 按 `rejectUnauthorized: false` 发（仅私网 / 本机）
+ * 内部 CA 都是**用户在自己局域网里自己签的**；而 Node 用的是**内置 CA 包**、不读系统
+ * 信任库（`NODE_EXTRA_CA_CERTS` 在界面上无处可配）⇒ 严格校验在这些场景里等于「必失败」，
+ * 且报出来的话术指不到真因。私网地址本来就已经过 `allow_private` 这道显式授权，
  */
 function tlsAllowInsecure(baseUrl) {
   let u;
@@ -199,13 +142,8 @@ function tlsAllowInsecure(baseUrl) {
  * 功能：把用户填的 `base_url` 拼上接口路径 —— **`/v1` 有无都认**。
  *
  * 说明：⚠️ 拼接规则只有这一处：去掉结尾斜杠后直接接路径。
- *      `https://api.x.com/v1` + `/chat/completions` → `https://api.x.com/v1/chat/completions`；
- *      `https://api.x.com`（有的网关这么发）→ `https://api.x.com/chat/completions` —— 两种都放行，
- *      由用户按自己服务商的文档填（one-api / ollama / DeepSeek 对两种都认）。
- *
- * @param {string} baseUrl - 用户配置的接口地址（已过 `checkAiConfig` 的 http/https 校验）
- * @param {string} path - 接口路径（`CHAT_PATH` / `MODELS_PATH`）
- * @returns {URL} 拼好的 URL 对象；地址非法时抛出（配置层已拦，这里是最后一道保险）
+ * `https://api.x.com/v1` + `/chat/completions` → `https://api.x.com/v1/chat/completions`；
+ * `https://api.x.com`（有的网关这么发）→ `https://api.x.com/chat/completions` —— 两种都放行，
  */
 function joinUrl(baseUrl, path) {
   return new URL(
@@ -219,11 +157,8 @@ function joinUrl(baseUrl, path) {
  * 功能：造一个带 `kind`（错误类别）与用户可读 `message` 的错误对象。
  *
  * 说明：⚠️ `message` 会被接口层**原样**带给前端（SSE error 帧 / `{ok:false, reason}`），
- *      所以它必须是**用户能照着做**的话；⚠️ 绝不把上游错误体、key、消息原文拼进 message。
+ * 所以它必须是**用户能照着做**的话；⚠️ 绝不把上游错误体、key、消息原文拼进 message。
  *
- * @param {string} kind - 错误类别（auth / rate / server / request / network / tls / timeout / format / abort）
- * @param {string} message - 用户可读的中文说明
- * @returns {Error} 带 `kind` 的错误
  */
 function aiError(kind, message) {
   const e = new Error(message);
@@ -235,13 +170,8 @@ function aiError(kind, message) {
  * 功能：造一个 `kind:'tls'` 的错误，并标出**该给用户哪种下一步**（`tls` 字段）。
  *
  * 说明：⭐ 前端（`shared.js` 的测连通按钮）要据此决定弹窗上给不给「改成 http」那颗动作键：
- *      · `'protocol'`   —— https 打到只开明文的服务 ⇒ **改 http 就是对的**，可以一键替用户改；
- *      · `'certificate'` —— 证书不受信任 / 过期 / 域名不符 ⇒ 公网地址换 http 是**降级**，不能替用户改。
- *      ⚠️ `kind` 仍是 `'tls'`（不新增类别值）：聊天的错误帧、审计、限流口径都不用动。
- *
- * @param {'protocol'|'certificate'} tls - 下一步动作的类别
- * @param {string} message - 用户话术
- * @returns {Error} 带 `kind` 与 `tls` 的错误
+ * `'protocol'`   —— https 打到只开明文的服务 ⇒ **改 http 就是对的**，可以一键替用户改；
+ * `'certificate'` —— 证书不受信任 / 过期 / 域名不符 ⇒ 公网地址换 http 是**降级**，不能替用户改。
  */
 function tlsError(tls, message) {
   const e = aiError('tls', message);
@@ -253,17 +183,14 @@ function tlsError(tls, message) {
  * 功能：把一次上游失败翻成「类别 + 用户话术」—— 错误转译表。
  *
  * 说明：只认这几类，别的都落「接口出错了」兜底；⚠️ 网络错误的原始 message（含地址）**不进**结果。
- *      ⚠️ 导出**只为让测试钉住话术**（纯函数、无副作用）：业务侧一律走出网函数，别直接用它。
+ * 导出**只为让测试钉住话术**（纯函数、无副作用）：业务侧一律走出网函数，别直接用它。
  *
- * @param {number} status - 上游 HTTP 状态码（0 = 没拿到响应，网络层/超时类）
- * @param {string} rawKind - 网络层错误代号（如 ECONNREFUSED / ECONNRESET / 超时自造的 'timeout'）
- * @returns {Error} 带 `kind` 与用户话术的错误
  */
 function translate(status, rawKind) {
   if (rawKind === 'timeout') return aiError('timeout', 'AI 接口响应超时了，请稍后再试');
   if (rawKind === 'abort') return aiError('abort', '这次请求已停止');
-  // ⭐ 0.9.8：TLS 那两类必须排在「连不上」前面 —— 它们要用户做的是「换协议 / 换证书」，
-  //    而不是「查网络」，混进 network 那一档等于把真因藏起来（缺陷索引第 33 条 ⑥）
+  // TLS 那两类必须排在「连不上」前面 —— 它们要用户做的是「换协议 / 换证书」，
+  // 而不是「查网络」，混进 network 那一档等于把真因藏起来（缺陷索引第 33 条 ⑥）
   if (rawKind === 'EPROTO' || rawKind === 'ERR_SSL_WRONG_VERSION_NUMBER') return tlsError('protocol', TLS_HTTP_HINT);
   if (TLS_CERT_CODES.has(rawKind)) return tlsError('certificate', TLS_CERT_HINT);
   if (status === 401 || status === 403) return aiError('auth', `API Key 不对或没有权限，请到${CFG_AT}检查密钥`);
@@ -283,15 +210,8 @@ function translate(status, rawKind) {
  * 功能：起一个「总时长 + 停止」的**外挂守卫**，与消费流程竞速。
  *
  * 说明：⭐ 从调用一刻起计时，**响应头到了也不拆**（总时长管的是全流程）；
- *      每 250ms 查一次 —— `shouldAbort()` 为真（客户端走了 / 用户点了停止）或计时到了，
- *      就 `req.destroy()` 掐掉上游并 reject 转译错误。`dispose()` 由消费流程收尾时调用
- *      （守卫没开火就正常拆掉，不留悬挂计时器）。
- *      ⚠️ 请求侧必须在 `mod.request()` 造出请求对象后调 `attachReq(req)` 登记 ——
- *      守卫开火时手里得有东西可掐。
- *
- * @param {{totalMs: number, shouldAbort: ?Function}} copts - 守卫参数
- * @returns {{promise: Promise.<never>, dispose: Function, attachReq: Function}} 竞速用的 promise、
- *          正常收尾的拆钩、与请求对象的登记口
+ * 每 250ms 查一次 —— `shouldAbort()` 为真（客户端走了 / 用户点了停止）或计时到了，
+ * 就 `req.destroy()` 掐掉上游并 reject 转译错误。`dispose()` 由消费流程收尾时调用
  */
 function startGate(copts) {
   let timer = null;
@@ -320,12 +240,8 @@ function startGate(copts) {
  * 功能：竞速包装 —— 消费流程与守卫赛跑，谁先到谁说了算；收尾时把守卫拆干净。
  *
  * 说明：⚠️ 守卫抢先时，消费流程还会在其自己的异步上下文里收尾（流被 destroy 后自然终止），
- *      它随后的失败必须**吞掉**（`work.catch(() => {})`），否则就是一条 unhandledRejection ——
- *      给用户的错误以守卫的转译话术为准。
+ * 给用户的错误以守卫的转译话术为准。
  *
- * @param {Function} work - 返回消费流程 promise 的工厂（入参是守卫句柄）
- * @param {{totalMs: number, shouldAbort: ?Function}} copts - 守卫参数
- * @returns {Promise.<*>} 胜者的结果
  */
 function raceGate(work, copts) {
   const gate = startGate(copts);
@@ -338,12 +254,8 @@ function raceGate(work, copts) {
  * 功能：发一次上游请求，接住**响应头**（建连闸在这里兑现）。
  *
  * 说明：⭐ 返回 `{ req, res }` 交给调用方继续消费响应体 —— `chatOnce` 全量收、`chatStream` 逐帧读。
- *      失败路径在这里收口（建连闸超时 / 网络层错误 / 密钥非法字符）；总时长与停止归 `startGate()` 管。
- *      ⚠️ 造出来的请求对象经 `copts.onReq` 登记给守卫 —— 那是它开火时唯一能掐的东西。
- *
- * @param {{baseUrl: string, path: string, method: string, apiKey: string, body: ?string,
- *          connectMs: number, onReq: Function}} opts - 请求参数
- * @returns {Promise.<{req: Object, res: Object}>} 响应头到达后的请求/响应对
+ * 失败路径在这里收口（建连闸超时 / 网络层错误 / 密钥非法字符）；总时长与停止归 `startGate()` 管。
+ * 造出来的请求对象经 `copts.onReq` 登记给守卫 —— 那是它开火时唯一能掐的东西。
  */
 function requestUpstream(opts) {
   return new Promise((resolve, reject) => {
@@ -354,9 +266,9 @@ function requestUpstream(opts) {
       return reject(aiError('request', `接口地址不合法，请到${CFG_AT}检查`));
     }
     const mod = url.protocol === 'https:' ? https : http;
-    // ⭐ 0.9.8：**密钥为空就不发 `Authorization` 头** —— 本地模型（ollama / LM Studio / vLLM）
-    //    本来就没有密钥，发一个空的 `Bearer ` 反而会被某些反代判成「凭证不合法」回 401。
-    //    ⚠️ 判据只有这一处：`chatOnce` / `chatStream` / `listModels` 全走本函数。
+    // **密钥为空就不发 `Authorization` 头** —— 本地模型（ollama / LM Studio / vLLM）
+    // 本来就没有密钥，发一个空的 `Bearer ` 反而会被某些反代判成「凭证不合法」回 401。
+    // 判据只有这一处：`chatOnce` / `chatStream` / `listModels` 全走本函数。
     const headers = {};
     const key = typeof opts.apiKey === 'string' ? opts.apiKey : '';
     if (key) headers.Authorization = `Bearer ${key}`;
@@ -365,8 +277,8 @@ function requestUpstream(opts) {
       headers['Content-Length'] = Buffer.byteLength(opts.body);
     }
     const reqOpts = { method: opts.method, headers };
-    // ⭐ 0.9.8：本机 / 内网的 https 放行自签证书（判据只住 `tlsAllowInsecure()` 一处）；
-    //    公网域名保持 Node 默认的严格校验 —— 这一行是 `https://` 能连上本地模型的唯一开关
+    // 本机 / 内网的 https 放行自签证书（判据只住 `tlsAllowInsecure()` 一处）；
+    // 公网域名保持 Node 默认的严格校验 —— 这一行是 `https://` 能连上本地模型的唯一开关
     if (tlsAllowInsecure(url.href)) reqOpts.rejectUnauthorized = false;
     let settled = false;
     let connectTimer = null;
@@ -376,8 +288,8 @@ function requestUpstream(opts) {
       if (connectTimer) clearTimeout(connectTimer);
       fn(arg);
     };
-    // ⭐ 密钥 / 地址里的非法字符（HTTP 头只认 latin-1）是**同步** throw —— 在这里接住翻成人话，
-    //    绝不把 Node 的原始报错（含配置内容）漏给调用方
+    // 密钥 / 地址里的非法字符（HTTP 头只认 latin-1）是**同步** throw —— 在这里接住翻成人话，
+    // 绝不把 Node 的原始报错（含配置内容）漏给调用方
     const badCharError = () =>
       aiError('request', `接口配置里有无法发送的字符（一般是密钥没复制完整），请到${CFG_AT}重新粘贴`);
     let req;
@@ -394,7 +306,7 @@ function requestUpstream(opts) {
       return reject(badCharError());
     }
     opts.onReq(req);
-    // ⭐ 建连闸：到点还没拿到响应头就掐 —— 「地址填错 / 对方不在线」在这里被抓住
+    // 建连闸：到点还没拿到响应头就掐 —— 「地址填错 / 对方不在线」在这里被抓住
     connectTimer = setTimeout(() => {
       req.destroy();
       done(reject, translate(0, 'timeout'));
@@ -437,11 +349,6 @@ async function errorFromStatus(res) {
  * @param {Object} opts - 请求参数
  * @param {string} opts.baseUrl - 接口地址（http/https）
  * @param {string} opts.apiKey - API Key 明文（只进 Authorization 头，绝不落日志；**空串 = 不发这个头**，本地模型用）
- * @param {string} opts.model - 模型名
- * @param {Array.<{role: string, content: string}>} opts.messages - 消息数组（V1 只有一两条）
- * @param {{connectMs?: number, totalMs?: number, shouldAbort?: Function}} [copts] - 可选：测试用的小超时 / 中止钩子
- * @returns {Promise.<string>} 模型回复文本
- * @throws {Error} 带 `kind` 的转译错误（响应不是 200 / 回复缺字段 / 响应体不是 JSON）
  */
 async function chatOnce(opts, copts) {
   const c = copts || {};
@@ -483,16 +390,8 @@ async function chatOnce(opts, copts) {
  * 功能：流式问答 —— 同一路径 + `stream:true`，SSE 逐帧解析，`onDelta(text)` 逐段回调。
  *
  * 说明：SSE 的帧格式是 `data: {json}\n\n`（`chat/stream.js` 的 `frame()` 同源）；
- *      ⚠️ 网络分片可能把一帧撕成两半，所以**必须自己缓冲**到 `\n\n` 再解析。
- *      `[DONE]` 是 OpenAI 兼容接口的结束标记。回调抛错 = 调用方不想要了，掐上游并原样上抛。
- *
- * @param {Object} opts - 请求参数（同 `chatOnce`，另加）
- * @param {Function} opts.onDelta - 每收到一段增量文本就调用（入参是该段文本）
- * @param {?Function} [opts.onOpen] - 可选：上游回 200（= 已被接受）时调用一次 ——
- *        调用方用它决定「用户消息落库 / 发 start 帧」的时机
- * @param {{connectMs?: number, totalMs?: number, shouldAbort?: Function}} [copts] - 可选（同 `chatOnce`）
- * @returns {Promise.<string>} 拼好的完整回复文本
- * @throws {Error} 带 `kind` 的转译错误
+ * 网络分片可能把一帧撕成两半，所以**必须自己缓冲**到 `\n\n` 再解析。
+ * `[DONE]` 是 OpenAI 兼容接口的结束标记。回调抛错 = 调用方不想要了，掐上游并原样上抛。
  */
 async function chatStream(opts, copts) {
   const c = copts || {};
@@ -513,8 +412,8 @@ async function chatStream(opts, copts) {
       onReq: gate.attachReq,
     });
     if (res.statusCode !== 200) throw await errorFromStatus(res);
-    // ⭐ 「上游接受了」以「状态码 200」为准 —— 401 / 429 不算接受，调用方据此决定
-    //    用户消息落不入库（没被上游收到的东西不进会话历史）
+    // 「上游接受了」以「状态码 200」为准 —— 401 / 429 不算接受，调用方据此决定
+    // 用户消息落不入库（没被上游收到的东西不进会话历史）
     if (opts.onOpen) {
       try {
         opts.onOpen();
@@ -585,12 +484,8 @@ async function listModels(opts, copts) {
  * 功能：模型回复的**三层兜底 JSON 解析**。
  *
  * 说明：依次尝试 —— ① 直接 parse；② 剥掉 ```json 围栏后 parse；
- *      ③ 从文本里截出**第一个配平的** `{…}` / `[…]` 块再 parse（模型爱在 JSON 前后加客气话）。
- *      三层都失败返回 null（调用方报 400 `reason:'format'`，绝不猜）。
- *      ⚠️ 字符串字面量里的引号 / 转义必须跳过，否则配平扫描会被 `"说}"` 这类内容骗走。
- *
- * @param {string} text - 模型回复原文
- * @returns {?*} 解析出的值；三层都失败为 null
+ * ③ 从文本里截出**第一个配平的** `{…}` / `[…]` 块再 parse（模型爱在 JSON 前后加客气话）。
+ * 三层都失败返回 null（调用方报 400 `reason:'format'`，绝不猜）。
  */
 function parseLooseJson(text) {
   const s = String(text == null ? '' : text).trim();
@@ -639,43 +534,20 @@ function parseLooseJson(text) {
 
 // ==================== 3 期：文本协议的工具面 ====================
 //
-// ⚠️ 只 require 工具目录（`lib/tools.js`）—— 那个文件刻意不 require 任何东西，所以这里
-//    不会顺着装配链把 `core/context.js` 拉进来（一 require 就建库，存储层单测会失去独立性）。
+// 只 require 工具目录（`lib/tools.js`）—— 那个文件刻意不 require 任何东西，所以这里
 
 /**
- * 功能：拼「你可以用的工具」这一段 system 提示 —— ⭐ **只写已授权的**（方案 §13.2 步骤 2-3）。
  *
- * 说明：⭐ 这是文本协议（方案 §4.6 走 ①）：服务端在提示里约定「需要数据就输出一个
- *      `{"tool":…,"args":…}`」，解析后执行、把结果回灌为下一条消息。
- *      ⚠️ **没开工具 / 读与写一条都没授权 ⇒ 回空串** —— 出网请求体里因此一条工具说明都不带，
- *      与「没这个功能」时的请求逐字相同（用例 1 咬的就是这一点）。
- *      ⚠️ 只列**已授权**的那几条：列了不给，等于诱导模型去试，然后每轮都被拒。
- *      ⚠️ 方案 §4.3：读工具是「现在 / 占用 / 事情」一套 —— 只给其中一部分时**必须说清**
- *      「你的信息不完整」，否则模型会拿半份数据排出个像模像样的废计划。
- *
- * ⭐⭐ **0.7.8 修（「确认卡从上线起就不可达」那条缺陷）**：**提示词只许承诺模型真有的能力**。
- *      原来的实现只筛 `mode === 'read'` ⇒ 唯一的写工具 `tasks.propose_create` **从来不进提示词**，
- *      可 `CHAT_SYSTEM` 却写着「你提出的建议会变成一张待确认的卡片」⇒ 模型只能**用文字模仿**
- *      一张卡、再编一句「卡片已经发出去了」（正是提示词叫它别做的事）。三处一起改：
- *      · 读 / 写**分开筛**（授权判据仍走 `toolsLib.isAuthorized()` 那**一处**）；
- *      · 「一条都没有」要看**两者都空**（原来只判读 ⇒ **只授权写、不授权读**时返回空串，
- *        写工具照样不可达 —— 这是同一个 bug 的第二个入口）；
- *      · **没有写工具授权时必须明说「这项能力没开」** —— 旧提示词的病根不是「说错了」，
- *        而是**只说了一半**：它只写了「有卡片」，从没说「你现在没有」。
- *      ⚠️ 写工具段里⛔ 不写代码里的护栏（一次最多几条、最多几轮调用）——
- *      护栏在代码里，写进提示词只会被模型当成「必须复述的规则」。
- *
- * @param {{enabled: boolean, read: Array.<string>, write: Array.<string>}} auth - `store.aiAuthorizedTools()` 的产物
- * @returns {string} 提示词段落；不该带工具时为**空串**
+ * `{"tool":…,"args":…}`」，解析后执行、把结果回灌为下一条消息。
  */
 function toolsPrompt(auth) {
   const a = auth || {};
   if (!a.enabled) return '';
-  // ⭐ 0.7.8：读 / 写分开筛（原来只筛读 —— 写工具因此从来没机会出现在提示词里）
+  // 读 / 写分开筛（原来只筛读 —— 写工具因此从来没机会出现在提示词里）
   const readOn = toolsLib.TOOLS.filter((t) => t.mode === 'read' && toolsLib.isAuthorized(t, a));
   const writeOn = toolsLib.TOOLS.filter((t) => t.mode === 'write' && toolsLib.isAuthorized(t, a));
-  // ⚠️⭐ 0.7.8：**两者都空**才是「一条工具都没有」。原来只判 `readOn` ⇒
-  //    「只授权写、不授权读」时这里就早退了，写工具永远到不了模型手里。
+  // **两者都空**才是「一条工具都没有」。原来只判 `readOn` ⇒
+  // 「只授权写、不授权读」时这里就早退了，写工具永远到不了模型手里。
   if (!readOn.length && !writeOn.length) return '';
   const lines = [
     '【你可以用的工具】',
@@ -683,9 +555,9 @@ function toolsPrompt(auth) {
     '形如 {"tool":"工具名","args":{…}}，不要输出任何其它字。服务端会执行它，并把结果发给你；',
     '你拿到结果后再用简体中文回答用户。可用工具：',
     '· now.info —— 现在是什么时候（日期 / 周几 / 当前时刻 / 本周剩余天数）。无入参。',
-    // ⭐⭐ 0.8.55：「给ai更高的查询条件，可以让它自己选择日期、筛选条件」。
-    //    这段必须写在**最前面**：模型原来会老老实实回「账单工具只有四档，我做不到」——
-    //    数据明明在库里，是它不知道自己有权限自己算日期。
+    // 「给ai更高的查询条件，可以让它自己选择日期、筛选条件」。
+    // 这段必须写在**最前面**：模型原来会老老实实回「账单工具只有四档，我做不到」——
+    // 数据明明在库里，是它不知道自己有权限自己算日期。
     '⭐⭐ 关于日期：下面这些工具大多可以用 {"from":"2026-09-01","to":"2026-09-30"} **自己指定区间**' +
       '（YYYY-MM-DD，含头含尾，一次最多 366 天）。用户说「上个月」「9 月那两周」「国庆那几天」时，' +
       '你要**自己按今天的日期算好区间再传**，⛔ 不要因为枚举里没有那一档就说「做不到」。',
@@ -708,14 +580,12 @@ function toolsPrompt(auth) {
       '· timetable.next —— 用户的下一节课（含还有多久上课）。无入参。',
     );
   }
-  // ⭐⭐ 0.8.4：记账那三条 —— 账单 / 预算 / 资产。
-  //    ⚠️⭐ 「金额单位是分」必须在这里说死：它是最容易让模型答错的一处（回一句「你花了 3500 元」）。
+  // 记账那三条 —— 账单 / 预算 / 资产。
+  // 「金额单位是分」必须在这里说死：它是最容易让模型答错的一处（回一句「你花了 3500 元」）。
   if (a.read.includes('ledger')) {
     lines.push(
       '· ledger.bill —— 用户的收支账单（区间收入 / 支出 / 结余 ＋ 支出分类 ＋ 最近几笔）。' +
-        // ⭐ 2026-11-05（老大：「AI 获取不到记账的备注信息」）：recent 里现在带 note。
-        //    ⚠️ 必须在这里说一句 —— 工具面多了一格而提示词不知道，模型就仍然答「看不到备注」
-        //    （与 0.8.5 那次「加了工具却没加提示词」是同一类事故）。
+        // 必须在这里说一句 —— 工具面多了一格而提示词不知道，模型就仍然答「看不到备注」
         '⭐ 最近几笔（recent[]）里每笔都带 note（用户自己写的备注，可能为空串）：' +
         '问「那笔备注写的什么」「哪几笔是报销」时**直接引用**它；' +
         '⛔ 空串就如实说「这一笔没写备注」，⛔ 不要替用户编一句、也不要当它是分类依据。' +
@@ -724,8 +594,7 @@ function toolsPrompt(auth) {
         '**问「上个月花了多少」「9 月和 10 月比」时就用它**，别再回答「没有上月这一档」。' +
         '还能加 {"category":"餐饮-早餐"} 只统计这一个分类（**二级分类请用「一级-二级」全称**；' +
         '只写二级名时若本机有多个同名分类，会明确报错并列候选）。',
-      // ⭐⭐ 0.9.7（老大：「一次请求 1 月 2 月 6 月 9 月的记账信息」）：
-      //    一轮最多 3 次工具调用，逐月查根本查不完 ⇒ 必须教它一次带多段。
+      // 一轮最多 3 次工具调用，逐月查根本查不完 ⇒ 必须教它一次带多段。
       '  ⭐⭐ **一次查好几个月**：用 {"months":["2026-01","2026-02","2026-06","2026-09"]}' +
         '（或 {"periods":[{"from":"2026-01-01","to":"2026-01-31"},…]}，最多 12 段）——' +
         '结果里会有 multi:true 与 periods[]，每一段各一份合计与分类。' +
@@ -733,7 +602,7 @@ function toolsPrompt(auth) {
       '· ledger.budget —— 用户的预算进度（总预算与各分类预算的额度 / 已用 / 剩余 / 超没超）。' +
         '入参 {"range":"month"}，range 取 week（本周）、month（本月）、year（本年）。',
       '· ledger.assets —— 用户的资产快照（资产合计 / 负债合计 / 净值 ＋ 各账户余额）。无入参。',
-      // ⭐⭐ 0.9.7：取名口 —— 记账提议里的分类 / 账户只能用这里出现过的名字
+      // 取名口 —— 记账提议里的分类 / 账户只能用这里出现过的名字
       '· ledger.catalog —— 记账**真实存在的**分类树 ＋ 账户 ＋ 默认账户。无入参。' +
         '⭐ 用户让你记账、或你准备调用 ledger.propose_entry 之前，**先查一次它**：' +
         'categories 里的一级名与二级名（以及 full）才是本机真有的；defaults 是他设的默认账户。' +
@@ -744,13 +613,9 @@ function toolsPrompt(auth) {
         '只报二级名会把两笔不同的钱说成一笔。',
     );
   }
-  // ⭐⭐ 0.8.5（真机报的「这三块 AI 读不到」）：收藏夹 / 随手记 / 硬件 —— 三条读工具。
-  //    ⚠️⭐ 这一段**曾经整个漏掉**：上面那些 `if` 是**手写清单**，加模块时只加了白名单（`READ_MODULES`）
-  //    却没有加这里 ⇒ 已授权、执行器也在、用例也过，**但模型压根不知道有这些工具**，
-  //    于是老实回答「我没有对应的工具可调用」。⇒ 定式：**加一条工具 = 白名单 ＋ 提示词，两处一起加**
-  //    （`ttt/test/ai.test.js` 的 `toolsPrompt` 那条用例现在把三块也钉住了）。
-  //    ⚠️ 这三块的出网面**比前面几条更窄**，必须在这里说清「你拿到的是什么、拿不到什么」——
-  //    否则模型会以为自己能拿到完整网址 / 序列号，答不上来时就开始编。
+  // ：收藏夹 / 随手记 / 硬件 —— 三条读工具。
+  // 却没有加这里 ⇒ 已授权、执行器也在、用例也过，**但模型压根不知道有这些工具**，
+  // 于是老实回答「我没有对应的工具可调用」。⇒ 定式：**加一条工具 = 白名单 ＋ 提示词，两处一起加**
   if (a.read.includes('bookmarks')) {
     lines.push(
       '· bookmarks.query —— 用户的网址收藏（标题 / 网站域名 / 分类名 / 来源）。' +
@@ -775,8 +640,7 @@ function toolsPrompt(auth) {
         '⚠️ 价格单位是**元**（与记账那种「分」不是一回事）；序列号 / 位置 / 详细内容读不到。',
     );
   }
-  // ⭐⭐ 0.8.6（行程 / 车票）—— 照上面那些 `if` 同款加（方案 §9.7-2 明写照这个形状加）。
-  //    ⚠️ `reason` 那一项要在这里讲明白：模型不看它就会把 disabled 说成「你最近没有出行安排」。
+  // `reason` 那一项要在这里讲明白：模型不看它就会把 disabled 说成「你最近没有出行安排」。
   if (a.read.includes('trip')) {
     lines.push(
       '· trips.query —— 用户的行程与车票（行程的标题与起止日期；车票的票型 / 车次 / 出发站 / 到达站 / ' +
@@ -786,11 +650,9 @@ function toolsPrompt(auth) {
         'empty（确实没有）—— disabled 时如实说「这块关掉了」，⛔ 别当成「没有行程」。',
     );
   }
-  // ⭐⭐ 0.8.55 全面体检（「几乎所有模块都有更新和变化，ai对话辅助几乎没有了」）：
-  //    四块新读数 —— 资产 / 日历 / 番茄钟 / 协作项目。
-  //    ⚠️⭐ 这一段是**手写清单**，历史上漏过一次（0.8.5 漏了收藏夹 / 随手记 / 硬件三块，
-  //    表现是「模型老实回答我没有这个工具」）。定式不变：**加一条工具 = 白名单 ＋ 提示词，两处一起加**，
-  //    `ttt/test/ai.test.js` 的 toolsPrompt 用例逐块钉住。
+  // 全面体检（「几乎所有模块都有更新和变化，ai对话辅助几乎没有了」）：
+  // 四块新读数 —— 资产 / 日历 / 番茄钟 / 协作项目。
+  // 表现是「模型老实回答我没有这个工具」）。定式不变：**加一条工具 = 白名单 ＋ 提示词，两处一起加**，
   if (a.read.includes('assets')) {
     lines.push(
       '· assets.query —— 用户的**个人资产台账**（分组与条目：这些东西值多少）。' +
@@ -826,9 +688,9 @@ function toolsPrompt(auth) {
         '⚠️ reason 为 empty 表示他还没参与任何协作项目（⛔ 不是「读不到」）。',
     );
   }
-  // ⭐⭐ 0.7.8：写工具这一段**有授权才列**；没授权就在下面明说「没开」。
-  //    ⚠️ 入参形状照 `tools-write.js` 的 `args` 写（那里是给人看的说明）。
-  //    ⛔ 不写内部字段名（`meta` / `task_proposal` / `items`）—— 那是内部约定，不该教给模型。
+  // 写工具这一段**有授权才列**；没授权就在下面明说「没开」。
+  // 入参形状照 `tools-write.js` 的 `args` 写（那里是给人看的说明）。
+  // 不写内部字段名（`meta` / `task_proposal` / `items`）—— 那是内部约定，不该教给模型。
   if (a.write.includes('tasks')) {
     lines.push(
       '· tasks.propose_create —— 提议建一条任务。入参 ' +
@@ -836,7 +698,7 @@ function toolsPrompt(auth) {
         '每条 title 必填；due 是 YYYY-MM-DD（原文没说就留空）；important / urgent 填 true 或 false；' +
         'scope 取 daily（日常任务）或用户自己的项目 id（拿不准就留空或写 daily）；' +
         'kind 取 plain（普通，默认）/ window（限时完成）/ cycle（周期打卡）。',
-      // ⭐ 0.8.55：周期任务要带规则 —— 用户说「每天背单词」时它才建得对
+      // 周期任务要带规则 —— 用户说「每天背单词」时它才建得对
       '  ⚠️ 只有 kind=cycle 才带 rule，格式是 {"freq":"daily"} 或 {"freq":"weekly","slots":[[1,1],[3,3]]}' +
         '（1 = 周一；每一期是一个 [起,止] 闭区间）。用户没说清「哪几天」时**先问一句**，⛔ 别自己定成每周一。',
       '  什么时候用它：用户让你「记一条待办」「提一个任务」「把这段整理成任务」的时候。',
@@ -846,8 +708,8 @@ function toolsPrompt(auth) {
         '或者按用户接下来的说明改好再提一次，不要原样重复上一次的提议。',
     );
   }
-  // ⭐⭐ 0.8.4：记账那一笔 —— 与任务同一套模式（提议 → 卡片 → 点确认才落库）。
-  //    ⚠️ 金额单位反过来：**入参给「元」**（用户嘴上说的就是元），服务端换算成「分」再进卡。
+  // 记账那一笔 —— 与任务同一套模式（提议 → 卡片 → 点确认才落库）。
+  // 金额单位反过来：**入参给「元」**（用户嘴上说的就是元），服务端换算成「分」再进卡。
   if (a.write.includes('ledger')) {
     lines.push(
       '· ledger.propose_entry —— 提议记一笔账。入参 ' +
@@ -855,7 +717,6 @@ function toolsPrompt(auth) {
         '"category":"餐饮","subcategory":"午饭","account":"微信","note":"午饭"}]}}；' +
         '每条 amount 必填（单位**元**，可以带小数）；ie 取「支出」或「收入」（没说就按支出）；' +
         'at 是 YYYY-MM-DD（原文没说就留空，服务端会按今天算）；note 可留空。',
-      // ⭐⭐ 0.9.7（老大：「分类和二级分类、账户都要选择真实存在的」）
       '  ⚠️⭐ category 填**一级**分类名、subcategory 填它下面的**二级**名（没有二级就只填 category）；' +
         '也可以把全称直接写进 category（如「餐饮-午饭」）。**只能填 ledger.catalog 里出现过的名字** ——' +
         '本机没有的名字不会被替你新建，卡上会标「分类未匹配」。所以记账前先查一次 ledger.catalog。',
@@ -869,8 +730,8 @@ function toolsPrompt(auth) {
         '或者按用户接下来的说明改好再提一次，不要原样重复上一次的提议。',
     );
   }
-  // ⭐⭐ 0.8.5：收藏 / 随手记 / 硬件那三笔 —— 与上面两条**同一套模式**（提议 → 卡片 → 点确认才落库）。
-  //    ⚠️ 与读侧同一个漏法（这份提示词是手写清单）—— 一起补上。
+  // 收藏 / 随手记 / 硬件那三笔 —— 与上面两条**同一套模式**（提议 → 卡片 → 点确认才落库）。
+  // 与读侧同一个漏法（这份提示词是手写清单）—— 一起补上。
   if (a.write.includes('bookmarks')) {
     lines.push(
       '· bookmarks.propose_create —— 提议收藏一个网址。入参 ' +
@@ -906,7 +767,6 @@ function toolsPrompt(auth) {
         '序列号 / 位置 / 详细内容不在这张卡上（那些要用户到「数码管理」那一屏自己补）。',
     );
   }
-  // ⭐ 0.8.6（行程 / 车票）
   if (a.write.includes('trip')) {
     lines.push(
       '· trips.propose_create —— 提议建几张车票。入参 ' +
@@ -921,7 +781,6 @@ function toolsPrompt(auth) {
       '  ⚠️ 票不会自动归到哪趟行程（归到哪趟由用户自己选）—— 别承诺「已经归好了」。',
     );
   }
-  // ---- ⭐⭐ 0.8.55：资产与日历两块写面 ----
   if (a.write.includes('assets')) {
     lines.push(
       '· assets.propose_item —— 提议记一条资产。入参 ' +
@@ -947,8 +806,7 @@ function toolsPrompt(auth) {
         '你不能直接建日程，⛔ 不要说已经建好了，⛔ 也不要用文字把卡片内容抄一遍来假装那张卡片。',
     );
   }
-  // ⭐ 没开的那几种写能力必须**逐条明说「没有」**（0.7.8 的教训：只说「有卡片」、不说「你现在没有」，
-  //    模型就会照着前半句编一张卡、还声称发出去了）。
+  // 模型就会照着前半句编一张卡、还声称发出去了）。
   const noWrite = [];
   if (!a.write.includes('tasks')) noWrite.push('创建任务');
   if (!a.write.includes('ledger')) noWrite.push('记账');
@@ -959,7 +817,6 @@ function toolsPrompt(auth) {
   if (!a.write.includes('assets')) noWrite.push('记一条资产');
   if (!a.write.includes('calendar')) noWrite.push('建一条日程');
   if (noWrite.length) {
-    // ⚠️ 措辞必须说清「你现在没有」—— 且**不许**出现「待确认的卡片」这种承诺（t3 那条用例钉着）。
     lines.push(
       `注意：你现在**不能**${noWrite.map((m) => `提议${m}`).join('、')}（这些能力用户还没开）—— ` +
         '用户让你记待办或者记账时，如实说明这项能力没开、并让他去「AI 助手 → AI 写工具」里打开它；' +
@@ -969,15 +826,14 @@ function toolsPrompt(auth) {
   lines.push(
     '规则：一次只输出一个 JSON 对象；不需要数据时直接正常回答；不确定的工具名不要调用；',
     '拿到工具结果后不要再输出 JSON，直接用中文回答用户。',
-    // ⭐ 0.7.6（真机缺陷）：部分第三方部署不守上面的约定、把训练里的原生调用语法当正文吐出来
-    //    （实测是 <|DSML|invoke …> 这种标记）。这里加一句禁令 —— 对听话的模型能防住，
-    //    不听话的由轮末的 parseNativeToolCall() 兜住（两头都做，缺一不可）。
+    // ：部分第三方部署不守上面的约定、把训练里的原生调用语法当正文吐出来
+    // （实测是 <|DSML|invoke …> 这种标记）。这里加一句禁令 —— 对听话的模型能防住，
+    // 不听话的由轮末的 parseNativeToolCall() 兜住（两头都做，缺一不可）。
     '⛔ 不要用任何特殊标记或函数调用语法（例如 <|…|>、<tool_call> 之类的东西）：',
     '需要数据时就只输出上面约定的那个 JSON 对象，其余时候只输出普通话。',
   );
-  // ⚠️ 只授权了一半 ⇒ 明说「信息不完整」：半份数据排出来的计划看着很像真的，这是最坏的一种。
-  //    ⚠️⭐ 0.7.8：**这条判据仍然只看读授权** —— 写工具不提供任何「数据」，它只生成提议；
-  //    把它算进「齐不齐」里，会让「写授权开了」冒充「信息完整」，而课表其实还是读不到。
+  // 只授权了一半 ⇒ 明说「信息不完整」：半份数据排出来的计划看着很像真的，这是最坏的一种。
+  // **这条判据仍然只看读授权** —— 写工具不提供任何「数据」，它只生成提议；
   if (readOn.length && a.read.includes('tasks') !== a.read.includes('timetable')) {
     lines.push(
       '注意：用户只授权了一部分数据，你的信息是不完整的 —— 这种时候要如实说明' +
@@ -991,14 +847,8 @@ function toolsPrompt(auth) {
  * 功能：把模型的输出解析成一条**工具意图** —— ⛔ **解析失败一律返回 null（拒绝执行，不猜）**。
  *
  * 说明：⭐ 与 `parseLooseJson()` 的关键差别：那个函数有**第三层**兜底（从一段话里把平衡的
- *      JSON 抠出来）。那一层对「抽任务清单」没问题，对**意图**却是危险的 ——
- *      模型只要在正文里写个 `{"tool":…}` 的例子，第三层就会抠出来照执行。
- *      ⇒ 这里**只认整段就是 JSON**（或整段是一个 \\`\\`\\`json 围栏），一个字符的多余都不认。
- *      ⚠️ 这是反向验证 R4 的锚点：把这里改成「解析失败也返回一个默认意图」，
- *      用例 21 必红（没解析出来却执行了工具）。
- *
- * @param {string} text - 模型这一轮的完整输出
- * @returns {?{tool: string, args: Object}} 意图；不是意图（正常回答 / 解析失败）为 null
+ * JSON 抠出来）。那一层对「抽任务清单」没问题，对**意图**却是危险的 ——
+ * 模型只要在正文里写个 `{"tool":…}` 的例子，第三层就会抠出来照执行。
  */
 function parseToolIntent(text) {
   const s = String(text == null ? '' : text).trim();
@@ -1020,51 +870,27 @@ function parseToolIntent(text) {
   return { tool: name, args };
 }
 
-// ==================== 0.7.6（真机缺陷修复）：原生调用标记泄漏 ====================
 //
-// 现象（真机截图）：问「这周还有哪些课程」，模型回了一整段
+// 现象：问「这周还有哪些课程」，模型回了一整段
 // `<|DSML|calls><|DSML|invoke name="timetable.range">…` —— 它想调的工具、参数全对
-// （授权链路是通的），但没守 toolsPrompt() 的文本协议，用了它训练里的原生调用语法。
-// 只认整段 JSON 的 parseToolIntent() 对它无能为力 ⇒ 原样显示、原文落库（历史被污染，
-// 模型下一轮还会学着自己上一次的坏格式，越用越糟）。
-// ⇒ 处理分两路（都收窄在「整段以 <| 开头」这个特征上，正常回答不受影响）：
-//    ① 整段是调用标记且抽得出工具名 ⇒ 照常走执行链（判权 / 目录 / 二次校验 / 审计一道不少）；
-//    ② 像标记但抽不出 ⇒ 由 routes.js 拦下：不显示、不落原文，给用户一句人话。
 
 /**
  * 功能：判定「这一段输出**长得像**一段原生调用标记吗？」—— 只做形状判定，不抽内容。
  *
  * 说明：⚠️ 特殊 token 泄漏几乎必然以 `<|` 开头（各家推理栈的标记都是这个形状），
- *      而正常回答以 `<|` 开头的概率可以忽略 —— 所以判定刻意收窄在这里。
- *      散文**中间**引用这种语法（「它输出了 <|DSML|… 这样的标记」）不算 ——
- *      与 R4 同一种精神：拿不准就不认。
- *
- * @param {string} text - 模型这一轮的完整输出
- * @returns {boolean} trim 后以 `<|` 开头为 true
+ * 而正常回答以 `<|` 开头的概率可以忽略 —— 所以判定刻意收窄在这里。
+ * 散文**中间**引用这种语法（「它输出了 <|DSML|… 这样的标记」）不算 ——
  */
 /**
- * 「竖线」这一格：**半角 `|`（U+007C）与全角 `｜`（U+FF5C）都要认**。
- *
- * ⚠️⚠️ 的真机缺陷就是漏了全角这一半：DeepSeek 系的原生工具调用标记是
- *      `<｜｜DSML｜｜invoke name="tasks.query">`（**全角**竖线），而原来的判据写死 `^\s*<\|`，
- *      全角一个也认不出 ⇒ 形状判定为假 ⇒ 既没执行、也没拦截 ⇒ 那坨机器语法**原样落库、原样显示**。
- *      ⛔ 别把这里改回单写半角：`|` 与 `｜` 在等宽字体下几乎同形，靠肉眼复核根本看不出来。
- * @type {string}
  */
 const PIPE = '[|\\uFF5C]';
 
 /**
  * 功能：判断整段输出看起来是不是**原生工具调用标记**（而不是给用户看的正文）。
  *
- * 说明：⭐ 0.7.6 起有这条兜底：部分第三方部署不守文本协议，把训练里的原生调用语法
- *      （`<|DSML|invoke …`、DeepSeek 的 `<｜｜DSML｜｜calls>`、`<tool_call>`）直接当正文吐出来。
- *      ⚠️⭐ 这里**只认「整段以标记开头」**（`^` 锚定），而且这是**执行**的判据 ——
- *      判真之后调用方才走 `parseNativeToolCall()`，而它内部有「从文本抠 JSON」的兜底，
- *      对散文是危险的（R4 的教训：散文里引用一句这种语法就被执行了工具）。
- *      ⇒ 「散文里引用」永远不认。要判「这条该不该拦下来别显示」用 `hasNativeMarkers()`（宽版）。
- *      ⚠️ 竖线**全角半角都认**（见 `PIPE`）。
- * @param {*} text - 模型这一轮的完整输出
- * @returns {boolean} 整段以原生调用标记开头返回 true
+ * （`<|DSML|invoke …`、DeepSeek 的 `<｜｜DSML｜｜calls>`、`<tool_call>`）直接当正文吐出来。
+ * 这里**只认「整段以标记开头」**（`^` 锚定），而且这是**执行**的判据 ——
+ * 判真之后调用方才走 `parseNativeToolCall()`，而它内部有「从文本抠 JSON」的兜底，
  */
 function nativeCallShaped(text) {
   const s = String(text == null ? '' : text);
@@ -1074,14 +900,9 @@ function nativeCallShaped(text) {
 /**
  * 功能：判断这段输出里**有没有**原生调用标记的特征串（⭐ 宽版，只用于「别把它显示出来」）。
  *
- * 说明：⭐⭐ 与 `nativeCallShaped()` 的分工是**刻意**分两档的（0.8.55 定）：
- *      · **严格版**（`^` 锚定）＝「可以拿去解析并执行」—— 必须是整段就是标记；
- *      · **宽版**（本函数）＝「这段里混着机器语法」—— 覆盖「先说半句、再吐一坨标记」
- *        以及**已经落库的历史垃圾**（读出来时换成人话，⛔ 不再喂给模型看）。
- *      判据是 DeepSeek 系的专有 token 形状（`<｜｜DSML｜｜` / `<|DSML|`），
- *      ⛔ 不认泛泛的 `<`（散文里出现 `<` 很正常，误伤代价太大）。
- * @param {*} text - 任意文本
- * @returns {boolean} 含机器语法特征串返回 true
+ * **严格版**（`^` 锚定）＝「可以拿去解析并执行」—— 必须是整段就是标记；
+ * **宽版**（本函数）＝「这段里混着机器语法」—— 覆盖「先说半句、再吐一坨标记」
+ * 以及**已经落库的历史垃圾**（读出来时换成人话，⛔ 不再喂给模型看）。
  */
 function hasNativeMarkers(text) {
   const s = String(text == null ? '' : text);
@@ -1089,31 +910,16 @@ function hasNativeMarkers(text) {
   return new RegExp(`<${PIPE}{1,2}\\s*DSML\\s*${PIPE}{1,2}`, 'i').test(s);
 }
 
-// ==================== 2026-11-05（真机）：工具调用「回显」泄漏 ====================
 //
-// 现象（老大截图，第 22 轮）：气泡里整段是
-//   `命令 {"tool":"ledger.bill","args":{"range":"month","category":"创业-AI花费"}}`
-//   `[工具结果]`
-//   `{"range":"month","income":0,"expense":14000,"recent":[{"at":"2026-11-03","amount":14000,…}]}`
-// 模型把「我调用了什么 ＋ 我拿到了什么」当成**正文**写了出来。
-// ⚠️ 佐证它是复述而不是我们回灌的原样：字段名是 `expense` / `amount`，
-//    而工具真实返回的是 `expense_fen` / `amount_fen`（单位分）—— 它读完之后自己简写了。
-//
-// ⚠️⭐ 为什么**不**放宽 `parseToolIntent()` 把它认成意图去执行：
-//    R4 的锚点是「解析失败一律不执行」，而这段话的开头是「命令」两个字、不是纯 JSON。
-//    放宽等于让模型的一句**复述**变成一次**真实调用** —— 读工具还好，写工具就是凭空
-//    多一张提议卡（用户没让它记，卡先出来了）。安全边界不动。
-// ⇒ 这里只做**展示与落库的清洗**：把机器段剪掉，人话留下；剪完不剩什么就由调用方
-//    换成一句人话（与原生调用标记那一路同一个出口）。
+// `命令 {"tool":"ledger.bill","args":{"range":"month","category":"创业-AI花费"}}`
+// `[工具结果]`
 
 /**
  * 功能：量一段**配平**的 JSON 到哪里结束（认字符串里的括号与转义）。
  *
  * 说明：⚠️ 刻意**不做 `JSON.parse`** —— 模型吐的这段经常缺引号、或者被长度截断，
- *      解析必然失败，但「到哪儿结束」仍然量得出来；量完把这段从正文里剪掉就行。
+ * 解析必然失败，但「到哪儿结束」仍然量得出来；量完把这段从正文里剪掉就行。
  * @param {string} s - 整段文本
- * @param {number} start - 指向 `{` 的下标
- * @returns {number} 结束下标（**不含**，即 `}` 的后一位）；不配平返回 `-1`
  */
 function endOfJsonBlock(s, start) {
   if (s.charAt(start) !== '{') return -1;
@@ -1140,7 +946,6 @@ function endOfJsonBlock(s, start) {
 
 /**
  * 「工具回显」的前缀词 —— 模型把一次调用写成一句话时的开头。
- * ⚠️ 长的放前面（`工具调用` 要先于 `调用` 命中，否则 `startsWith` 会认错）。
  * @type {Array.<string>}
  */
 const TOOL_ECHO_HEADS = ['工具调用', '命令', '调用', '执行'];
@@ -1152,12 +957,8 @@ const TOOL_ECHO_MARKS = ['【工具结果】', '[工具结果]'];
  * 功能：判断**整段输出**是不是「工具调用回显」（模型把调用与结果当正文写了出来）。
  *
  * 说明：⚠️ 与 `hasNativeMarkers()` 的分工：那个认 DSML 特殊 token（锚定 `<|`），本函数认
- *      「命令/调用 ＋ JSON」与「【工具结果】块」这两种**自然语言回显**。
- *      两者都是**形状判定**，只用来决定「别把这段给人看」，⛔ 都不拿去执行。
- *      ⚠️ 只认**开头**（`^` 锚定）：「它输出的命令 {…} 这类东西」这种散文引用不认 ——
- *      与 R4 同一种精神，拿不准就不动。
- * @param {*} text - 模型这一轮的完整输出
- * @returns {boolean} 像工具回显返回 true
+ * 「命令/调用 ＋ JSON」与「【工具结果】块」这两种**自然语言回显**。
+ * 两者都是**形状判定**，只用来决定「别把这段给人看」，⛔ 都不拿去执行。
  */
 function toolEchoShaped(text) {
   const t = String(text == null ? '' : text).trimStart();
@@ -1174,17 +975,8 @@ function toolEchoShaped(text) {
  * 功能：判断「这段还没打完的输出」是不是**可能**正在长成一段工具回显（流式压制用）。
  *
  * 说明：⭐⭐ 与 `toolEchoShaped()` 的分工：那个判**整段**（已经收完，`^` 锚定，用来清洗）；
- *      本函数判**前缀**（还没收完，用来决定「这一帧先别发出去」）。
- *      为什么要它：模型吐的是 `命令 {…}`，首字符是中文「命」—— 旧的
- *      `looksLikeIntentPrefix()` 只认 `{` / `` ` `` / `<`，第一帧就放行了，于是整坨机器语法
- *      **边流边显示**（2026-11-05 真机截图）。压住只是**一拍**：
- *      · 词还没打完（「命」）或打完还空着（「命令」）⇒ 继续压，等它到底是不是 JSON；
- *      · 词后面紧跟 `{` / `` ` `` ⇒ 一路压到轮末（那就是回显）；
- *      · 词后面是正常文字（「命令行工具怎么用」）⇒ 立刻放行，正常回答最多慢几十毫秒。
- *      ⚠️ 判据必须与 `TOOL_ECHO_HEADS` / `TOOL_ECHO_MARKS` **同一份** ——
- *      ⛔ 在 routes 里另抄一份前缀词表（两份口径是本项目最贵的病）。
- * @param {*} text - 本轮到目前为止攒下的文本
- * @returns {boolean} 还可能长成回显（继续压着）返回 true
+ * 本函数判**前缀**（还没收完，用来决定「这一帧先别发出去」）。
+ * 为什么要它：模型吐的是 `命令 {…}`，首字符是中文「命」—— 旧的
  */
 function toolEchoPrefixish(text) {
   const t = String(text == null ? '' : text).trimStart();
@@ -1204,15 +996,8 @@ function toolEchoPrefixish(text) {
  * 功能：把正文里的「工具回显」机器段**剪掉**，只留人话。
  *
  * 说明：⭐ 剪两类（都是 `toolEchoShaped()` 认得的那两种形状，但这里**逐处**剪，
- *      不是整条判定）—— 模型常见写法是「先说半句 → 吐调用 → 吐结果 → 再接着说」，
- *      整条替换会把那半句人话也一起吃掉：
- *      · `【工具结果】` / `[工具结果]` ＋ 紧随其后的配平 JSON；
- *      · `命令` / `调用` / `工具调用` / `执行` ＋ 紧随其后的配平 JSON。
- *      ⚠️ 只剪**配平**的 JSON（`endOfJsonBlock()` 量得出结束位置）；量不出来就**不动**
- *      —— 宁可留一段垃圾，也不要把用户真正想问的那半句话剪没。
- *      ⚠️ 纯函数、不改写、不摘要：除了被剪掉的机器段，其余字符逐字保留（最后只 `trim`）。
- * @param {*} text - 任意正文
- * @returns {string} 剪完的正文（可能为空串 = 整条都是机器语法）
+ * 不是整条判定）—— 模型常见写法是「先说半句 → 吐调用 → 吐结果 → 再接着说」，
+ * 整条替换会把那半句人话也一起吃掉：
  */
 function stripToolEcho(text) {
   const s = String(text == null ? '' : text);
@@ -1257,8 +1042,8 @@ function stripToolEcho(text) {
     pos = b;
   }
   out += s.slice(pos);
-  // ⚠️ 剪掉一段之后常留下两三个连着的换行（被剪的那块前后各有一个）⇒ 折成最多一个空行。
-  //    ⛔ 只折 3 个以上的连续换行：原来就只有一个空行的地方一个字都不动。
+  // 剪掉一段之后常留下两三个连着的换行（被剪的那块前后各有一个）⇒ 折成最多一个空行。
+  // 只折 3 个以上的连续换行：原来就只有一个空行的地方一个字都不动。
   return out.replace(/\n{3,}/g, '\n\n').trim();
 }
 
@@ -1266,18 +1051,8 @@ function stripToolEcho(text) {
  * 功能：从「整段是原生调用标记」的输出里抽出一条工具意图（与 `parseToolIntent()` 同形）。
  *
  * 说明：⚠️ 只在 `nativeCallShaped()` 为真时才有意义 —— 抽取用的是 `parseLooseJson()`，
- *      它有「从文本里抠配平块」的兜底层；那个兜底对**散文**是危险的（R4），
- *      对**已确认整段都是标记**的输出才是安全的（要抽的本来就是标记里夹的参数）。
- *      ⭐ 0.8.55：认**两种**写法 ——
- *      · DeepSeek 原生：`<｜｜DSML｜｜parameter name="args" string="false">{…}</…>`
- *        ＋ `<｜｜DSML｜｜parameter name="tool" string="true">tasks.query</…>`
- *        （工具名也可能只写在 `invoke name="…"` 上）；
- *      · 老式半角：`<|DSML|invoke name="x">{…}</|…>`。
- *      ⚠️ 抽不出工具名返回 null —— 调用方据此改走「拦截话术」那一路；⛔ 这里绝不猜。
- *      工具名是否在目录内、参数是否合法由**执行链**校验（`runIntentForChat()`）。
- *
- * @param {string} text - 模型这一轮的完整输出
- * @returns {?{tool: string, args: Object}} 意图；不像原生调用标记 / 抽不出工具名为 null
+ * 它有「从文本里抠配平块」的兜底层；那个兜底对**散文**是危险的（R4），
+ * 对**已确认整段都是标记**的输出才是安全的（要抽的本来就是标记里夹的参数）。
  */
 function parseNativeToolCall(text) {
   const s = String(text == null ? '' : text).trim();

@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：FnIdResolver.kt
- * 职责：FNID 解析，查询中继主机与端口
  */
 
 package com.zxdesk.core.connection
@@ -42,8 +40,6 @@ class FnIdNotFoundException(message: String) : FnIdException(message)
 /**
  * 真解析：`POST https://5ddd.com/api/v1/fn/con`（备用 `fnos.net`）。
  *
- * 为什么用 OkHttp 而不是 `HttpURLConnection`：要挂自定义解析器 [DohDns]。
- * `fnos.net` 是 GeoDNS，论坛有同域解析事故，系统解析给不出地址时这条路得能自己走。
  */
 class HttpFnIdResolver(
     private val endpoints: List<String> = listOf(PRIMARY_ENDPOINT, FALLBACK_ENDPOINT),

@@ -22,7 +22,6 @@ class ConnectionPlannerTest {
 
     @Test
     fun httpsOnDirectPortIsDowngradedToHttp() {
-        // 8990 是明文救援端口，写 https 也按 http —— 否则必然 TLS 失败
         assertEquals("http://10.1.2.3:8990", ready("https://10.1.2.3:8990").baseUrl)
     }
 

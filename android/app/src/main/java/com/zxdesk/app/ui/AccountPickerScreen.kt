@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：AccountPickerScreen.kt
- * 职责：切换账号的整屏界面，选择、删除、新增入口
  */
 
 package com.zxdesk.app.ui
@@ -46,15 +44,6 @@ import com.zxdesk.app.store.Account
 /**
  * 切换账号（整屏，不是弹窗）。
  *
- * 两个入口共用：登录页账号框右侧的切换图标、浏览页抽屉里的「切换账号」。
- * 点一行即选中；记住过密码的账号选完直接登录，不用再输（由调用方决定是否自动连）。
- *
- * @param accounts 已保存的账号（最近使用在前）
- * @param currentKey 当前正在用的账号键（`地址\u0001账号`），用于标「当前」
- * @param onPick 选中一个账号
- * @param onDelete 删除一个账号（含它记住的密码）
- * @param onAdd 去登录一个新账号（地址与账号留空）
- * @param onClose 返回
  */
 @Composable
 internal fun AccountPickerScreen(
@@ -65,10 +54,8 @@ internal fun AccountPickerScreen(
     onAdd: () -> Unit,
     onClose: () -> Unit,
     /**
-     * 退出登录（0.2.17 起从抽屉搬到这里）。
      *
      * 为什么搬：抽屉底部只放「账户 / 设置 / 帮助」三列，账户那一列点开就是这一屏；
-     * 退出是账户级动作，跟账号列表摆在一起比塞在抽屉里更不容易点错。
      */
     onLogout: (() -> Unit)? = null,
 ) {
@@ -179,8 +166,6 @@ private data class AccountGroup(
 /**
  * 按主机分组。
  *
- * 排序：当前账号所在的组置顶（它就是用户最可能再点的那一组），其余按组内最近使用时间倒序；
- * 组内同样按最近使用倒序 —— 与账号清单本身的排序口径一致。
  */
 private fun groupByHost(accounts: List<Account>, currentKey: String?): List<AccountGroup> =
     accounts

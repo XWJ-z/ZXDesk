@@ -1,19 +1,13 @@
 /**
  * update.js —— 版本检测（问一次更新服务器「最新版是哪个」）
- *
  * 功能：`checkForUpdate` 拉一次并落盘；`readUpdate` 给出「要不要提示」的结论；
  *      `promptOf` / `dismissUpdate` 备界面用的载荷与「这一版不再提示」。
  *
- * ⚠️ 只在浏览器启动（`runtime.onStartup`）与安装/更新（`runtime.onInstalled`）各跑一次，
- *    ⛔ 不轮询、⛔ 不在 SW 每次唤醒时跑。
- * ⚠️ 查不到必须安静降级：当成「没有新版本」，⛔ 不许影响收藏与连接的任何流程。
- * ⚠️ 全插件唯一的「非 NAS」联网点：只发平台名，⛔ 不带 Cookie（不传 `credentials`）、
- *    ⛔ 不带账号、收藏内容或任何设备标识。
- * ⚠️ 扩展没有该域名的 host 权限，跨域要靠服务端 `Access-Control-Allow-Origin: *` 放行；
- *    服务端一旦收窄成官网域名，这里的检测会静默失效（权限与口径见 `Project/Edge/README.md`）。
- *
+ * 只在浏览器启动（`runtime.onStartup`）与安装/更新（`runtime.onInstalled`）各跑一次，
+ * 不轮询、⛔ 不在 SW 每次唤醒时跑。
+ * 全插件唯一的「非 NAS」联网点：只发平台名，⛔ 不带 Cookie（不传 `credentials`）…
  * @author zx
- * @since 0.1.6
+ * @since
  * 相关：Project/Edge/README.md
  */
 import { getUpdate, setUpdate } from './store.js';
@@ -25,9 +19,7 @@ const PAN_CODE = 'c6fr';
 const TIMEOUT = 6000;
 
 /**
- * 版本号取前三段数字（`0.1.6` / `v0.1.6` / `0.1`）。
- * ⚠️ 不能用字符串比较：`0.1.10` 的字典序在 `0.1.9` 之前，会把旧版当新版提示。
- * ⚠️ 后缀（`-beta.1`）按同号处理，不区分预发布 —— 本端没有 beta 通道。
+ * 后缀（`-beta.1`）按同号处理，不区分预发布 —— 本端没有 beta 通道。
  */
 const VERSION_RE = /^v?(\d{1,6})(?:\.(\d{1,6}))?(?:\.(\d{1,6}))?/;
 
@@ -67,10 +59,9 @@ export const VERSION_API = API;
 
 /**
  * 功能：拉一次最新版本并落盘。
- * ⚠️ 失败要能说出「哪一步断的」：启动时的气泡可以安静降级，但设置里手动点的那次必须如实回报，
- *    否则用户只看到「连不上」，谁也没法判断是断网、被拦、服务器 5xx，还是后台还是旧版。
+ * 失败要能说出「哪一步断的」：启动时的气泡可以安静降级，但设置里手动点的那次必须如实回报，
  * @returns {Promise<{ok:true, rec:object}|{ok:false, code:string}>}
- *   code ∈ `timeout`｜`network`｜`http_<状态码>`｜`bad_json`｜`bad_data`｜`storage`｜`exception`
+ * code ∈ `timeout`｜`network`｜`http_<状态码>`｜`bad_json`｜`bad_data`｜`storage`｜`exception`
  */
 export async function checkForUpdate() {
   let res;
