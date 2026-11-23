@@ -1,19 +1,8 @@
 /**
- * modules/secrets/mobile-lab-pane.js —— **加密信息**借「zx 实验室」那一屏的视图片段（手机版，0.9.8）
+ * modules/secrets/mobile-lab-pane.js —— **加密信息**借「zx 实验室」那一屏的视图片段
  *
  * 功能：与电脑版**同形同义** —— 一行工具条（共几条 ＋ 「＋ 新建」）＋ 列表（标题 ＋ 最后修改时间）；
- *      点一条开底部弹层看 / 改标题与正文，弹层里也有「删除这一条」。
- *
- * ⚠️⭐ **本片段自己一条加解密都不做**：它只会调 `/api/secrets`，加密在服务端完成
- *    （密码库的 DEK）。界面上能看到的只有服务端已经解好的标题与正文。
- *
- * ⚠️⭐ **锁定状态要说清楚**（与电脑版同一条）：加密信息与密码库共用同一个解锁态 ⇒
- *    密码库锁着时这里一律 403。三种状态各有各的说法，⛔ 不许混成一句「加载失败」：
- *    ① 还没设过主密码；② 已设但锁着（就地给解锁框）；③ 解锁了（正常列表）。
- *
- * ⚠️⭐ **本文件刻意不 import `mobile/app.js`**（那会绕成环）：弹层由 `mobile/ui.js` 的
- *    `openSheet()` 打开，按钮**挂在自己造的那几个节点上**（⛔ 不走宿主的 `data-act` 指令表 ——
- *    那是宿主文件，实验功能的动作不该往那里加）。
+ * 点一条开底部弹层看 / 改标题与正文，弹层里也有「删除这一条」。
  *
  * @author zx
  * @date   2026-11-07
@@ -44,18 +33,14 @@ import {
   rootSettings,
   setRootAuthorized,
   uploadFile,
-  // ⭐ 0.9.8 第 6 轮：钥匙文件（导出 / 导入 / 列表 / 删除）
   exportVaultKey,
   listVaultKeys,
   removeVaultKey,
-  // ⚠️ 0.9.8 第 11 轮：面板里**不再弹选择器**（授权统一在设置里做），
-  //    所以 `pickAuthorizedDir` / `pickFallbackHtml` / `bindPickFallback` / `showPickFallback` /
-  //    `primePicker` 这一组在**这个文件里**已经没有调用方。
-  //    留着 `takeAuthResult` / `probePicker`：授权页回调那条路（`bindAuthMessage()`）仍在监听，
-  //    只是面板不再提供入口 —— 撤掉监听属于另一件事，不在这一轮的范围里。
+  // 所以 `pickAuthorizedDir` / `pickFallbackHtml` / `bindPickFallback` / `showPickFallback` /
+  // `primePicker` 这一组在**这个文件里**已经没有调用方。
+  // 留着 `takeAuthResult` / `probePicker`：授权页回调那条路（`bindAuthMessage()`）仍在监听，
   takeAuthResult,
   probePicker,
-  // ⭐⭐ 2026-11-09（老大）：工具条那颗「阅读器」（与电脑端同一套 —— R-114）
   readerUrl,
   READER_BACK,
   // 阅读器的**自有选择器**：列授权目录（不借飞牛宿主选择器，安卓 / Windows 也能用）
@@ -63,9 +48,7 @@ import {
   listSecretDir,
   secretBrowseHtml,
 } from './shared.js';
-// ⭐⭐ 0.9.8 第 11 轮（老大）：**授权只在设置里做一次**，这里只从「已授权目录」里挑
 import { GRANT_TEXT, gotoAuth } from '../../core/grants.js';
-// ⭐ 已授权目录的**逐层浏览**（附件位置可以选子目录，2026-11-10）
 import { mountDirTree } from '../../core/dir-tree.js';
 
 /** 当前根下有多少条附件（`openRootPanel()` 顺手记下，换目录的两问要用） @type {number} */
@@ -80,9 +63,6 @@ let pickIntent = 'change';
 /**
  * 当前挂载的那一份（锁库事件要用它「关弹层 ＋ 重画锁屏」）。
  *
- * 说明：⭐⭐ 0.9.8 第 7 轮（与电脑端同一套做法 —— R-114）：`document` 上的监听只挂一次，
- *      每次进这一屏都会造一棵新树 ⇒ 用模块级句柄指向「当前这一份」。
- * @type {?{paint: Function}}
  */
 let live = null;
 
@@ -92,19 +72,15 @@ let vaultBound = false;
 /**
  * 功能：挂 `zx:vault-locked` / `zx:vault-locking`（幂等）。
  *
- * 说明：⭐⭐ 老大 2026-11-09：「锁定过后自动回到这个界面」——手机端同样要关掉底部弹层
- *      （正开着一条记录的正文 / 视频不该留在屏幕上），再画回锁定屏。
+ * （正开着一条记录的正文 / 视频不该留在屏幕上），再画回锁定屏。
  * @returns {void}
  */
 /** 授权页结果的 `message` 监听挂过没有（`window` 只挂一次） */
 let authMsgBound = false;
 
 /**
- * 功能：听系统授权页回调页发回来的结果（0.9.8 第 8 轮，与电脑端同一套做法）。
  *
  * 说明：⚠️ 同源 ＋ 事件类型 ＋ `state` 三项都核（`takeAuthResult()` 内部），
- *      ⛔ 不能只信 `message` 里的 `path`。
- * @returns {void}
  */
 function bindAuthMessage() {
   if (authMsgBound) return;
@@ -114,7 +90,6 @@ function bindAuthMessage() {
     const p = takeAuthResult(e.data);
     if (!p) return;
     probePicker('auth-page');
-    // ⭐ 2026-11-09：按「这次选目录的意图」落地（换目录 / 重新关联），⛔ 不再一律当换目录
     if (live && typeof live.applyPicked === 'function') live.applyPicked(p);
   });
 }
@@ -141,10 +116,6 @@ function bindVaultEvents() {
 /**
  * 骨架：一行工具条 ＋ 一个列表容器 ＋ 一颗右下角的圆形 ＋（新建）。
  *
- * 说明：⭐⭐ 「新建」改成**与全局那颗 `#fab` 逐字同款**的圆形 ＋（`.fab` ＋ 同一个 SVG 路径）：
- *      同一个动作全应用一个样子。工具条那行留给「关于这一屏的设置」（附件位置）。
- *      ⚠️ 定位由 `.secrets-pane > .fab` 覆盖成「相对这一块」—— 全局 `.fab` 是相对整页算的，
- *      直接用会跑到标签栏那一层去（实验室片段在 `.lab-host` 里，不是 `.view` 的直接孩子）。
  */
 const SKELETON = `
   <div class="secrets-bar">
@@ -160,7 +131,6 @@ const SKELETON = `
   </button>`;
 
 /**
- * 功能：把「2026-11-07 14:03:22」写成「2026-11-07 14:03」—— 秒对列表没有意义。
  * @param {*} v - 服务端给的时间戳
  * @returns {string} 短时间；取不到时返回空串
  */
@@ -178,7 +148,7 @@ export async function render(ctx) {
   const root = document.createElement('div');
   root.className = 'secrets-pane';
   root.innerHTML = SKELETON;
-  // ⚠️ 先进文档：下面所有渲染都往这棵子树里写
+  // 先进文档：下面所有渲染都往这棵子树里写
   ctx.container.appendChild(root);
 
   const list = root.querySelector('#secrets-list');
@@ -198,9 +168,8 @@ export async function render(ctx) {
    * 功能：一条记录的 HTML（手机：标题一行，概要在**第二行**小字，时间仍在右侧）。
    *
    * 说明：⚠️ 手机屏幕窄，概要挤在同一行会把标题压没 ⇒ 标题与概要竖着排（`.secret-main`），
-   *      时间仍是右侧那一列。文案由 `shared.js` 的 `attSummary()` 拼，与电脑端逐字一致。
+   * 时间仍是右侧那一列。文案由 `shared.js` 的 `attSummary()` 拼，与电脑端逐字一致。
    * @param {Object} it - 列表项
-   * @returns {string} 行 HTML
    */
   const rowHtml = (it) => {
     if (it.broken) {
@@ -221,7 +190,6 @@ export async function render(ctx) {
    * @param {string} title - 主标题
    * @param {string} text - 说明
    * @param {boolean} unlock - 是否附一个解锁框
-   * @returns {void}
    */
   const notice = (ico, title, text, unlock) => {
     count.textContent = '';
@@ -279,8 +247,7 @@ export async function render(ctx) {
     }
     openSheet(
       id ? '加密信息' : '新建加密信息',
-      // ⭐ 0.9.8 第 7 轮（与电脑端逐字一致 —— R-114）：提示语只写字数限制；
-      //    100 / 8000 与服务端校验同一个数。原来那段技术说明整段撤掉（那属于设计说明）。
+      // 100 / 8000 与服务端校验同一个数。原来那段技术说明整段撤掉（那属于设计说明）。
       `<div class="field"><label for="sec-title">标题</label>
          <input id="sec-title" type="text" maxlength="100" value="${esc(it.title)}"
                 placeholder="最多 100 字" /></div>
@@ -313,13 +280,13 @@ export async function render(ctx) {
           save.disabled = false;
         }
       };
-    // ⭐ 0.9.8：已存在的条目才挂附件区（新建时还没有 id，传不了）
+    // 已存在的条目才挂附件区（新建时还没有 id，传不了）
     if (id) mountFiles(id).catch((e) => toast(e.message, true));
     const del = $('#sec-del');
     if (del)
       del.onclick = async () => {
-        // ⚠️ `askConfirm()` 的返回值就是「点没点确认」（它自己会换掉弹层内容）——
-        //    ⛔ 它**不收** `onOk` 回调：那是别的弹层库的形态，写上去只会被静默忽略。
+        // `askConfirm()` 的返回值就是「点没点确认」（它自己会换掉弹层内容）——
+        // 它**不收** `onOk` 回调：那是别的弹层库的形态，写上去只会被静默忽略。
         const ok = await askConfirm({
           title: '删除这一条？',
           text: '删掉之后找不回来（除非你从备份恢复）—— 里面的内容不会留在任何地方。',
@@ -342,10 +309,8 @@ export async function render(ctx) {
    * 功能：把一条加密信息下的**附件区**挂进弹层 —— 列表 ＋ 上传（带进度）＋ 删除 ＋ 内联预览。
    *
    * 说明：与电脑版**同形同义**（逻辑在 `shared.js`，这里只是版式不同）：
-   *      上传走 `XMLHttpRequest`（`fetch` 没有进度）、删除用两下点击确认（⛔ 不再叠一层弹层，
-   *      那会把正在编辑的正文挤掉）。
-   * @param {number} itemId - 加密信息 id
-   * @returns {Promise.<void>}
+   * 上传走 `XMLHttpRequest`（`fetch` 没有进度）、删除用两下点击确认（⛔ 不再叠一层弹层，
+   * 那会把正在编辑的正文挤掉）。
    */
   async function mountFiles(itemId) {
     const box = $('#sec-files');
@@ -462,22 +427,10 @@ export async function render(ctx) {
    * @returns {Promise.<void>}
    */
   /**
-   * 功能：**附件位置面板** —— 0.9.8 起这里管的是「授权」，不再是一个路径输入框。
-   *
    * 说明：⭐⭐ 附件目录必须由**当前飞牛用户自己授权**（`trim.file.userAccess`）。所以：
-   *      · 有网关身份（飞牛桌面 / App 内嵌页）⇒ 给「选择附件目录 / 换一个目录 / 撤销授权」；
-   *      · 没有网关身份（局域网直连、独立客户端）⇒ **只读**：能看目录与用量、能重新关联，
-   *        ⛔ 不能改授权（改授权要你的飞牛身份）。
-   *      ⚠️「撤销授权」只停止使用、**不删任何文件**，这句话必须写在确认框里。
-   * @returns {Promise.<void>}
+   * 有网关身份（飞牛桌面 / App 内嵌页）⇒ 给「选择附件目录 / 换一个目录 / 撤销授权」；
    */
   /**
-   * 功能：换目录的**两个问题**（迁移 / 删旧的）—— 手机上是一个弹层两问 ＋ 两颗按钮。
-   *
-   * 说明：⭐ 与电脑端同一份文案与联动（`shared.js` 的 `changeRootFormHtml()` / `bindRootChoice()`）。
-   *      ⚠️ 「取消」回到附件位置面板：刚点完系统选择器就落回一片空白，用户会以为出错。
-   * @param {string} path - 新目录
-   * @returns {void}
    */
   function openChangeRoot(path) {
     const foot =
@@ -519,12 +472,9 @@ export async function render(ctx) {
   /**
    * 功能：把「选中的目录」按**这次的意图**落地（换目录 / 重新关联）。
    *
-   * 说明：⭐⭐ 2026-11-09：同一个选择器现在服务两件事 ——
-   *      · `change`：换一个新目录（走两问：搬不搬 / 删不删旧）；
-   *      · `relink`：**手动定位**原来那个文件夹挪到哪儿了（只认回，不问迁移）。
-   *      三条路（系统选择器 / 系统授权页 / 手动填路径）最后都收口到这里（与电脑端同一套做法）。
-   * @param {string} path - 选中的绝对路径
-   * @returns {void}
+   * `change`：换一个新目录（走两问：搬不搬 / 删不删旧）；
+   * `relink`：**手动定位**原来那个文件夹挪到哪儿了（只认回，不问迁移）。
+   * 三条路（系统选择器 / 系统授权页 / 手动填路径）最后都收口到这里（与电脑端同一套做法）。
    */
   function applyPicked(path) {
     const v = String(path || '').trim();
@@ -567,13 +517,11 @@ export async function render(ctx) {
       return toast(e.message, true);
     }
     const cur = String(st.current || '');
-    // ⭐ 每次打开面板都记一遍「登记的目录」—— 重新关联 / 认领授权页结果时要用它判重
+    // 每次打开面板都记一遍「登记的目录」—— 重新关联 / 认领授权页结果时要用它判重
     curRoot = cur;
-    // ⭐ 0.9.8 第 6 轮：优先用服务端的**语义化路径**（与电脑端逐字一致 —— R-114 两端同改）
     const curShow = String(st.currentDisplay || cur);
     const gw = st.gatewayUser || null;
-    // ⭐⭐ 2026-11-09（老大）：面板合并后只剩「当前这一个目录」，状态描述的就是**这个路径**：
-    //    `normal` 正常 / `partial` 部分缺失 / `missing` 路径缺失（与电脑端同一份取值）
+    // `normal` 正常 / `partial` 部分缺失 / `missing` 路径缺失（与电脑端同一份取值）
     const stt = st.state && typeof st.state === 'object' ? st.state : null;
     const curRow = (st.roots || []).find((r) => r.current) || null;
     const state = stt || {
@@ -583,12 +531,11 @@ export async function render(ctx) {
       missing: curRow ? Number(curRow.missing) || 0 : 0,
     };
     const status = String(state.status || 'none');
-    // ⚠️ 「搬不搬 N 个」的那个 N 是**这个路径下**的条数（换目录只搬这些）
+    // 「搬不搬 N 个」的那个 N 是**这个路径下**的条数（换目录只搬这些）
     rootFileCount = Number(state.count) || 0;
-    // ⭐⭐ 2026-11-09（老大：「路径是每个用户自己选择的，不能按全账号算。每个账号都是独立的附件路径」）：
-    //    块里这行条数 / 大小是**这个路径自己的**（= `state.count` / `state.bytes`）。
-    //    ⛔ 不用 `st.count` / `st.bytes`（那是账号总用量）：换过目录之后两者不相等，
-    //    把别的目录的东西算在这个路径头上，用户就没法判断「该备份哪个文件夹、多大」。
+    // 块里这行条数 / 大小是**这个路径自己的**（= `state.count` / `state.bytes`）。
+    // 不用 `st.count` / `st.bytes`（那是账号总用量）：换过目录之后两者不相等，
+    // 把别的目录的东西算在这个路径头上，用户就没法判断「该备份哪个文件夹、多大」。
     const usage = Number(state.count) || 0;
     const bytes = Number(state.bytes) || 0;
     const missing = Number(state.missing) || 0;
@@ -601,7 +548,7 @@ export async function render(ctx) {
       partial: PANEL_TEXT.STATE_PARTIAL,
       missing: PANEL_TEXT.STATE_MISS,
     };
-    // ⭐ 状态下面那句话是**处置指引**，不是解释
+    // 状态下面那句话是**处置指引**，不是解释
     const stateNote =
       status === 'partial'
         ? `<p class="m-tip">${esc(PANEL_TEXT.STATE_PARTIAL_NOTE.replace('{n}', String(missing)))}</p>`
@@ -620,9 +567,7 @@ export async function render(ctx) {
          ${stateNote}`
       : `<p class="m-tip">⚠️ ${esc(PANEL_TEXT.NO_ROOT)}</p>
          <p class="m-tip">${gw ? esc(PANEL_TEXT.NO_ROOT_GW) : esc(PANEL_TEXT.NO_ROOT_APP)}</p>`;
-    // ⭐ 2026-11-09：「重新关联」只在状态不是「正常」时出现（与电脑端同一判据）
     const needFix = status === 'partial' || status === 'missing';
-    // ⭐⭐ 0.9.8 第 11 轮：不再看有没有飞牛身份 —— 这一颗是「从已授权目录里挑」，不经过 SDK
     const acts = `<div class="sec-root-acts">
         <button class="btn sm lab-cat-nav" type="button" id="sec-root-pick">${cur ? esc(PANEL_TEXT.CHANGE) : esc(PANEL_TEXT.PICK)}</button>
         ${needFix ? `<button class="btn sm lab-cat-help" type="button" id="sec-root-relink">${esc(PANEL_TEXT.RELINK)}</button>` : ''}
@@ -667,9 +612,7 @@ export async function render(ctx) {
       copyBtn.setAttribute('data-sec-copy', cur);
       bindCopy(copyBtn);
     }
-    // ⭐⭐ 0.9.8 第 11 轮（与电脑端同一套做法 —— R-114）：**这里不再弹飞牛选择器**，
-    //    授权统一在 设置 → 账号设置 → 个人授权目录 做一次；面板里只从已授权目录里挑。
-    //    ⇒ 第 8 轮那套「选择器卡住 → 授权页 / 手填路径」的兜底随之撤掉。
+    // 授权统一在 设置 → 账号设置 → 个人授权目录 做一次；面板里只从已授权目录里挑。
     /**
      * 功能：打开「选择已授权的目录」（手机端是底部弹层），选中后按意图落地。
      * @param {string} intent - `change`（换目录）｜ `relink`（重新关联，手动定位）
@@ -677,8 +620,8 @@ export async function render(ctx) {
      */
     const openPickGrant = async (intent) => {
       pickIntent = intent;
-      // ⚠️ 骨架先摆好再挂树：树会自己拉授权根并往这个容器里画，抽屉的 body 得先存在
-      // ⚠️ 「重新关联」是去**找**原地那批文件（那个目录当然不是空的）⇒ 那句话只在换目录时说
+      // 骨架先摆好再挂树：树会自己拉授权根并往这个容器里画，抽屉的 body 得先存在
+      // 「重新关联」是去**找**原地那批文件（那个目录当然不是空的）⇒ 那句话只在换目录时说
       const rule = intent === 'change' ? `<p class="m-tip">⚠️ ${esc(PANEL_TEXT.ROOT_MUST_EMPTY)}</p>` : '';
       openSheet(
         GRANT_TEXT.PICK_TITLE,
@@ -690,7 +633,7 @@ export async function render(ctx) {
       );
       const use = $('#sec-dir-use');
       let curDir = '';
-      // ⭐ 一棵可逐级展开的树 ＋ 新建文件夹（与电脑端、数据位置同一套，见 `core/dir-tree.js`）
+      // 一棵可逐级展开的树 ＋ 新建文件夹（与电脑端、数据位置同一套，见 `core/dir-tree.js`）
       mountDirTree($('#sec-dir-tree'), {
         fetchDirs: (dir) => api('GET', `/api/secrets/dirs?dir=${encodeURIComponent(dir || '')}`),
         mkdir: (parent, name) => api('POST', '/api/secrets/mkdir', { parent, name }),
@@ -722,7 +665,6 @@ export async function render(ctx) {
     const refresh = $('#sec-root-refresh');
     if (refresh) refresh.onclick = () => openRootPanel().catch((e) => toast(e.message, true));
 
-    // ---- 钥匙文件（0.9.8 第 6 轮）：导出 / 导入 / 已导入清单（与电脑端同一套逻辑）----
     bindKeyBox();
   }
 
@@ -803,7 +745,7 @@ export async function render(ctx) {
   async function paint() {
     addBtn.hidden = false;
     list.innerHTML = skeletonHtml(3);
-    // ⭐ 先问状态（这个接口不需要解锁）：它决定「没设主密码」与「锁着」这两种完全不同的处置。
+    // 先问状态（这个接口不需要解锁）：它决定「没设主密码」与「锁着」这两种完全不同的处置。
     let st;
     try {
       st = await api('GET', '/api/vault/status');
@@ -823,7 +765,7 @@ export async function render(ctx) {
     try {
       data = await api('GET', `/api/secrets?limit=${PAGE}&offset=0`);
     } catch (e) {
-      // ⚠️ 403 = 刚好在这一瞬超时锁上了（状态是上一趟问的）⇒ 回到解锁那一步，别报成「加载失败」
+      // 403 = 刚好在这一瞬超时锁上了（状态是上一趟问的）⇒ 回到解锁那一步，别报成「加载失败」
       if (e && (e.status === 403 || /锁定|解锁/.test(e.message || ''))) {
         notice('🔒', '密码库已锁定', '加密信息与密码库共用同一个解锁态 —— 输入主密码后就一起打开了。', true);
         return;
@@ -836,11 +778,11 @@ export async function render(ctx) {
     shown = items.length;
     more = !!(data && data.hasMore);
     const broken = Number((data && data.broken) || 0);
-    // ⚠️「共 N 条」用后端的 `total`（COUNT），⛔ 不是本页条数
+    // 「共 N 条」用后端的 `total`（COUNT），⛔ 不是本页条数
     count.textContent = total ? `共 ${total} 条` : '';
     if (!items.length) {
-      // ⭐ 就地写 `.empty`（图标 ＋ 一行），⛔ 不走 `emptyHtml()`：那个 helper **固定**画
-      //    「标题 ＋ 说明」两行，而这条空状态按定稿只有一行。改 helper 会波及全站空状态。
+      // 就地写 `.empty`（图标 ＋ 一行），⛔ 不走 `emptyHtml()`：那个 helper **固定**画
+      // 「标题 ＋ 说明」两行，而这条空状态按定稿只有一行。改 helper 会波及全站空状态。
       list.innerHTML = `<div class="empty">
           <div class="empty-ico">🔑</div>
           <div class="empty-text">${EMPTY_TIP}</div>
@@ -888,7 +830,7 @@ export async function render(ctx) {
     e.preventDefault();
     openOne(Number(row.getAttribute('data-sec-open')));
   });
-  // ⭐ 滚到接近底部就取下一批（阈值 160px：手机上惯性滚得快，留点余量）
+  // 滚到接近底部就取下一批（阈值 160px：手机上惯性滚得快，留点余量）
   list.addEventListener('scroll', () => {
     if (list.scrollTop + list.clientHeight < list.scrollHeight - 160) return;
     loadMore().catch(() => {
@@ -899,12 +841,11 @@ export async function render(ctx) {
   const gear = root.querySelector('#secrets-root');
   if (gear) gear.onclick = () => openRootPanel().catch((e) => toast(e.message, true));
 
-  // ⭐⭐ 工具条「阅读器」—— 从**已授权的目录**里列文件来挑（与电脑端同一套，R-114）。
-  //    ⚠️ 不走飞牛宿主选择器：安卓 / Windows / 局域网直连都没有那个通道。
+  // 工具条「阅读器」—— 从**已授权的目录**里列文件来挑（与电脑端同一套，R-114）。
+  // 不走飞牛宿主选择器：安卓 / Windows / 局域网直连都没有那个通道。
   const readerBtn = root.querySelector('#secrets-reader');
   if (readerBtn) readerBtn.onclick = () => void openReaderPicker('');
 
-  // ⭐ 0.9.8 第 7 轮：把这一份实例交给全局锁库监听（只挂一次），再画首屏
   bindVaultEvents();
   bindAuthMessage();
   live = {

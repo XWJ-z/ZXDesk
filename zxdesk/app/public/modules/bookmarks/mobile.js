@@ -1,35 +1,21 @@
 /**
- * modules/bookmarks/mobile.js —— 网址收藏夹（手机版，0.3.0）
+ * modules/bookmarks/mobile.js —— 网址收藏夹
  *
  * 功能：手机版收藏夹这一屏的全部渲染与表单 —— `renderBookmarks()` 画出搜索框、分类筛选条
- *      与卡片列表，`bmForm()` / `bmTagManageAll()` 是新增 / 编辑书签、管理标签（含新建）两个底部弹层，
- *      `bmHost()` 是域名小工具。
- *
- * ⭐ 与电脑版是**两套版式**（两端各一套 DOM，只共享 REST 契约）：
- *    电脑版是横向卡片 + 通用模态框，手机版是触控尺寸的紧凑行 + 底部弹层。
- *    所以这里的函数与 `desktop.js` 同名不同实现，且都**不共用**。
- *
- * ⚠️ 检索与分类筛选都在服务端做（`GET /api/bookmarks?q=&tag=`）——
- *    多词 AND 的语义只能有一份实现（方案 §五）。
- *
- * ⚠️ 本文件**不 import 入口**（`../app.js`）：收藏夹的两块动态区域由 `renderBookmarks()`
- *    自己重画，不借 `render()` 整屏重画 —— 那会把正在输入的搜索框连焦点一起重建。
- *    手机版多数视图会从入口取 `render`，这里是刻意的例外（理由同上）。
- *
- * ⭐ 0.5.0 模块化重构：本文件从 `mobile/views/bookmarks.js` 搬进
- *    `public/modules/<模块名>/`（方案 §二 的目标结构：前后端**物理分开、模块名对齐**）。
- *    纯搬运不改逻辑，只改了 4 行 import 的相对路径；函数体一个字没动。
+ * 与卡片列表，`bmForm()` / `bmTagManageAll()` 是新增 / 编辑书签、管理标签（含新建）两个底部弹层，
+ * `bmHost()` 是域名小工具。
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.8.19
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/14-网址收藏夹.md、docs/公共/开发方案/36-标签与分类统一.md、
- *      39-网址密码夹的卡片与按钮.md
  */
 
 import { api } from '../../core/api.js';
 import { $, copyText, esc } from '../../core/dom.js';
 import { whenText } from '../../core/date.js';
+// ⭐ 自动草稿：收藏表单按「新增 / 编辑哪一条」分键，重载后靠登记表把同一张表单再打开
+import { registerResume } from '../../core/draft.js';
 import { state } from '../../mobile/state.js';
 import { askConfirm, closeSheet, emptyHtml, openSheet, toast } from '../../mobile/ui.js';
 
@@ -327,7 +313,7 @@ function addBmPickM(name) {
  * @param {?Object} b - 要编辑的书签；为 null 时是新增
  * @returns {void}
  */
-export function bmForm(b) {
+export function bmForm(b, draftKey) {
   const picked = (b && Array.isArray(b.tag_names) ? b.tag_names : []).map((n) => String(n));
   // ⚠️⭐ 下拉列的是**全部**已有标签（⛔ 不排除已选的那几枚）：一排除就出「去掉之后加不回来」
   //    —— 去掉时下拉不会自己长回那一项。重复选同一枚由 `addBmPickM()` 的守卫静默挡掉。
@@ -357,6 +343,13 @@ export function bmForm(b) {
       b ? '保存' : '收藏'
     }</button>
      <button class="btn ghost" type="button" data-act="sheet-close">取消</button>`,
+    {
+      // ⚠️ 编辑 A 与编辑 B 是同一张表单的两次调用 —— 键里必须带 id，
+      //    否则两份草稿会互相覆盖（打开 B 会看到 A 没保存的网址 / 标题）。
+      // 恢复槽里记着原草稿键时用它（重开后重算的键可能对不上，回填就成了空的）
+      draft: draftKey || (b && b.id ? `bm-edit:${b.id}` : 'bm-new'),
+      resume: { kind: 'bm-form', payload: { bookmark: b || null } },
+    },
   );
   // ⚠️ 弹层内容每次都是新造的 ⇒ 在这里绑一次就够（⛔ 别挂到 document 上，那会越挂越多）。
   //    以下三处与随手记 `bindTagInputM()` / 电脑端 `openBmForm()` **逐字同构**。
@@ -913,3 +906,6 @@ export async function mountBookmarks() {
   }
   renderBookmarks();
 }
+
+// 重载恢复：「收藏一个网址」与「编辑网址」登记成同一张表单再打开一次（草稿由 `openSheet()` 自动回填）
+registerResume('bm-form', (p, key) => bmForm((p && p.bookmark) || null, key));

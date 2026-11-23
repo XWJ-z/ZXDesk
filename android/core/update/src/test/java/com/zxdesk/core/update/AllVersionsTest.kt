@@ -8,11 +8,6 @@ import org.junit.Test
 /**
  * `GET /api/version` 的解析判据。
  *
- * 关键是**两种服务端都要认**：
- * ① 新版带 `status`（`app_version.status` 那一列）→ 版本与状态都拿出来；
- * ② 老版没有 `status` 键 → 版本照常拿，状态留空（页面不显示徽章）。
- *
- * ⛔ 第二种不能算失败：服务端与客户端是分开升级的，先装新客户端不该看到「检查失败」。
  */
 class AllVersionsTest {
 

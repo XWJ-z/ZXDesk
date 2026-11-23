@@ -1,17 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：paths.js
- * 职责：数据目录解析（安装版 + 绿色版 + 开发态三合一）
- *
- * 优先级（`isPackaged` 时）：
- * 1. `ZXDESK_DATA_DIR` 环境变量（调试 / 便携，最高优先）；
- * 2. 安装程序写的 `<exe 目录>/install.ini` 的 `data=`（**正式安装版走这条**）；
- * 3. `<exe 目录>/data/`（绿色版 / 测试版，能写就用）；
- * 4. `%LOCALAPPDATA%\ZXDesk\data`（兜底，并提示）。
- *
- * 开发态（`npm start`）写 `Project/windows/.dev-data/`（⛔ 不写进 `node_modules/electron`）。
- *
- * ⚠️ `app.setPath` 必须在 `ready` **之前**调用，否则 Chromium 会先往 `%APPDATA%` 写一份。
  */
 
 import fs from 'node:fs';
@@ -20,9 +8,6 @@ import path from 'node:path';
 /**
  * 数据目录「像被用过」的判据。
  *
- * ⚠️ 必须与安装程序 `build/installer.nsi` 的 `ProbeDataDir` 保持一致：
- * 安装时靠它判断「这个默认值里有没有真数据」，程序靠它判断「兜底该取哪一层」。
- * 判据对不上会出现「安装说找到了、程序却用了另一个空目录」。
  */
 export function hasExistingData(dir, fsImpl = fs) {
   const marks = ['prefs.json', 'session.bin', 'credential.bin', 'tofu.json', 'notices-cache.json'];
@@ -40,10 +25,6 @@ export function hasExistingData(dir, fsImpl = fs) {
 /**
  * 兜底位置：`%LOCALAPPDATA%\ZXDesk\data`。
  *
- * ⚠️ 0.2.1 及以前的兜底是**上一级** `%LOCALAPPDATA%\ZXDesk`，与安装程序的默认值
- * （`...\ZXDesk\data`）不一致 —— `install.ini` 一旦丢失（卸载残留 / 手动清理），
- * 程序就会在上一级另起一套空数据，用户看到的是「会话 / 密码全没了」。
- * 所以：谁那里有数据用谁，都没有才用新口径。
  */
 function localFallback(localAppData, hasData, warning) {
   const root = path.join(localAppData, 'ZXDesk');
@@ -53,7 +34,6 @@ function localFallback(localAppData, hasData, warning) {
       if (hasData(data)) return { dir: data, mode: 'fallback', warning };
       if (hasData(root)) return { dir: root, mode: 'fallback', warning };
     } catch {
-      // 探测失败就按新口径；⛔ 不因为探测把启动弄挂
     }
   }
   return { dir: data, mode: 'fallback', warning };
@@ -61,15 +41,7 @@ function localFallback(localAppData, hasData, warning) {
 
 /**
  * 纯决策（可单测）：给定环境与「可写判定」，返回数据目录与模式。
- *
  * @param {object} input
- * @param {boolean} input.isPackaged
- * @param {string} input.exeDir - 打包态：exe 所在目录
- * @param {string} input.devDir - 开发态：`Project/windows/.dev-data`
- * @param {string} input.localAppData - `%LOCALAPPDATA%`
- * @param {(dir:string)=>boolean} input.canWrite
- * @param {(dir:string)=>boolean} [input.hasData] - 兜底时用来区分新旧两种位置
- * @returns {{dir:string, mode:'portable'|'dev'|'fallback'|'installed'|'override', warning:string|null}}
  */
 export function decideDataDir(input) {
   const { isPackaged, exeDir, devDir, localAppData, canWrite, hasData } = input;
@@ -115,16 +87,6 @@ export function decideDataDir(input) {
 /**
  * 读安装程序写的 `install.ini`（在 exe 旁边）。
  *
- * 为什么是 INI 不是 JSON：Windows 路径里的反斜杠在 JSON 字符串里必须转义，
- * 而 NSIS 没有现成的字符串替换 ⇒ 写出来就是坏 JSON。INI 不需要转义。
- *
- * 格式（安装程序写）：
- *   [install]
- *   dir=C:\Program Files\ZXDesk
- *   data=D:\ZXDeskData
- *   version=0.2.1
- *
- * 读不到 / 坏了就当没有 —— ⛔ 不影响启动，只是退回绿色口径。
  */
 export function readInstallConfig(exeDir, fsImpl = fs) {
   try {

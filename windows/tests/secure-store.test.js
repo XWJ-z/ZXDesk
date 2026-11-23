@@ -1,9 +1,5 @@
 /**
- * 0.1.6 回归：`safeStorage` 异步 API 的返回值形状。
- *
- * Electron 45 的 `decryptStringAsync()` 解析成 `{ result, shouldReEncrypt }`（**不是字符串**），
- * 而 0.1.0～0.1.6 直接拿它去 `JSON.parse` ⇒ `credential.bin` / `session.bin` 每次启动都当坏文件，
- * 用户看到的就是「地址账号记得、密码不记得、也不自动登录」。这里锁死两种返回都能读。
+ * 回归：`safeStorage` 异步 API 的返回值形状。
  */
 
 import assert from 'node:assert/strict';

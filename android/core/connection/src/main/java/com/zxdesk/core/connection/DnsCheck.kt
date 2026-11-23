@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：DnsCheck.kt
- * 职责：建连前的解析诊断，分清系统解析与公共解析各自的结果
  */
 
 package com.zxdesk.core.connection
@@ -13,9 +11,6 @@ import java.net.UnknownHostException
 /**
  * 一次解析诊断的结论。
  *
- * 它**不拦人**：只要公共解析查到了地址，建连照常进行（真的连由 [DohDns] 负责）。
- * 诊断只用于两件事 —— 写一行「解析：公共解析」的日志，以及告诉上层
- * 「这次绕过了系统解析」，让 WebView 侧知道要不要启用本机代理。
  */
 class DnsReport internal constructor(
     /** 被诊断的域名。 */
@@ -32,20 +27,11 @@ class DnsReport internal constructor(
 /**
  * 建连前的解析诊断。
  *
- * 为什么不在这里阻断：换了解析器之后，「系统解析失败」不再是死路 ——
- * 公共解析查到地址就能连上。这里再抛异常只会把一条本来能走通的路提前掐断。
- *
- * 唯一失败的情况是**两条路都不通**：这时才如实报错，文案按没网 / 中继无此设备分流。
- *
- * ⚠️ 阻塞调用（公共解析最长 3 秒），⛔ 别在主线程跑。
  */
 object DnsCheck {
     /**
      * 诊断 [host]。
      *
-     * IP 字面量直接返回空报告 —— 它本来就不查解析。
-     *
-     * @throws IOException 系统解析与公共解析都拿不到地址
      */
     fun inspect(host: String): DnsReport = inspect(
         host = host,

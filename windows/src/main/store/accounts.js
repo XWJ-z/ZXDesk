@@ -1,14 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：accounts.js
- * 职责：账号清单（`data/accounts.json`，**明文**）
- * 只存「这台设备上登录过谁」：`{ address, user, https, lastUsedAt }`。
- * ⛔ 不存密码（`credential.bin`）、⛔ 不存 token（`session.bin`）。
- * 所以它可以明文 —— 与 `prefs.json` 同级，撑起「切换账号」那个菜单。
- *
- * 为什么要单独一份、不从 `credential.bin` 派生：
- * 用户可以把「记住密码」关掉（凭据清空），但**账号还在** —— 切换账号时至少要能把地址与账号
- * 预填回去，让他重新输一次密码。派生写法会让「关掉记住密码」把账号也一起从菜单里抹掉。
  */
 
 import fs from 'node:fs';

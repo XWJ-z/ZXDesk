@@ -1,38 +1,8 @@
 /**
- * modules/calendar/desktop.js —— 电脑版日历（0.7.5；⭐ 0.8.7 起是**看板里的一个视图**）
+ * modules/calendar/desktop.js —— 电脑版日历
  *
  * 功能：日历视图 —— 月视图（自己画，原生 DOM + CSS Grid，零依赖）+ 点某天看当天 +
- *      **四个**只读图层的开关 + 自己的事件增删改 ＋ 0.7.8 起的「人生日历」第二个视图。
- *
- * ⭐⭐ **0.8.7：日历不再有自己的「一屏」** —— `#calendar-view` 那个 section 已删，
- *    这一份界面由**首页看板**通过插槽动态挂载（`mountModuleSlot(host, 'desktop', 'calendar', 'dash-view', ctx)`
- *    → 片段 `./desktop-dash-view.js` → 本文件的 `mountCalendarView(root, ctx)`）。
- *    ⚠️ 因此本文件**不认识任何固定容器 id**：渲染与**一次事件委托**都挂在**宿主传进来的那个根节点**上
- *    （从前写死 `#calendar-view`）。挂错地方的表现是「点了没反应」而且**不报错** —— 这是本次改动
- *    最容易踩的一处，改这块时⛔ 别把 `root` 又换回 `document.querySelector('#…')`。
- *    ⚠️ 也正因为它不再是「一屏」，本文件**不再 import 宿主的 shell**（不切视图、不重画侧栏）。
- *
- * ⭐ **判据只有一句话：关掉课表，日历还能不能用**（方案 §〇-1）。所以本文件里
- *    「课表 / 任务 / 假期 / **记账**」四层的**数据**一律来自服务端算好的 `layers`
- *    （`GET /api/calendar`），前端只负责**画**与**加开关** —— ⛔ 这里不出现任何
- *    「某天有课吗 / 某天有账吗」的判定（那是第二份真值，抄错的后果是「课表页有这节、
- *    日历上没有」而且不报错）。
- *
- * ⭐ 日期算术（年月平移 / 42 天网格 / 跨天展开 / 按日分组）住 `./shared.js` ——
- *    两端**逐字共用一份**。各写一份的下场是「电脑上 9 月 1 号在周二那格、手机上是周一那格」，
- *    而且**不报任何错**。这里只留**版式**（`CELL_MAX` 这种格子里摆几条的排版参数）。
- *
- * ⭐ 状态住 `desktop/state.js`（`state.cal` / `calMonth` / `calDay` / `calTab`）而不是模块级 `let`：
- *    模块级单例在「多个视图之间来回切」时会被别处的 import 顺序影响，本项目已把它定为共用件。
- *    ⚠️ 根节点那个 `rootEl` 是**例外、且刻意**：它是「这一次挂载挂在哪」，不属于应用状态。
- *    ⚠️⚠️ **本文件里 `state` 已被 import 占用**：解构时 ⛔ 绝不许出现 `const [state, ...] = await api(...)`
- *    —— 那会就地遮蔽 import，把响应写到响应对象自己身上，界面永远空着而且**不报任何错**
- *    （番茄钟那轮实测踩过）。所以下面一律写成 `const r = await api(...)`。
- *
- * ⚠️ 一次性事件委托：视图整块重画，屏内的点击 / 切换一律在 `bindCalendarEvents(root)` 里
- *    挂**一次**委托（逐个绑必漏），与灵感库 / 番茄钟同款。
- *
- * ⚠️ 渲染一律 `esc()`；⛔ 不拼未转义的用户文本进 innerHTML。
+ * **四个**只读图层的开关 + 自己的事件增删改 ＋ 0.7.8 起的「人生日历」第二个视图。
  *
  * @author zx
  * @date   2026-09-18
@@ -43,6 +13,8 @@
 import { api } from '../../core/api.js';
 import { addDays, isWeekend, todayStr } from '../../core/date.js';
 import { $, esc, skeletonHtml } from '../../core/dom.js';
+// ⭐ 自动草稿：日程最容易「填到一半被叫走」—— 新建与每条编辑各存各的键，重载后靠登记表把同一张表单再打开
+import { registerResume } from '../../core/draft.js';
 import {
   DOW_CN,
   LAYERS,
@@ -70,11 +42,8 @@ import { state } from '../../desktop/state.js';
 import { closeModal, openConfirmModal, openModal, setModalSave, toast } from '../../desktop/ui.js';
 // ⭐ 0.7.6：农历 / 节日（纯查表、零依赖）—— 只在月视图的格子里用一句话
 import { gridLunarText } from './lunar.js';
-// ⭐ 0.8.9：「人生日历」已**整体搬进行程**（口径住 `modules/trip/life.js`，
-//    界面是行程屏那颗按钮的弹层）⇒ 本文件**不再 import 它、也不再画它** —— 日历屏只剩月视图。
-// ⭐ 0.8.9（「日历视图的课程条也要像列表的一样有倒计时、上完变灰色、点击进入课程视图」）：
-//    倒计时与「上完」的**判定**只住 `core/timetable.js` 一份 —— 与看板、课表页同一批纯函数，
-//    ⛔ 这里不许自己写一遍 `start < now < end`（第二份判据必然漂移，而且不报错）。
+// 「人生日历」已整体搬进行程（口径住 `modules/trip/life.js`）⇒ 本文件不再 import / 画它。
+// 课程条的倒计时与「上完」判定只住 `core/timetable.js` 一份，⛔ 这里不许另写一遍判据。
 import { ttDoneIdsOn, ttNowHM, ttSyncServerNow, ttTicker, ttTodayNow } from '../../core/timetable.js';
 
 /** 一个格子里最多摆几条自己的事件，超出折叠成「+N」（**版式**常量，两端各一份） */
@@ -84,25 +53,16 @@ const CELL_MAX = 3;
 //    `modules/trip/desktop.js` / `modules/trip/mobile.js`（显示默认值住界面层，两端各一份）。
 
 /**
- * 这一次挂载的**根节点**（由宿主给；`null` = 还没挂）。
- *
- * 说明：⭐ 0.8.7：日历视图现在住在**首页看板**里（动态挂载），所以它没有固定的容器 id 了。
- *      本文件所有查询 / 重画 / 事件委托都只对着这一个节点 —— ⛔ 不许在别处再 `$('#calendar-view')`。
+ * 这一次挂载的**根节点**（由宿主给；`null` = 还没挂，视图由首页看板动态挂载）。
+ * 本文件所有查询 / 重画 / 事件委托都只对着它 —— ⛔ 不许在别处再 `$('#calendar-view')`。
  * @type {?HTMLElement}
  */
 let rootEl = null;
 
 /**
- * ⭐ 0.8.9：「其它」那块 —— 宿主（首页看板）把它**交给本视图摆放**。
- *
- * 说明：「这个其它显示在日历下方即可，左边显示长了会空很多不好看」——
- *      日历视图是两栏（日历 ｜ 当天任务），左列通常比右列短，而「其它」原本排在两栏**之下**
- *      ⇒ 左侧空出一大块。现在宿主把那一块（`#dash-other`）当 `ctx.belowEl` 交过来，
- *      本视图每次画完把它放进 `.cal-body` —— 那是个两列网格，于是它自动落在
- *      **第二行第一列**，也就是日历正下方。
- *      ⚠️ 是**同一个节点**（宿主建、宿主拥有），这里只搬位置：本视图挂载失败 / 模块不在时
- *      它留在宿主那儿，「其它」不会因为日历出问题而消失。
- *      ⚠️ 每次 `renderCalendar()` 都要重搬一次 —— 那一句 `innerHTML` 会把上一次搬进来的节点销毁。
+ * 宿主（首页看板）交过来摆放的「其它」那一块（`#dash-other`，`null` = 还没交）。
+ * 每次 `renderCalendar()` 都把它搬进 `.cal-body`（`innerHTML` 会销毁旧节点 ⇒ 必须重搬）——
+ * 节点归宿主所有，本视图只搬位置，⛔ 不拥有也不重建它。
  * @type {?HTMLElement}
  */
 let belowEl = null;
@@ -760,9 +720,10 @@ function newCalendarEvent() {
  *      直接打回 400（方案 §4.1 的第一条硬约束），不清就会变成一个填完保存不了的框。
  *
  * @param {?Object} ev - 要改的事件；新建传 null
+ * @param {string} [draftKey] - 重载恢复时带回来的原草稿键（有它就优先用，⛔ 别重算）
  * @returns {void}
  */
-function openEventForm(ev) {
+function openEventForm(ev, draftKey) {
   const isNew = !ev;
   const base = ev || {
     title: '',
@@ -807,6 +768,12 @@ function openEventForm(ev) {
      ${
        isNew ? '' : '<div class="cal-delrow"><button type="button" class="btn-subtle" id="cal-f-del">删掉这条事件</button></div>'
      }`,
+    {
+      // ⚠️ 编辑 A 与编辑 B 是同一张表单的两次调用 ⇒ 键里必须带 id，否则两份草稿会互相覆盖；
+      //    恢复槽里记着原草稿键时用它（重载后 `state.calDay` 可能已经不是当初那一天）。
+      draft: draftKey || (isNew ? 'cal-new' : `cal-edit:${Number(ev.id)}`),
+      resume: isNew ? { kind: 'cal-new', payload: null } : { kind: 'cal-edit', payload: { id: Number(ev.id) } },
+    },
   );
   setModalSave(isNew ? '记下来（Enter）' : '保存（Enter）', false);
 
@@ -1010,3 +977,21 @@ export function bindCalendarEvents(root) {
       });
   });
 }
+
+// 重载恢复：新建与每条编辑各自登记「用同样的参数再打开一次」（草稿由 `openModal()` 自动回填）
+registerResume('cal-new', (p, key) => openEventForm(null, key));
+registerResume('cal-edit', (p, key) => {
+  const id = Number(p && p.id) || 0;
+  const find = () =>
+    (state.cal && state.cal.events ? state.cal.events : []).find((x) => Number(x.id) === id);
+  const ev = find();
+  // ⚠️ 重载后这一屏的数据可能还没取回来（`state.cal` 是空的）⇒ 先取一次再开；
+  //    取不到就**别开**：硬开成一张空的新建表单，用户一点保存就又建出一条。
+  if (ev) return openEventForm(ev, key);
+  return loadCalendar()
+    .then(() => {
+      const again = find();
+      if (again) openEventForm(again, key);
+    })
+    .catch(() => {});
+});

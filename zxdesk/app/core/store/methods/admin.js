@@ -1,17 +1,8 @@
 'use strict';
 /**
- * core/store/methods/admin.js —— 运维信息（数据位置 / 备份清单）（0.2.0，审查报告 B2）
- *
+ * core/store/methods/admin.js —— 运维信息（数据位置 / 备份清单）
  * 功能：给管理员看的运维信息。`info()` 汇总后端类型、数据目录与数据文件、日志与外键模式、
- *      结构版本、迁移与只读降级状态、备份与导入结果等运行期信息；`storageInfo()` 从中挑出
- *      「数据位置」面板要用的只读子集（含数据文件大小）；`listBackups()` 列出数据目录里的
- *      自动备份文件名。
- *
- * ⭐ 这里的方法**一律不出现 `this.backend`**：凡是要分后端的地方都走
- *    `this._bk.<op>(...)`（存储原语层门面，见 store/backend/index.js）。
- *
- * ⚠️ 方法体是从改造前的 `db.js` 按字节切出来的（分岔那段搬去了 backend/*.js）。
- *
+ * 结构版本、迁移与只读降级状态、备份与导入结果等运行期信息；`storageInfo()` 从中挑出
  * @author zx
  * @date   2026-09-11
  * @since 0.9.7
@@ -20,12 +11,11 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { dbLabelOf, dbRoleOf } = require('../constants.js');
-const { listArchives, currentPhase, isFreezing } = require('../../data-location.js');
 
 module.exports = {
   /**
    * 功能：汇总一份运行期运维信息（后端类型 / 数据目录与数据文件 / 日志与外键模式 /
-   *      结构版本 / 迁移与只读降级状态 / 备份与导入结果等），供「数据位置」面板与排查使用。
+   * 结构版本 / 迁移与只读降级状态 / 备份与导入结果等），供「数据位置」面板与排查使用。
    * @returns {Object} 运行期运维信息对象（含 `backupFiles`，由 `listBackups()` 现取）
    */
   info() {
@@ -42,20 +32,18 @@ module.exports = {
       initError: this.initError,
       // 只读降级：库文件在却打不开 → 已停止写入（界面须显著提示）
       readOnly: this.readOnly,
-      // ⭐ 0.8.9：**只要这一次不是 SQLite，就是降级** ——
-      //    判据只在本处算一次，启动日志 / `/api/health` / 两端界面都读这一个值。
-      //    ⚠️ 与 `readOnly` 刻意不同：JSON 后端在「库文件本来就不存在」时**仍可写**
-      //    （没有 .db 可比对，不存在分叉），而 `readOnly` 只管「库在却打不开」那一种。
-      //    ⛔ 不许在前端或启动日志里再判一次「backend === 'sqlite'」来推同一件事。
+      // **只要这一次不是 SQLite，就是降级** ——
+      // 判据只在本处算一次，启动日志 / `/api/health` / 两端界面都读这一个值。
+      // 与 `readOnly` 刻意不同：JSON 后端在「库文件本来就不存在」时**仍可写**
       degraded: this.backend !== 'sqlite',
       schemaVersion: this.schemaVersion,
       // v5 结构升级的结果 / 被跳过的原因（被跳过时版本号不推进，下次启动重试）
       structuralUpgrade: this.structuralUpgrade,
       schemaUpgradeSkipped: this.schemaUpgradeSkipped,
-      // 0.1.2 改名迁移：本次改了哪些表名 / 哪些因撞名被跳过 / 老 JSON 里改过哪些键
+      // 改名迁移：本次改了哪些表名 / 哪些因撞名被跳过 / 老 JSON 里改过哪些键
       renamedTables: this.renamedTables,
       tableAliasConflicts: this.tableAliasConflicts,
-      // ⭐ 0.8.12 列改名迁移（users.hide_chat → hide_teamwork）：与表改名同一套机制的第二档
+      // 列改名迁移（users.hide_chat → hide_teamwork）：与表改名同一套机制的第二档
       renamedColumns: this.renamedColumns,
       renamedJsonKeys: this.renamedJsonKeys,
       // 建索引失败的原因（正常为空数组）
@@ -73,10 +61,9 @@ module.exports = {
       legacyNullStartDates: this.legacyNullStartDates,
       // username 唯一索引建不起来的原因（历史脏数据；正常为 null，由启动日志告警）
       usersIndexError: this.usersIndexError,
-      // ⭐ 0.9.8：**三个库各自的健康结论**（哪个库坏了要能一眼看出来）。
-      //    ⚠️ 只放 `label` / `ok` / `readOnly` / `journalMode` / `reason` —— ⛔ **不放文件路径**：
-      //    路径只经 `/api/admin/storage` 给管理员看（`/api/health` 对**所有已登录用户**开放）。
-      //    ⚠️ 它取自 `_refreshDbStatus()` 算好的快照，本方法不读库、不数条数。
+      // **三个库各自的健康结论**（哪个库坏了要能一眼看出来）。
+      // 只放 `label` / `ok` / `readOnly` / `journalMode` / `reason` —— ⛔ **不放文件路径**：
+      // 路径只经 `/api/admin/storage` 给管理员看（`/api/health` 对**所有已登录用户**开放）。
       databases: Object.fromEntries(
         Object.entries(this.dbStatus || {}).map(([k, v]) => [
           k,
@@ -92,9 +79,8 @@ module.exports = {
    * 功能：数据文件与备份的**只读**概况 —— 给管理员的「数据位置」面板用。
    *
    * 说明：⚠️ 刻意只回答「东西放在哪、有多大、备份有几份、外键开没开」，
-   *      不读任何人的任务数据、也不返回账号相关的任何东西 —— 它不构成数据泄露。
+   * 不读任何人的任务数据、也不返回账号相关的任何东西 —— 它不构成数据泄露。
    *
-   * @returns {Object} 面板用的只读概况（`dbSize` 在取不到文件大小时为 null）
    */
   storageInfo() {
     const i = this.info();
@@ -104,8 +90,8 @@ module.exports = {
     } catch (_e) {
       /* 读不到就显示「—」 */
     }
-    // ⭐ 三个库逐行：界面要「一行一个、写清各管什么」，所以这里给出结构化清单，
-    //    ⛔ 前端不再写死三个库名（库的清单唯一来源是 `dbStatus`，标签与用途来自 `store/constants.js`）。
+    // 三个库逐行：界面要「一行一个、写清各管什么」，所以这里给出结构化清单，
+    // 前端不再写死三个库名（库的清单唯一来源是 `dbStatus`，标签与用途来自 `store/constants.js`）。
     const databases = Object.entries(this.dbStatus || {})
       .map(([key, st]) => {
         if (!st) return null;
@@ -118,29 +104,15 @@ module.exports = {
         return { key, label: dbLabelOf(key), role: dbRoleOf(key), file: path.basename(String(st.file)), size, ok: !!st.ok, reason: st.reason || null };
       })
       .filter(Boolean);
-    const defaultDir = this.defaultDir || this.dataDir;
-    const custom = path.resolve(String(this.dataDir)) !== path.resolve(String(defaultDir));
-    const idx = this.locationIndex || null;
-    const hist = idx && Array.isArray(idx.history) ? idx.history : [];
-    const last = hist.length ? hist[hist.length - 1] : null;
     return {
       backend: i.backend,
       dataDir: i.dataDir,
       dbName: path.basename(String(i.dbFile)),
       dbSize,
-      // ⭐ 数据位置：默认 / 自定义、索引里的最近一次搬迁、安装位置的归档清单
-      dataDirSource: custom ? 'custom' : 'default',
+      // 数据位置：安装时定下的那一个，之后不变 —— 没有「默认 / 自定义」之分，也没有归档清单
+      dataDirSource: 'install',
       databases,
-      location: {
-        dir: this.dataDir,
-        custom,
-        defaultDir,
-        since: (last && last.at) || '',
-        from: (last && last.from) || '',
-        history: hist,
-        archives: listArchives(defaultDir),
-        pendingRestart: isFreezing() && currentPhase() === 'pendingRestart',
-      },
+      location: { dir: this.dataDir },
       journalMode: i.journalMode,
       foreignKeys: i.foreignKeys,
       schemaVersion: i.schemaVersion,

@@ -2,18 +2,12 @@
  * modules/teamwork/mobile-settings-pane.js —— 手机版：设置页「团队协作」分块
  *
  * 功能：这是 `core/slots.js` 的**插槽片段**（槽名 `settings-pane`）—— 由设置页通过
- *      `slotPaneDefs()` + `mountModuleSlot(box, 'mobile', 'teamwork', 'settings-pane', ctx)` 动态挂载。
- *      内容**只有一行**：一颗「提醒与好友设置」的入口。
- *
- * ⭐⭐ 为什么它在（「团队协作中的设置应该在全局设置中也要有一份，
- *    两个设置是同一个，不是两边独立设置」）：与电脑端**同一条口径、同一份实现** ——
- *    点下去调的是模块自己的 `openTeamworkSettings()`（本端的底部弹层），
- *    ⛔ 这里没有第二份表单。
- *    ⚠️ 用的是现成的**模块贡献分块**机制，与密码库 / 生活记账 / AI 同一套。
+ * `slotPaneDefs()` + `mountModuleSlot(box, 'mobile', 'teamwork', 'settings-pane', ctx)` 动态挂载。
+ * 内容**只有一行**：一颗「提醒与好友设置」的入口。
  *
  * @author zx
  * @date   2026-10-19
- * @since 0.8.34
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/17-对话.md、docs/公共/架构文档/13-决策记录.md（决策 77）、core/slots.js
  */
 

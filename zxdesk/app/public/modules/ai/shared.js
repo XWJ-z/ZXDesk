@@ -1,50 +1,32 @@
 /**
- * modules/ai/shared.js —— ai辅助任务**两端共用**的界面引擎（0.6.0）
+ * modules/ai/shared.js —— ai辅助任务**两端共用**的界面引擎
  *
  * 功能：本模块插槽片段（desktop/mobile × teamwork-page / teamwork-thread）与 **AI 卡片屏**共用的那一部分 ——
- *      · `bindTeamworkConvEntries()` 会话列表登记（`zx:teamwork-conv-entries` 留白事件：AI 是一条**会话对象**）；
- *      · `createAiThreadView()`   插槽会话屏的聊天视图（消息区 + 输入行 + 用量小字，SSE 读流 + 停止 + 历史）；
- *      · `createAiPanel()`        AI 卡片屏的四块（**连接 → 上下文 → 记忆 → 能力**，顺序固定），由
- *        `createAiConnBlock()` / `createAiCtxBlock()` / `createAiMemBlock()` / `createAiToolsBlock()`
- *        拼成（⭐ 第四块「能力」是 3 期：工具授权）——
- *        ⭐ 2 期起配置入口从「设置页的一栏」搬到左侧「AI 辅助任务」卡片：原来那两个
- *        `*-settings-pane.js` 薄壳一起删掉，全项目只有这一份；
- *      · `bindTeamworkMsgMenuHook()` 往对话模块的消息菜单里添「问 AI / 记成任务」（走 `zx:teamwork-msg-menu`
- *        留白事件，—— chat 不认识本模块）；
- *      · 预览层 / 确认卡的 HTML 与绑定（`extractPreviewHtml()` / `confirmCardHtml()` / `bindConfirmCard()`）。
- *
- * ⭐ **为什么收在一个文件**：SSE 帧的消费顺序、发送内容的边界、任务草稿 → 既有任务接口的字段映射，
- *    这些是「两端必须一模一样」的语义（`core/` 判定标准的模块内版本）—— 写两份迟早走偏
- *    （对话模块的教训：连接管理必须一份）。端的差异只留两处：**toast / 弹层容器**由片段注入，
- *    **CSS** 按 两端各写一份（类名是共用的约定）。
- *
- * ⭐ **XSS 口径**：AI 回复是**外部内容**，消息文本一律 `textContent`；
- *    模板串里只允许出现 `esc()` 过的内容与受控的枚举值。
- *
- * ⚠️ **写库只走既有任务接口**：确认卡落库调 `POST /api/daily` /
- *    `POST /api/projects/:id/tasks`，带 `from_message_id`；本模块没有第二个写任务表的路径。
+ * `bindTeamworkConvEntries()` 会话列表登记（`zx:teamwork-conv-entries` 留白事件：AI 是一条**会话对象**）；
+ * `createAiThreadView()`   插槽会话屏的聊天视图（消息区 + 输入行 + 用量小字，SSE 读流 + 停止 + 历史）；
+ * `createAiPanel()`        AI 卡片屏的四块（**连接 → 上下文 → 记忆 → 能力**，顺序固定），由
  *
  * @author zx
  * @date   2026-09-15
  * @since 0.9.7
  * 相关：docs/公共/架构文档/18-ai辅助任务.md、docs/公共/开发方案/11-AI辅助任务-1期.md、
- *      docs/公共/开发方案/14-AI辅助任务-2期.md、core/slots.js
  */
 
 import { api, BASE } from '../../core/api.js';
-// ⭐ 0.7.1：新建任务统一走共用层那个入口（不许跨模块 import 实现，所以它在 `core/`）
 import { createTask } from '../../core/task-create.js';
-// ⭐ 0.8.4：记一笔账同理 —— 记账确认卡点「同意」时逐条落库，走共用层那个唯一入口
+// 记一笔账同理 —— 记账确认卡点「同意」时逐条落库，走共用层那个唯一入口
 import { createBookmark } from '../../core/bookmark-create.js';
 import { createHardware } from '../../core/hardware-create.js';
 import { createIdea } from '../../core/idea-create.js';
 import { createLedgerEntry } from '../../core/ledger-create.js';
 import { createTicket } from '../../core/trip-create.js';
-// ⭐⭐ 0.8.55：资产与日程的确认卡走各自那一条唯一入口
+// 资产与日程的确认卡走各自那一条唯一入口
 import { createAssetItem } from '../../core/asset-create.js';
 import { createCalendarEvent } from '../../core/calendar-create.js';
 import { el, esc } from '../../core/dom.js';
 import { todayStr } from '../../core/date.js';
+// 屏内输入的草稿：没发出去的那段话在切屏 / 重载后要还在（与弹层表单同一套内核）
+import { attachDraft, clearDraft, restoreDraft } from '../../core/draft.js';
 
 /** 输入长度上限的**前端一份**（与服务端 `MAX_AI_TEXT` 同值 —— 改一处必须改另一处） @type {number} */
 const MAX_AI_TEXT = 4000;
@@ -56,11 +38,8 @@ const IMG_MAX_BYTES = 8 * 1024 * 1024;
  * 功能：把时间戳压成聊天界面习惯的短标签（今天的只写 `HH:MM`，更早的写 `M/D HH:MM`）。
  *
  * 说明：⚠️ 与 `modules/teamwork/desktop.js` 的 `fmtTeamworkTime()` **同一套口径**（两边各自一份，
- *      因为 不许跨模块 import 实现）—— 聊天区要与好友聊天一模一样，这一行的时间格式
- *      就必须一致：日期串按**字符串切片**解析，⛔ 不 `new Date()`（时区坑会把 UTC 的某条消息
- *      显示成昨天，这是本项目的老规矩）。
- * @param {?string} s - 时间戳（`YYYY-MM-DD HH:MM:SS`）；空 = 「现在」
- * @returns {string} 短标签
+ * 就必须一致：日期串按**字符串切片**解析，⛔ 不 `new Date()`（时区坑会把 UTC 的某条消息
+ * 显示成昨天，这是本项目的老规矩）。
  */
 function fmtChatTime(s) {
   const t = String(s == null || s === '' ? '' : s);
@@ -76,16 +55,8 @@ function fmtChatTime(s) {
 }
 
 /**
- * 功能：一张**任务卡片**的 HTML —— ⭐ 0.8.55：把任务发给 AI 时用。
  *
  * 说明：⚠️ 结构与类名与 `modules/teamwork/shared.js` 的 `taskCardHtml()` **逐字对齐**
- *      （`.teamwork-card` / `-head` / `-title` / `-chips` / `-note`）——
- *      两边看到的是同一种卡片，那也是「AI 聊天与好友聊天一模一样」的一部分。
- *      ⚠️ 两份是**刻意的**： 不许 AI import 协作的实现，而卡片只有这五六个类名，
- *      抽到 `core/` 反而要为它开一个新共用文件（两边谁都不愿先欠那一笔）。
- *      ⛔ 不画卡片底部那排动作按钮（那是「收进我的任务板」，发给 AI 的是**我已有的**任务）。
- * @param {Object} raw - 卡片快照
- * @returns {string} HTML
  */
 function chatCardHtml(raw) {
   const src = String((raw && raw.src) || '').trim();
@@ -125,11 +96,8 @@ const PRIORITY_FLAGS = {
  * 功能：把一次对话的用量拼成一句**人话**（写在会话屏输入框下方的那行小字）。
  *
  * 说明：⭐ 数字来自服务端 `done` 帧的 `used`（那一次**实际**拼进请求的几条），前端不估算、不改写。
- *      ⚠️ 用户看得见的词里不许出现段号 / token / 接口这类开发者叫法 ——
- *      「历史」就是历史、「记忆」就是记忆；没带记忆时干脆不提记忆那半句。
+ * 「历史」就是历史、「记忆」就是记忆；没带记忆时干脆不提记忆那半句。
  *
- * @param {{msgs: number, chars: number, mems: number, seg: number}} used - 服务端给的用量
- * @returns {string} 形如 `本次带了 12 条历史 · 3 条记忆`
  */
 function usageText(used) {
   const msgs = Number(used && used.msgs) || 0;
@@ -146,11 +114,9 @@ export const AI_CONV_KEY = 'ai';
 /**
  * 功能：把 AI 作为一条**会话对象**登记进对话模块的会话列表（`zx:teamwork-conv-entries` 留白事件）。
  *
- * 说明：⭐ 0.6.x 起不再是「对话页里的入口条 + 折叠面板」，而是与提醒助手同一形态 ——
- *      会话区里的一行（头像 / 名字 / 摘要由**对话模块**用它自己的行样式画，本模块只供数据），
- *      点开由对话模块挂 `teamwork-thread` 插槽（`desktop/mobile-teamwork-thread.js`）。
- *      ⚠️ **只挂一次**（模块级标记）：对话模块每次重画会话区都会发这个事件，监听器只能有一份。
- * @returns {void}
+ * 说明：.x 起不再是「对话页里的入口条 + 折叠面板」，而是与提醒助手同一形态 ——
+ * 会话区里的一行（头像 / 名字 / 摘要由**对话模块**用它自己的行样式画，本模块只供数据），
+ * 点开由对话模块挂 `teamwork-thread` 插槽（`desktop/mobile-teamwork-thread.js`）。
  */
 export function bindTeamworkConvEntries() {
   if (bindTeamworkConvEntries._bound) return;
@@ -174,9 +140,6 @@ export function bindTeamworkConvEntries() {
 /**
  * 轻量 markdown 的**类型白名单** —— 解析器只会产出这几种节点，⛔ 永远没有 `'html'` 这一种。
  *
- * 说明：⭐ 「安全」就落在这张表上：AI 回复是**外部内容**，而这里根本不产出 HTML ——
- *      渲染层只把这些类型映射成 `createElement` / `createTextNode`。
- * @type {Array.<string>}
  */
 export const MD_TYPES = [
   'p',
@@ -189,7 +152,7 @@ export const MD_TYPES = [
   'ol',
   'li',
   'h4',
-  // ⭐⭐ 0.8.55（「md格式的表格没有支持渲染」）：GFM 表格
+  // ：GFM 表格
   'table',
   'thead',
   'tbody',
@@ -214,9 +177,8 @@ function mdSplitCells(line) {
  * 功能：判断一行是不是 GFM 表格的**分隔行**（`|---|:--:|---|`）。
  *
  * 说明：⚠️ 每一格都必须是 `-` 的重复（可带对齐冒号），一格不合格就整行不算 ——
- *      这样「正文里恰好写了一串竖线和横线」不会被误判成表格。
+ * 这样「正文里恰好写了一串竖线和横线」不会被误判成表格。
  * @param {string} line - 一行
- * @returns {boolean} 是分隔行返回 true
  */
 function mdIsSepRow(line) {
   const t = String(line == null ? '' : line).trim();
@@ -229,13 +191,8 @@ function mdIsSepRow(line) {
  * 功能：从第 `i` 行起认一张 GFM 表格 —— **认不出返回 null（⛔ 不猜）**。
  *
  * 说明：⭐ 判据是「表头行 ＋ 下一行分隔行」两行一起看，且列数必须一致：
- *      · 表头必须**至少两列**（一列的「表格」没有意义，按普通文本处理）；
- *      · 分隔行列数必须与表头相同（GFM 的规定，也顺带挡掉半截表格）。
- *      数据行一直吃到「空行」或「不含竖线的行」为止；**多出的格子丢掉、少的补空** ——
- *      宁可画一张整齐的表，也不因为一行不规整就把整张表退化成文本。
- * @param {Array.<string>} lines - 全部行
- * @param {number} i - 表头行的下标
- * @returns {?{node: Object, next: number}} 表格节点与下一行的下标；不是表格为 null
+ * 表头必须**至少两列**（一列的「表格」没有意义，按普通文本处理）；
+ * 分隔行列数必须与表头相同（GFM 的规定，也顺带挡掉半截表格）。
  */
 function mdTableAt(lines, i) {
   const head = lines[i];
@@ -275,13 +232,8 @@ function mdTableAt(lines, i) {
  * 功能：把一段 AI 回复解析成**节点描述树**（纯数据、不碰 DOM）—— 只认一小撮写法。
  *
  * 支持的写法（**就这些** —— 要的是「字体渲染」，不是完整 markdown）：
- *   粗体 `**x**` · 斜体 `*x*` · 行内代码 · 三反引号代码块 · 无序列表 `- x` ·
- *   有序列表 `1. x` · 标题 `#`~`####`（一律渲染成 h4）· 空行分段。
- * ⛔ 明确不做：链接（`[x](url)` **原样当普通文本** —— 点了会离开应用）、表格、图片、
- *    任何 HTML 透传。认不出来的标记一律当普通文本；未闭合的标记**不许吞掉后面的字**。
- *
- * @param {string} text - 原始回复
- * @returns {Array.<Object>} 节点数组：`{type:'text', value}` 或 `{type, children}`（type ∈ `MD_TYPES`）
+ * 粗体 `**x**` · 斜体 `*x*` · 行内代码 · 三反引号代码块 · 无序列表 `- x` ·
+ * 有序列表 `1. x` · 标题 `#`~`####`（一律渲染成 h4）· 空行分段。
  */
 export function parseMarkdownLite(text) {
   const lines = String(text == null ? '' : text)
@@ -310,7 +262,7 @@ export function parseMarkdownLite(text) {
   for (let li = 0; li < lines.length; li += 1) {
     const raw = lines[li];
     if (pre !== null) {
-      // ⚠️ 代码块里**不做任何二次解析**（内容原样，连星号都不动）
+      // 代码块里**不做任何二次解析**（内容原样，连星号都不动）
       if (/^\s*```/.test(raw)) flushPre();
       else pre.push(raw);
       continue;
@@ -321,9 +273,9 @@ export function parseMarkdownLite(text) {
       pre = [];
       continue;
     }
-    // ⭐⭐ 0.8.55：GFM 表格（`| 任务 | 截止 |` ＋ 下一行分隔符 `|---|:--:|`）。
-    //  ⚠️ 判据是**两行一起看**：只有「表头行 ＋ 分隔行」都成立才算表格 ——
-    //    单看一行含 `|` 就把后面当表格，会把「A|B 这种写法」也吃掉（散文里出现竖线很正常）。
+    // GFM 表格（`| 任务 | 截止 |` ＋ 下一行分隔符 `|---|:--:|`）。
+    // 判据是**两行一起看**：只有「表头行 ＋ 分隔行」都成立才算表格 ——
+    // 单看一行含 `|` 就把后面当表格，会把「A|B 这种写法」也吃掉（散文里出现竖线很正常）。
     if (raw.includes('|')) {
       const tb = mdTableAt(lines, li);
       if (tb) {
@@ -341,8 +293,8 @@ export function parseMarkdownLite(text) {
       out.push({ type: 'h4', children: mdInline(h[2], 0) });
       continue;
     }
-    // ⚠️ 无序列表只认 `-`：`*` 开头与「斜体」天然二义（`* a` 到底是要点还是强调？），
-    //    宁可少认一种，也不猜。
+    // 无序列表只认 `-`：`*` 开头与「斜体」天然二义（`* a` 到底是要点还是强调？），
+    // 宁可少认一种，也不猜。
     const ul = /^\s*-\s+(.*)$/.exec(raw);
     const ol = /^\s*\d+[.)]\s+(.*)$/.exec(raw);
     if (ul || ol) {
@@ -363,7 +315,6 @@ export function parseMarkdownLite(text) {
     flushList();
     para.push(raw);
   }
-  // 未闭合的三反引号：把攒下的行当代码块收尾（⛔ 不许把内容吞掉）
   if (pre !== null) flushPre();
   flushPara();
   flushList();
@@ -374,11 +325,8 @@ export function parseMarkdownLite(text) {
  * 功能：解析**行内**标记（粗体 / 斜体 / 行内代码）—— `parseMarkdownLite()` 的内部件。
  *
  * 说明：⚠️ 三条都要满足才认一段强调：开头后面是**非空白**、收尾前面是**非空白**、里面有内容 ——
- *      否则 `2 * 3 * 4` 与孤零零一个 `*` 会被误当成斜体（⛔ 不许猜）。
- *      ⚠️ 嵌套最多三层（再深的当纯文本）：既防病态输入，也防 `*a**b**c*` 这种自相矛盾的写法乱套。
+ * 嵌套最多三层（再深的当纯文本）：既防病态输入，也防 `*a**b**c*` 这种自相矛盾的写法乱套。
  * @param {string} s - 待解析的片段
- * @param {number} depth - 当前嵌套深度（0 起）
- * @returns {Array.<Object>} 节点数组
  */
 function mdInline(s, depth) {
   const str = String(s == null ? '' : s);
@@ -433,7 +381,7 @@ const MD_TAGS = {
   ol: 'ol',
   li: 'li',
   h4: 'h4',
-  // ⭐ 0.8.55：表格（GFM）—— 仍然逐节点 `createElement`，⛔ 没有 HTML 拼装
+  // 表格（GFM）—— 仍然逐节点 `createElement`，⛔ 没有 HTML 拼装
   table: 'table',
   thead: 'thead',
   tbody: 'tbody',
@@ -452,7 +400,7 @@ function mdNode(n) {
   const textOf = () => document.createTextNode(String((n && n.value) == null ? '' : n.value));
   if (type === 'text') return textOf();
   const tag = MD_TAGS[type];
-  // ⚠️ 白名单外的类型**当纯文本**，⛔ 绝不 createElement —— 那就等于开了一条 HTML 透传的口子
+  // 白名单外的类型**当纯文本**，⛔ 绝不 createElement —— 那就等于开了一条 HTML 透传的口子
   if (!tag) return textOf();
   const node = document.createElement(tag);
   for (const c of n.children || []) node.appendChild(mdNode(c));
@@ -463,11 +411,8 @@ function mdNode(n) {
  * 功能：把一条 AI 回复**渲染进**气泡（重画成 DOM）。
  *
  * 说明：⭐ 外部内容进 DOM 的**唯一**一条渲染路径：解析成描述树 → 逐节点 `createElement` /
- *      `createTextNode`，⛔ 全程不用任何「HTML 拼装」的 API（同级红线，
- *      `ttt/test/ai.test.js` 按**源码文本**扫描这件事，连带那个 API 的名字都不许出现在本文件里）。
+ * `createTextNode`，⛔ 全程不用任何「HTML 拼装」的 API（同级红线，
  * @param {HTMLElement} box - 气泡里的 `.ai-msg-text`
- * @param {string} text - 原始回复
- * @returns {void}
  */
 function paintMd(box, text) {
   box.textContent = '';
@@ -477,13 +422,9 @@ function paintMd(box, text) {
 /**
  * 功能：让一个 textarea 跟着内容**自己长高**（到 `max-height` 为止就内部滚动）。
  *
- * 说明：⭐ 0.7.7-⑭：算法与对话页 `modules/teamwork/desktop.js` 的 `autoGrow()` **同一套**
- *      （那是刚统一过的样子，两端看起来得是同一个框）：先把高度归零、再读 `scrollHeight` 赋回去。
- *      ⚠️⭐ **先归零是前提**：不归零的话，删掉几行之后 `scrollHeight` 仍是旧高度 ⇒ 输入框缩不回去。
- *      ⚠️ 封顶交给 CSS 的 `max-height`（本文件是两端共用的，所以这一个函数同时服务电脑端与手机端）。
- *
- * @param {HTMLElement} box - 目标 textarea
- * @returns {void}
+ * （那是刚统一过的样子，两端看起来得是同一个框）：先把高度归零、再读 `scrollHeight` 赋回去。
+ * **先归零是前提**：不归零的话，删掉几行之后 `scrollHeight` 仍是旧高度 ⇒ 输入框缩不回去。
+ * 封顶交给 CSS 的 `max-height`（本文件是两端共用的，所以这一个函数同时服务电脑端与手机端）。
  */
 function autoGrow(box) {
   if (!box) return;
@@ -492,10 +433,8 @@ function autoGrow(box) {
 }
 
 /**
- * ⭐ 0.8.6（行程 1 期 ·）：图片压缩的三个目标值。
- * ⚠️ 服务端那道硬上限是**解码后 ≤ 1 MB**（`core/validate.js` 的 `IMAGE_MAX_BYTES`）——
- * 这里压到 700 KB 是**前端的目标**，两者不是同一个数（前端是「压到多小」，服务端是「最多能收多大」）。
- * @type {number}
+ * ：图片压缩的三个目标值。
+ * 服务端那道硬上限是**解码后 ≤ 1 MB**（`core/validate.js` 的 `IMAGE_MAX_BYTES`）——
  */
 const IMG_LONG_SIDE = 1600;
 const IMG_QUALITY = 0.8;
@@ -504,7 +443,7 @@ const IMG_TARGET_BYTES = 700 * 1024;
 
 /**
  * 功能：算一串 data URL **解码后**的字节数（`n*3/4` 再去掉尾部 padding）。
- * ⚠️ 与 `core/validate.js` 的 `parseImageDataUrl()` 同一套算法（⛔ 不真解码 —— 只判「超没超」）。
+ * 与 `core/validate.js` 的 `parseImageDataUrl()` 同一套算法（⛔ 不真解码 —— 只判「超没超」）。
  * @param {string} s - data URL
  * @returns {number} 字节数
  */
@@ -521,23 +460,16 @@ function dataUrlBytes(s) {
  * 功能：把用户选的一张图**压到能发的大小**，回一整串 data URL。
  *
  * 说明：⭐ 长边 ≤ 1600px / JPEG quality 0.8 / 目标 ≤ 700 KB；压不下去就**如实抛错**
- *      （⛔ **绝不静默丢弃**、也绝不静默发一张超标的图 —— 那两种用户都只会觉得「点了没反应」）。
- *      ⚠️ 先铺一层白底再画：原图可能是带透明通道的 PNG，而 JPEG 没有 alpha，
- *      不铺底会把透明区画成黑块（截图类图片一般没事，但图标类的会很难看）。
- *
- * @param {File} file - 用户选的图片文件
- * @returns {Promise.<string>} 压缩后的 data URL（`data:image/jpeg;base64,…`）
- * @throws {Error} 读不出来 / 打不开 / 压不下去时抛出（文案直接给用户看）
+ * （⛔ **绝不静默丢弃**、也绝不静默发一张超标的图 —— 那两种用户都只会觉得「点了没反应」）。
+ * 先铺一层白底再画：原图可能是带透明通道的 PNG，而 JPEG 没有 alpha，
  */
 async function shrinkImage(file) {
-  // ⚠️⚠️ 真机（「图片发送是打不开」）：**先经 `createImageBitmap` 解码，别用 `<img>`**。
-  //    根因：CSP 是 `img-src 'self'`（见 `core/server.js` 的 `CSP_DIRECTIVES`），`data:` 图片被**直接拦掉**，
-  //    `<img src="data:…">` 必然触发 `onerror` ⇒ 不管选什么图都报「这张图打不开」。
-  //    `createImageBitmap()` 走的是**解码器**而不是图片加载链，不受 `img-src` 管 ⇒ 这条路才通。
-  //    ⛔ 别改回 `new Image()`，也⛔ 不要为了这个去放宽 CSP（安全头不为一处便利开口子）。
+  // 真机（「图片发送是打不开」）：**先经 `createImageBitmap` 解码，别用 `<img>`**。
+  // 根因：CSP 是 `img-src 'self'`（见 `core/server.js` 的 `CSP_DIRECTIVES`），`data:` 图片被**直接拦掉**，
+  // `<img src="data:…">` 必然触发 `onerror` ⇒ 不管选什么图都报「这张图打不开」。
   const bmp = await (async () => {
-    // ⚠️ 走 `window.createImageBitmap`（不是裸名）：eslint 的 browser globals 里没有它，
-    //    裸写会触发 no-undef；顺带也正好做「老 WebView 没这个 API」的存在判断。
+    // 走 `window.createImageBitmap`（不是裸名）：eslint 的 browser globals 里没有它，
+    // 裸写会触发 no-undef；顺带也正好做「老 WebView 没这个 API」的存在判断。
     if (typeof window !== 'undefined' && typeof window.createImageBitmap === 'function') {
       try {
         return await window.createImageBitmap(file);
@@ -583,17 +515,10 @@ async function shrinkImage(file) {
 
 /**
  * 功能：建 AI 会话的**聊天视图**（消息区 + 输入行）—— 挂在对话模块让位出来的插槽会话屏里，
- *      版式与真人聊天一致：消息自己滚、只向下长高、输入行贴底。
+ * 版式与真人聊天一致：消息自己滚、只向下长高、输入行贴底。
  *
- * 说明：⭐ 交互要点（方案 §七 + ai-console 的通用规矩）：
- *      · **流不算加载态**：发送中发送按钮**原地**变成「停止」（常驻控制，不出现在别处）；
- *      · **失败明确报错**：上游接受**之前**失败 → 文本原样退回输入框（什么都没发生）；
- *        接受之后失败 → 错误气泡带「再试一次」（那一轮已发生，重试是新的一轮）；
- *      · 用户消息在上游接受后才由服务端落库（没发出去的东西不进历史）。
- *      · ⭐ **插槽会话被关掉时**（对话模块发 `zx:teamwork-conv-close` 且 key 认领）就地停流，
- *        监听器自摘（一次挂载只收一次关闭）。
- *
- * @returns {HTMLElement} 视图根节点
+ * **流不算加载态**：发送中发送按钮**原地**变成「停止」（常驻控制，不出现在别处）；
+ * **失败明确报错**：上游接受**之前**失败 → 文本原样退回输入框（什么都没发生）；
  */
 export function createAiThreadView() {
   let streaming = false;
@@ -601,16 +526,9 @@ export function createAiThreadView() {
   let historyLoaded = false;
 
   const root = el('div', 'ai-thread');
-  // ⭐⭐ 0.8.55（「AI对话的UI和其它聊天窗口要一模一样」）：
-  //    消息区与输入行**改用好友聊天那一套类名与结构**（`.teamwork-body` / `.teamwork-msg` /
-  //    `.teamwork-bubble` / `.teamwork-mtime` / `.teamwork-compose` / `.teamwork-plus`）——
-  //    样式一份、类名一套，⛔ 不再自绘 `.ai-msgs` / `.ai-composer`（那是第二套聊天 UI，
-  //    与「一模一样」背道而驰，而且好友聊天以后改版这里一定跟不上）。
-  //    ⚠️ 消息区挂**两个类**：电脑端好友聊天是 `.teamwork-body`（padding 12 / 底色），
-  //    手机端是 `.teamwork-scroll`（padding 12px 2px / 滚动）—— 两端各自的规则只认自己那个类，
-  //    而这一份视图两端共用 ⇒ 两个都挂上，各端自然只生效自己那份（不新造第三个容器类）。
-  //    ⚠️ AI 专有的三样仍在，但都收进了**顶部那一行**与**输入行右侧**，不占聊天区：
-  //    段进度 / 用量（`segstate`）、风险提示（`segmsg`）、「开启新对话」（`newseg`）。
+  // ：
+  // 消息区与输入行**改用好友聊天那一套类名与结构**（`.teamwork-body` / `.teamwork-msg` /
+  // `.teamwork-bubble` / `.teamwork-mtime` / `.teamwork-compose` / `.teamwork-plus`）——
   root.innerHTML = `
     <div class="ai-thread-head">
       <div class="ai-note" data-ai="segstate">正在读取对话进度…</div>
@@ -636,9 +554,15 @@ export function createAiThreadView() {
   const segState = q('segstate');
   const segMsg = q('segmsg');
   const plusBtn = q('plus');
-  // ⚠️ 用量小字与风险提示**不再是布局里的两块**（好友聊天没有它们）——
-  //    用量并进顶部那句进度话（`loadSeg()` 之外由 `renderUsage()` 追加），
-  //    风险提示挪进「开启新对话」那颗按钮的 title（点开设置也能看到同一句）。
+  // 屏内输入的草稿：这一屏没有弹层，切走 / 被重载时输入行是随视图一起没的 ——
+  // 挂在输入行这个**容器**上（不是 textarea 本身），里面只有那个框会被采集。
+  // 键取固定值：AI 会话同一时间只有一个在用，两处实例共用一份草稿比各存一份更不容易丢字。
+  const composer = root.querySelector('.teamwork-compose');
+  attachDraft(composer, 'ai:composer');
+  restoreDraft(composer);
+  // 用量小字与风险提示**不再是布局里的两块**（好友聊天没有它们）——
+  // 用量并进顶部那句进度话（`loadSeg()` 之外由 `renderUsage()` 追加），
+  // 风险提示挪进「开启新对话」那颗按钮的 title（点开设置也能看到同一句）。
   segMsg.textContent = '发送的内容会离开 NAS，发往「AI 辅助任务」卡片里填写的接口；AI 的提议在落库前都要你确认。';
   segMsg.hidden = true;
 
@@ -650,9 +574,8 @@ export function createAiThreadView() {
     segState.textContent = extra ? `${base} · ${extra}` : base;
   }
 
-  // ⭐ 0.8.6：**待发送的那一张图**已取消 —— 与好友聊天同一条口径：选了图**直接发**，
-  //    ⛔ 不再留一个「预览条 + 去掉这张图」的中间态（那正是两套聊天 UI 的差异之一）。
-  //    这个账号开没开「支持图片输入」—— ⚠️ **问服务端**，前端不自己猜。
+  // **待发送的那一张图**已取消 —— 与好友聊天同一条口径：选了图**直接发**，
+  // 这个账号开没开「支持图片输入」—— ⚠️ **问服务端**，前端不自己猜。
   let visionOn = false;
 
   const picFile = q('picfile');
@@ -669,17 +592,14 @@ export function createAiThreadView() {
       return;
     }
     inputBox.value = '';
-    autoGrow(inputBox); // ⭐ 0.7.7-⑭：发完缩回一行高
+    clearDraft('ai:composer');
+    autoGrow(inputBox); // -⑭：发完缩回一行高
     sendText(v, null);
   }
 
   /**
-   * 功能：⭐ 0.8.55 —— 输入框左边那颗圆圈 ＋ 的菜单（与好友聊天**同一套类名**）。
    *
    * 说明：⚠️ 三项顺序与好友聊天逐字一致：发送图片 / 协作项目任务 / 普通任务。
-   *      ⚠️「支持图片输入」没开时，**图片那一项置灰并写明原因**（⛔ 不静默禁用、⛔ 更不是点了没反应）——
-   *      与好友聊天那边「没选会话就置灰」是同一条做法。
-   * @returns {void}
    */
   function openAiSendMenu() {
     const items = [
@@ -710,7 +630,7 @@ export function createAiThreadView() {
 
   /**
    * 功能：开一次发送菜单所需的「挂到哪」—— ⚠️ 本视图不接 host（没有弹层能力），
-   *      所以菜单就地挂在输入行上方（一个绝对定位的小浮层），点空白 / 选完就收。
+   * 所以菜单就地挂在输入行上方（一个绝对定位的小浮层），点空白 / 选完就收。
    * @param {HTMLElement} box - 菜单节点
    * @param {HTMLElement} anchor - 贴着谁弹
    * @returns {void}
@@ -720,8 +640,8 @@ export function createAiThreadView() {
     root.classList.add('has-pop');
     box.classList.add('ai-send-menu');
     root.appendChild(box);
-    // ⚠️ 位置由 CSS 给（`.ai-send-menu` 贴在输入行上方、左边对齐那颗 ＋）；
-    //    这里只负责「点外面收起来」与「再点一次 ＋ 收起来」。
+    // 位置由 CSS 给（`.ai-send-menu` 贴在输入行上方、左边对齐那颗 ＋）；
+    // 这里只负责「点外面收起来」与「再点一次 ＋ 收起来」。
     const close = (e) => {
       if (e && e.target && (box.contains(e.target) || anchor.contains(e.target))) return;
       closeHostPopover();
@@ -750,8 +670,8 @@ export function createAiThreadView() {
     if (!f) return;
     if (!visionOn) return;
     if (f.size > IMG_MAX_BYTES) return errorLine('这张图太大了（8 MB 以内）—— 压一下或者裁一刀再发。');
-    // ⭐ 与好友聊天同一条口径：**先压再发**（长边 ≤1600 / JPEG 0.8 / 目标 ≤700 KB），
-    //    压不下去就如实报错 —— ⛔ 不静默丢弃、也不静默发一张超标的图。
+    // 与好友聊天同一条口径：**先压再发**（长边 ≤1600 / JPEG 0.8 / 目标 ≤700 KB），
+    // 压不下去就如实报错 —— ⛔ 不静默丢弃、也不静默发一张超标的图。
     shrinkImage(f)
       .then((url) => sendText('', url))
       .catch((e) => errorLine(e && e.message ? e.message : '这张图用不了'));
@@ -760,8 +680,7 @@ export function createAiThreadView() {
   /**
    * 功能：重新读一次「现在是第几段、这一段有多少条」，写进顶部那行进度句。
    *
-   * 说明：⭐ 0.7.6 从配置屏搬过来 —— 「这是第几段」是**会话自己的事**，配置屏管不着它。
-   *      ⚠️ 段号取「消息里最大的那个」：不带 `segment` 的历史行语义就是第 1 段（服务端已归一）。
+   * 段号取「消息里最大的那个」：不带 `segment` 的历史行语义就是第 1 段（服务端已归一）。
    * @returns {Promise.<void>}
    */
   async function loadSeg() {
@@ -774,11 +693,10 @@ export function createAiThreadView() {
       }
       const seg = items.reduce((m, x) => Math.max(m, Number(x.segment) || 1), 1);
       const here = items.filter((x) => (Number(x.segment) || 1) === seg).length;
-      // ⚠️ 只取了最近 200 条：这一段的条数可能被截断，那就**别报一个假精确的数**
+      // 只取了最近 200 条：这一段的条数可能被截断，那就**别报一个假精确的数**
       const capped = items.length >= 200 && here >= 200;
-      // ⭐ 0.7.7-⑮：界面上说**「轮」**，代码里仍叫 `segment` —— 这是**有意**的，不是漏改：
-      //    `segment` / `cur_segment` / `aiNewSegment()` / REST 字段 / 表列名一个字都没动，
-      //    只有**用户看得见的那句话**换了词。全屏不再出现「段」（术语混用会让人以为是两回事）。
+      // -⑮：界面上说**「轮」**，代码里仍叫 `segment` —— 这是**有意**的，不是漏改：
+      // `segment` / `cur_segment` / `aiNewSegment()` / REST 字段 / 表列名一个字都没动，
       segState.textContent = capped
         ? `第 ${seg} 轮，本轮消息很多（这里只数了最近 200 条）`
         : `第 ${seg} 轮，本轮 ${here} 条消息`;
@@ -787,7 +705,7 @@ export function createAiThreadView() {
     }
   }
 
-  // ⭐ 0.7.6：开新对话 —— 只让**接下来的**对话不带更早的内容，旧消息一条都不删（回显里对用户说明白）
+  // 开新对话 —— 只让**接下来的**对话不带更早的内容，旧消息一条都不删（回显里对用户说明白）
   q('newseg').addEventListener('click', async () => {
     const btn = q('newseg');
     btn.disabled = true;
@@ -807,26 +725,15 @@ export function createAiThreadView() {
   });
 
   /**
-   * 功能：画一条消息 —— ⭐ 0.8.55 起**用好友聊天那一套 DOM**（`.teamwork-msg` + `.teamwork-bubble`
-   *      + `.teamwork-mtime`），⛔ 不再自绘 `.ai-msg` / `.ai-msg-text`。
+   * + `.teamwork-mtime`），⛔ 不再自绘 `.ai-msg` / `.ai-msg-text`。
    *
-   * 说明：⭐ 0.7.6：**AI 的回复**走轻量 markdown 渲染（`paintMd()`，仍是逐节点建 DOM，
-   *      ⛔ 没有 HTML 透传）；**用户自己发的**照旧原样纯文本 —— 用户打的是原话，不该被当成格式。
-   *      ⚠️ 返回值的 `firstChild` **必须是那颗气泡**（`.teamwork-bubble`）—— 流式那一段靠
-   *      `assistantBox.firstChild.textContent = acc` 往里写字，这是与 `sendText()` 的既有约定。
-   *      所以结构固定成「气泡在前、时间在后」，⛔ 别把时间放到前面。
-   * @param {string} role - 'user' | 'assistant'
-   * @param {string} text - 消息文本（空串 = 先立个位，流式随后往里写）
-   * @param {string} [imgUrl] - 图片地址（有就画一张缩略图）
-   * @param {string} [createdAt] - 时间戳（历史消息带；本地乐观消息不带给「现在」）
-   * @returns {HTMLElement} 消息行（调用方决定是否接着往里追加流式增量）
    */
   function bubble(role, text, imgUrl, createdAt) {
     const mine = role === 'user';
     const box = el('div', `teamwork-msg${mine ? ' mine' : ' builtin'}`);
     if (imgUrl) {
-      // ⭐ 0.8.55：图片走**好友聊天同款的 `figure.teamwork-img-box`** —— 类名与
-      //    `data-teamwork-img` 一致，点开看大图由 teamwork 那份文档级委托接（⛔ 不用另写一套）。
+      // 图片走**好友聊天同款的 `figure.teamwork-img-box`** —— 类名与
+      // `data-teamwork-img` 一致，点开看大图由 teamwork 那份文档级委托接（⛔ 不用另写一套）。
       const fig = document.createElement('figure');
       fig.className = 'teamwork-img-box';
       fig.dataset.teamworkImg = imgUrl;
@@ -841,7 +748,7 @@ export function createAiThreadView() {
       box.appendChild(fig);
     }
     const t = el('div', 'teamwork-bubble');
-    // ⚠️ 只有图、一个字都没写时**不画那个空气泡**（空 div 会留下一条多余的间隙）
+    // 只有图、一个字都没写时**不画那个空气泡**（空 div 会留下一条多余的间隙）
     if (!imgUrl || text) {
       if (mine || !text) t.textContent = text;
       else paintMd(t, text);
@@ -858,15 +765,8 @@ export function createAiThreadView() {
   }
 
   /**
-   * 功能：把一条消息里那张图**换成另一个地址**（⭐ 0.8.55 修「图片发送打不开」）。
    *
    * 说明：⭐⭐ 本地刚选的那张图是 `data:` URL，而 CSP 是 `img-src 'self'`
-   *      （`core/server.js` 的 `CSP_DIRECTIVES`）⇒ 它在气泡里**显示不出来**（不是图坏了，是被拦了）。
-   *      `start` 帧一到，服务端已把图落库，这里把 `src` 与点开大图用的 `data-teamwork-img`
-   *      一起换成**同源**取图接口 —— 于是预览、点开、刷新之后看到的是同一张图。
-   * @param {HTMLElement} box - 消息行
-   * @param {string} url - 同源图片地址
-   * @returns {void}
    */
   function swapImageSrc(box, url) {
     const fig = box && box.querySelector ? box.querySelector('figure[data-teamwork-img]') : null;
@@ -884,23 +784,19 @@ export function createAiThreadView() {
     msgsBox.scrollTop = msgsBox.scrollHeight;
   }
 
-  // ---------------- ⭐ 0.7.7-⑲：会话流里的「任务确认卡」 ----------------
 
   /**
    * 每张卡片的**快照**（卡片消息 id → `meta` 对象）—— 点「同意」时要拿它去逐条建任务。
-   * ⚠️ 为什么不用 DOM 反读：卡片是**只读**的展示，把结构化数据塞进 HTML 属性再读回来
-   * 只会多一层转义/反解析的出错面。 @type {Map.<number, Object>}
+   * 为什么不用 DOM 反读：卡片是**只读**的展示，把结构化数据塞进 HTML 属性再读回来
    */
   const proposalMetas = new Map();
 
   /**
    * 功能：把一张确认卡画进消息区（放在 AI 那条回复的下一条，与它对用户的说法挨着）。
    *
-   * 说明：⭐ 0.8.55：外层换成好友聊天那一套（`.teamwork-msg builtin is-card`）——
-   *      卡片消息与好友聊天里的任务卡片**同宽同位**（定宽规则写在 `.teamwork-msg.is-card` 上）。
-   *      卡片本体仍是 `.ai-prop-card`（确认卡是 AI 独有，好友聊天没有对应的东西）。
+   * 卡片消息与好友聊天里的任务卡片**同宽同位**（定宽规则写在 `.teamwork-msg.is-card` 上）。
+   * 卡片本体仍是 `.ai-prop-card`（确认卡是 AI 独有，好友聊天没有对应的东西）。
    * @param {{id: number, meta: ?Object}} card - 卡片
-   * @returns {?HTMLElement} 卡片节点；`meta` 认不出来时为 null（调用方退回普通气泡）
    */
   function cardMsg(card) {
     const html = proposalCardHtml(card);
@@ -919,16 +815,8 @@ export function createAiThreadView() {
   }
 
   /**
-   * 功能：把一张**任务卡片**画进消息区 —— ⭐ 0.8.55：把任务发给 AI 时用它。
    *
    * 说明：⚠️ 那是**我发出去**的一条消息（`mine`），所以靠右。
-   *      结构与类名与好友聊天里那张卡片**逐字一致**（`.teamwork-card` / `-head` / `-title`
-   *      / `-chips` / `-note`）—— 两边看到的是同一种卡片。
-   *      ⛔ 不画卡片底部那排动作按钮：那边是「收进我的任务板」，而我发给 AI 的是**我自己已有的**
-   *      任务，收进来等于自己抄自己。
-   * @param {Object} meta - 卡片快照（`{title, due, important, urgent, note, src, project, from}`）
-   * @param {string} [createdAt] - 时间戳
-   * @returns {HTMLElement} 消息行
    */
   function taskCardMsg(meta, createdAt) {
     const raw = meta && typeof meta === 'object' ? meta : {};
@@ -945,15 +833,10 @@ export function createAiThreadView() {
 
   /**
    * 功能：把卡片里的条目逐条建成任务 —— ⚠️ **逐条尽力而为**（一条失败不拖累其余），
-   *      并把成功 / 失败条数报回去（卡上要写清结论）。
+   * 并把成功 / 失败条数报回去（卡上要写清结论）。
    *
-   * 说明：⭐⭐ 落库**只走** `core/task-create.js`—— ⛔ 这里不许自己拼
-   *      `POST /api/daily`。二次校验：① 一次最多 `MAX_AI_PROPOSAL_ITEMS` 条（超了**抛错** =
-   *      可见地拒绝）；② 标题必填；③ 归属必须是 `'daily'` 或**自己的**项目（拉不到清单时只有日常）。
-   *
-   * @param {Array.<Object>} items - 卡片快照里的条目
-   * @returns {Promise.<{added: number, failed: number}>} 成功 / 失败条数
-   * @throws {Error} 条数超上限时（调用方把它显示成一条人话）
+   * `POST /api/daily`。二次校验：① 一次最多 `MAX_AI_PROPOSAL_ITEMS` 条（超了**抛错** =
+   * 可见地拒绝）；② 标题必填；③ 归属必须是 `'daily'` 或**自己的**项目（拉不到清单时只有日常）。
    */
   async function createProposalTasks(items) {
     const list = Array.isArray(items) ? items : [];
@@ -985,8 +868,8 @@ export function createAiThreadView() {
           important: Number(s.important) ? 1 : 0,
           urgent: Number(s.urgent) ? 1 : 0,
           content: String(s.note || ''),
-          // ⭐ 0.8.55：任务类型与周期规则（服务端提议里已经归一过；老卡没有这两个键 ⇒ 普通任务）
-          //    ⚠️ 字段是 `task_kind` —— `kind` 在这个对象里另有含义（模块名），别混
+          // 任务类型与周期规则（服务端提议里已经归一过；老卡没有这两个键 ⇒ 普通任务）
+          // 字段是 `task_kind` —— `kind` 在这个对象里另有含义（模块名），别混
           task_kind: s.task_kind ? String(s.task_kind) : '',
           recur_rule: s.rule || null,
         });
@@ -1000,18 +883,10 @@ export function createAiThreadView() {
 
   /**
    * 功能：把卡片里的账目逐条记进账本 —— ⚠️ **逐条尽力而为**（一笔失败不拖累其余），
-   *      并把成功 / 失败笔数报回去（卡上要写清结论）。
+   * 并把成功 / 失败笔数报回去（卡上要写清结论）。
    *
    * 说明：⭐⭐ 落库**只走** `core/ledger-create.js`（记账创建的唯一入口，与任务的 同一条规矩）
-   *      —— ⛔ 这里不许自己拼 `POST /api/ledger/entries`。
-   *      二次校验：① 一次最多 `MAX_AI_LEDGER_ITEMS` 笔（超了**抛错** = 可见地拒绝）；
-   *      ② `at` 与 `amount` 必填（缺了那条直接记失败 —— 服务端也会 400，但在这里挡掉省一次往返）。
-   *      ⚠️ `category_id` / `account_id` 原样透传（`null` 是**有意义的两个落点**：未分类 / 不关联账户，
-   *      ）—— ⛔ 别在这里「兜一个默认分类」（那会把 AI 的猜测变成用户的账）。
-   *
-   * @param {Array.<Object>} items - 卡片快照里的条目
-   * @returns {Promise.<{added: number, failed: number}>} 成功 / 失败笔数
-   * @throws {Error} 笔数超上限时（调用方把它显示成一条人话）
+   * 二次校验：① 一次最多 `MAX_AI_LEDGER_ITEMS` 笔（超了**抛错** = 可见地拒绝）；
    */
   async function createProposalEntries(items) {
     const list = Array.isArray(items) ? items : [];
@@ -1046,16 +921,8 @@ export function createAiThreadView() {
   }
 
   /**
-   * 功能：把卡片里的收藏逐条存进收藏夹（0.8.5）—— ⚠️ **逐条尽力而为**，并报回成功 / 失败条数。
    *
    * 说明：⭐⭐ 落库**只走** `core/bookmark-create.js`（收藏创建的唯一入口，与 同一条规矩）
-   *      —— ⛔ 这里不许自己拼 `POST /api/bookmarks`。
-   *      ⚠️ 重复的网址（快照里的 `dup`）**照样会试一次**：卡上已经写明「不会重复写入」，
-   *      而真正挡住它的是服务端那道 400 —— 前端**不替服务端做判重**（那会变成第二份口径）。
-   *
-   * @param {Array.<Object>} items - 卡片快照里的条目
-   * @returns {Promise.<{added: number, failed: number}>} 成功 / 失败条数
-   * @throws {Error} 条数超上限时（调用方把它显示成一条人话）
    */
   async function createProposalBookmarks(items) {
     const list = Array.isArray(items) ? items : [];
@@ -1082,14 +949,8 @@ export function createAiThreadView() {
   }
 
   /**
-   * 功能：把卡片里的随手记逐条记下来（0.8.5）—— ⚠️ **逐条尽力而为**。
    *
    * 说明：⭐⭐ 落库**只走** `core/idea-create.js`（随手记创建的唯一入口）——
-   *      ⛔ 这里不许自己拼 `POST /api/idea`。
-   *
-   * @param {Array.<Object>} items - 卡片快照里的条目
-   * @returns {Promise.<{added: number, failed: number}>} 成功 / 失败条数
-   * @throws {Error} 条数超上限时
    */
   async function createProposalIdeas(items) {
     const list = Array.isArray(items) ? items : [];
@@ -1115,16 +976,8 @@ export function createAiThreadView() {
   }
 
   /**
-   * 功能：把卡片里的硬件逐件写进台账（0.8.5）—— ⚠️ **逐条尽力而为**。
    *
    * 说明：⭐⭐ 落库**只走** `core/hardware-create.js`（硬件创建的唯一入口）——
-   *      ⛔ 这里不许自己拼 `POST /api/hardware`。
-   *      ⚠️ 快照对象整个交出去：`createHardware()` 只挑它认识的那几个键（多送的会被忽略），
-   *      而快照的字段白名单本来就由服务端 `snapshotProposalItems()` 定。
-   *
-   * @param {Array.<Object>} items - 卡片快照里的条目
-   * @returns {Promise.<{added: number, failed: number}>} 成功 / 失败件数
-   * @throws {Error} 件数超上限时
    */
   async function createProposalHardware(items) {
     const list = Array.isArray(items) ? items : [];
@@ -1150,17 +1003,8 @@ export function createAiThreadView() {
   }
 
   /**
-   * 功能：把卡片里的车票逐张建出来（0.8.6）—— ⚠️ **逐条尽力而为**。
    *
    * 说明：⭐⭐ 落库**只走** `core/trip-create.js`（车票创建的唯一入口）——
-   *      ⛔ 这里不许自己拼 `POST /api/trip/tickets`（不造第二条创建路径）。
-   *      ⚠️ **标了 `bad` 的那几条照样送过去**：服务端按它自己的字段校验如实拒掉（那一条算失败），
-   *      卡上因此会写「有 N 张没能加上」—— 这比在这里**静默跳过**好得多
-   *      （跳过的话用户以为 AI 漏了一条，而卡上还写着「已加进去 N 张」）。
-   *
-   * @param {Array.<Object>} items - 卡片快照里的条目
-   * @returns {Promise.<{added: number, failed: number}>} 成功 / 失败张数
-   * @throws {Error} 张数超上限时
    */
   async function createProposalTrips(items) {
     const list = Array.isArray(items) ? items : [];
@@ -1187,15 +1031,8 @@ export function createAiThreadView() {
   }
 
   /**
-   * 功能：把卡片里的资产条目逐条记进台账（⭐ 0.8.55）—— ⚠️ **逐条尽力而为**。
    *
    * 说明：⭐⭐ 落库**只走** `core/asset-create.js`（资产条目的唯一入口）——
-   *      ⛔ 这里不许自己拼 `POST /api/assets/items`（不造第二条创建路径）。
-   *      ⚠️ 分组是**服务端解析好的 `group_id`**（模型说的名字在本机找不到时它是 null）——
-   *      那就按「未分组」落库，与用户在那个弹层里不选分组是同一种结果。
-   * @param {Array.<Object>} items - 卡片快照里的条目
-   * @returns {Promise.<{added: number, failed: number}>} 成功 / 失败条数
-   * @throws {Error} 条数超上限时
    */
   async function createProposalAssets(items) {
     const list = Array.isArray(items) ? items : [];
@@ -1226,14 +1063,8 @@ export function createAiThreadView() {
   }
 
   /**
-   * 功能：把卡片里的日程逐条建出来（⭐ 0.8.55）—— ⚠️ **逐条尽力而为**。
    *
    * 说明：⭐⭐ 落库**只走** `core/calendar-create.js`（日程创建的唯一入口）。
-   *      ⚠️ 标了 `bad` 的那几条照样送过去：服务端按自己的校验如实拒掉（那一条算失败），
-   *      卡上因此会写「有 N 条没能加上」——比在这里**静默跳过**好（跳过的话用户以为 AI 漏了一条）。
-   * @param {Array.<Object>} items - 卡片快照里的条目
-   * @returns {Promise.<{added: number, failed: number}>} 成功 / 失败条数
-   * @throws {Error} 条数超上限时
    */
   async function createProposalEvents(items) {
     const list = Array.isArray(items) ? items : [];
@@ -1267,8 +1098,7 @@ export function createAiThreadView() {
   }
 
   /**
-   * ⭐ 0.8.5：kind → 落库函数（**闭包内**的这张表 —— 它要用 `api` 与上面那五个函数）。
-   * ⚠️ 模块级的 `PROPOSAL_UI` 管「怎么画」，这张表管「怎么落库」；两张表各管一段。
+   * kind → 落库函数（**闭包内**的这张表 —— 它要用 `api` 与上面那五个函数）。
    * @type {Object.<string, Function>}
    */
   const PROPOSAL_RUNNERS = {
@@ -1283,16 +1113,8 @@ export function createAiThreadView() {
   };
 
   /**
-   * 功能：⭐ 0.8.55 点「修改」—— 把这张卡的内容**带进那个模块自己的「新建」弹窗**，预填好让用户改。
    *
    * 说明：⭐⭐ 走**留白事件** `zx:ai-proposal-edit`：AI 模块只管「把内容交出去」，
-   *      弹窗长什么样、字段怎么校验、存到哪儿，全都是那个模块自己的事 —— ⛔ 不在这里画第二份表单。
-   *      ⚠️ 用 `detail.handled` 回执判断「有没有模块认领」：没人认领就**明说**支持不了，
-   *      ⛔ 不许点了没反应（那正是最讨厌的那种）。
-   *      ⚠️ 卡片状态**不动**：改完存下的是那个模块自己的记录，这张卡仍「待处理」——
-   *      用户可以回头再点同意 / 拒绝（「修改」不是一种表态）。
-   * @param {number} id - 卡片消息 id
-   * @returns {void}
    */
   function editProposal(id) {
     const meta = proposalMetas.get(Number(id));
@@ -1301,7 +1123,7 @@ export function createAiThreadView() {
       id: Number(id),
       kind: String(meta.kind || ''),
       items: Array.isArray(meta.items) ? meta.items : [],
-      // ⚠️ 回执：谁认领谁把它置 true
+      // 回执：谁认领谁把它置 true
       handled: false,
     };
     document.dispatchEvent(new CustomEvent('zx:ai-proposal-edit', { detail }));
@@ -1314,10 +1136,8 @@ export function createAiThreadView() {
    * 功能：点「同意 / 拒绝」—— 同意先逐条建任务、再请服务端写回卡片状态；拒绝直接写回。
    *
    * 说明：⚠️ 服务端**不自己建任务**（那会变成第二条创建路径）：它只改状态 + 追加一条助手消息，
-   *      并把那条消息回给我们显示（单一真相：刷新之后看到的是同一条）。
+   * 并把那条消息回给我们显示（单一真相：刷新之后看到的是同一条）。
    * @param {number} id - 卡片消息 id
-   * @param {string} action - `'agree'` | `'reject'`
-   * @returns {Promise.<void>}
    */
   async function resolveProposal(id, action) {
     const meta = proposalMetas.get(Number(id));
@@ -1328,7 +1148,7 @@ export function createAiThreadView() {
       b.disabled = true;
     });
     const unlock = () => {
-      // ⚠️ 只有卡还在「待处理」时才解锁（处理成功的话卡里已经没有按钮了）
+      // 只有卡还在「待处理」时才解锁（处理成功的话卡里已经没有按钮了）
       if (box && box.querySelector('[data-ai-prop-act]')) {
         btns.forEach((b) => {
           b.disabled = false;
@@ -1338,8 +1158,8 @@ export function createAiThreadView() {
     try {
       let payload = { action };
       if (action === 'agree') {
-        // ⭐ 0.8.5：五种「同意」各走各的唯一入口（见 `PROPOSAL_RUNNERS` 那张表）——
-        //    任务 → createTask、记账 / 收藏 / 随手记 / 硬件 → 各自 `core/*-create.js`。
+        // 五种「同意」各走各的唯一入口（见 `PROPOSAL_RUNNERS` 那张表）——
+        // 任务 → createTask、记账 / 收藏 / 随手记 / 硬件 → 各自 `core/*-create.js`。
         const ui = uiOfKind(meta.kind);
         const run = PROPOSAL_RUNNERS[String(meta.kind || '')] || PROPOSAL_RUNNERS[PROPOSAL_KIND];
         const r = await run(meta.items);
@@ -1364,13 +1184,12 @@ export function createAiThreadView() {
     }
   }
 
-  // ⚠️ 委托挂在**消息区**上（卡片是后画进来的，逐张绑会漏掉历史里那些）
   msgsBox.addEventListener('click', (e) => {
     const t = e.target;
     const btn = t && t.closest ? t.closest('[data-ai-prop-act]') : null;
     if (!btn) return;
     const act = String(btn.dataset.aiPropAct);
-    // ⭐ 0.8.55：「修改」不表态（卡片状态不动），只是把内容搬进那个模块的新建弹窗
+    // 「修改」不表态（卡片状态不动），只是把内容搬进那个模块的新建弹窗
     if (act === 'edit') return void editProposal(Number(btn.dataset.aiPropId));
     resolveProposal(Number(btn.dataset.aiPropId), act);
   });
@@ -1410,16 +1229,16 @@ export function createAiThreadView() {
     try {
       const r = await api('GET', '/api/ai/messages?limit=50');
       for (const m of r.items || []) {
-        // ⭐ 0.7.7-⑲：确认卡按卡片画（刷新页面卡还在、两颗按钮也还在）；认不出来就当普通消息
-        // ⭐ 0.8.4：两种卡都认（任务 / 记账）—— 判据只此一处（`isProposalMsgKind()`）
+        // -⑲：确认卡按卡片画（刷新页面卡还在、两颗按钮也还在）；认不出来就当普通消息
+        // 两种卡都认（任务 / 记账）—— 判据只此一处（`isProposalMsgKind()`）
         if (isProposalMsgKind(m.kind) && m.meta && cardMsg({ id: m.id, meta: m.meta, createdAt: m.createdAt })) continue;
-        // ⭐⭐ 0.8.55：**我把任务发给它**的那张卡片 —— 与好友聊天里那张同款（刷新后还在）
+        // **我把任务发给它**的那张卡片 —— 与好友聊天里那张同款（刷新后还在）
         if (String(m.kind || '') === 'task_card' && m.meta) {
           taskCardMsg(m.meta, m.createdAt);
           continue;
         }
-        // ⭐ 0.8.6：带图的那条 —— 历史列表只回 `has_image`（⛔ 永不拖 base64），
-        //    图本身按需向**它自己的接口**取（`<img>` 自己去请求，正好省掉一次显式取数）。
+        // 带图的那条 —— 历史列表只回 `has_image`（⛔ 永不拖 base64），
+        // 图本身按需向**它自己的接口**取（`<img>` 自己去请求，正好省掉一次显式取数）。
         bubble(m.role, m.content, m.has_image ? `${BASE}/api/ai/messages/${m.id}/image` : '', m.createdAt);
       }
       if ((r.items || []).length) emptyBox.hidden = true;
@@ -1437,21 +1256,15 @@ export function createAiThreadView() {
   function setStreaming(on) {
     streaming = on;
     sendBtn.textContent = on ? '停止' : '发送';
-    // ⭐ 0.8.55：按钮就是好友聊天那颗 `.btn.btn-primary`，发送中只换文案与一个 `is-stop` 类
-    //    （⛔ 不换掉 `.btn-primary` —— 换了之后尺寸与配色都跟好友聊天不一样了）
+    // 按钮就是好友聊天那颗 `.btn.btn-primary`，发送中只换文案与一个 `is-stop` 类
+    // （⛔ 不换掉 `.btn-primary` —— 换了之后尺寸与配色都跟好友聊天不一样了）
     sendBtn.classList.toggle('is-stop', on);
     inputBox.disabled = on;
   }
 
   /**
-   * 功能：⭐ 0.8.55 —— 借宿主的**同一个任务选择器**（好友聊天＋ 菜单里那个）。
    *
    * 说明：⚠️ 走留白事件而不是自己再画一个选择器：那个弹层有搜索、三个筛选、按项目折叠，
-   *      复制一份就是第二套 UI（这次要的正是两端「一模一样」）。
-   *      协作模块收到 `zx:ai-pick-task` 后会打开它自己的选择器，选中时把
-   *      `{card, bodyText}` 回调给这里 —— ⛔ 本模块不认识任务的表结构。
-   * @param {'daily'|'collab'} act - 要挑哪一类任务
-   * @returns {void}
    */
   function pickTaskForAi(act) {
     if (streaming) return;
@@ -1461,7 +1274,7 @@ export function createAiThreadView() {
           act,
           done: (picked) => {
             if (!picked || !picked.card) return;
-            // ⚠️ 正文就是「降级文本」：模型读到的就是它（卡片本身是给人看的）
+            // 正文就是「降级文本」：模型读到的就是它（卡片本身是给人看的）
             sendText(String(picked.bodyText || ''), null, picked.card);
           },
         },
@@ -1473,21 +1286,11 @@ export function createAiThreadView() {
    * 功能：把一段文本发出去（SSE 读流）—— 发送按钮与「再试一次」都走这里。
    *
    * 说明：⭐ 用 `fetch` 读 POST 的流式响应（`EventSource` 只支持 GET）；帧解析与
-   *      `modules/teamwork/teamwork-stream.js` 同口径：按 `\n\n` 切帧、`data:` 行、注释帧忽略、坏帧跳过。
-   *      ⭐ `timeout: 0`（不设前端超时上界）：等待的上界由**服务端** 30 秒总时长闸门决定 ——
-   *      前端 15 秒的默认超时比它短，会把「模型还在想」掐成假失败。
-   *      ⭐ 失败分两半（与服务端的落库时机对齐）：
-   *      `start` 帧**之前**失败 = 什么都没发生 → 撤掉乐观气泡、文本退回输入框；
-   *      `start` 帧**之后**失败 = 那一轮已发生（用户消息在历史里）→ 保留残段 + 错误行 +「再试一次」。
-   *
-   * @param {string} content - 要发送的文本（非空；只发图时为空串）
-   * @param {?string} image - 图片 data URL（null = 没有图）
-   * @param {?Object} card - ⭐ 0.8.55：任务卡片快照（把任务发给 AI 时带；null = 普通消息）
-   * @returns {Promise.<void>}
+   * `modules/teamwork/teamwork-stream.js` 同口径：按 `\n\n` 切帧、`data:` 行、注释帧忽略、坏帧跳过。
+   * `timeout: 0`（不设前端超时上界）：等待的上界由**服务端** 30 秒总时长闸门决定 ——
    */
   async function sendText(content, image, card) {
     if (streaming) return;
-    // ⭐ 0.8.55：任务卡片按卡片画（与好友聊天里那张同款）；0.8.6 起本地刚选的图直接用 data URL 先画
     const userB = card ? taskCardMsg(card) : bubble('user', content, image || '');
     setStreaming(true);
     ctrl = new AbortController();
@@ -1495,15 +1298,15 @@ export function createAiThreadView() {
     let gotDone = false; // 收到 done 帧 = 服务端已确认完整回复
     let assistantBox = null;
     let acc = '';
-    // ⭐ 3 期：写工具的提议随 `done` 帧下来（服务端从不落库，等用户点确认）。
-    //    攒在这里、收尾后再交给端去开确认卡 —— 本视图拿不到 `host`（没有弹层能力）。
+    // 3 期：写工具的提议随 `done` 帧下来（服务端从不落库，等用户点确认）。
+    // 攒在这里、收尾后再交给端去开确认卡 —— 本视图拿不到 `host`（没有弹层能力）。
     let proposalItems = null;
     try {
       const res = await fetch(`${BASE}/api/ai/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // ⚠️⭐ 没带图、没带卡片时请求体与 2 期**逐字相同**（⛔ 别写成 `{content, image: null}`）——
-        //    「没用图片时出网内容一个字不变」是一条既有承诺，`ai.test.js` 拿假上游抓请求体钉着它。
+        // 没带图、没带卡片时请求体与 2 期**逐字相同**（⛔ 别写成 `{content, image: null}`）——
+        // 「没用图片时出网内容一个字不变」是一条既有承诺，`ai.test.js` 拿假上游抓请求体钉着它。
         body: JSON.stringify(
           card ? { content, card: { kind: 'task_card', meta: card } } : image ? { content, image } : { content },
         ),
@@ -1535,7 +1338,7 @@ export function createAiThreadView() {
             }
             if (f.type === 'start') {
               started = true;
-              // ⭐ 0.8.55：用户消息已落库 ⇒ 把那张本地 data: 预览换成同源地址（CSP 只放行 'self'）
+              // 用户消息已落库 ⇒ 把那张本地 data: 预览换成同源地址（CSP 只放行 'self'）
               if (image && f.userMessageId) swapImageSrc(userB, `${BASE}/api/ai/messages/${Number(f.userMessageId)}/image`);
               assistantBox = bubble('assistant', '');
               assistantBox.firstChild.classList.add('ai-streaming');
@@ -1547,16 +1350,15 @@ export function createAiThreadView() {
               gotDone = true;
               if (assistantBox) {
                 assistantBox.firstChild.classList.remove('ai-streaming');
-                // ⭐ 0.7.6：收尾这一拍把整条回复重画成**渲染后的 DOM**（流式期间一直是纯文本）
+                // 收尾这一拍把整条回复重画成**渲染后的 DOM**（流式期间一直是纯文本）
                 paintMd(assistantBox.firstChild, acc);
               }
-              // ⭐ 2 期：把「这一次到底带了什么」写在输入框下方。
-              //    ⚠️ 四个数取自服务端实际拼进请求的那一组消息，前端不算、不估。
+              // 2 期：把「这一次到底带了什么」写在输入框下方。
+              // 四个数取自服务端实际拼进请求的那一组消息，前端不算、不估。
               if (f.used) renderUsage(f.used);
-              // ⭐ 3 期：写工具的提议（数组，**可选字段** —— 没有提议时这一帧与 2 期逐字相同）。
-              //    去重是服务端做的（同轮按「标题 + 截止日期」），前端原样收。
-              // ⭐ 0.7.7-⑲：服务端现在还会带 `card`（**落库之后**的那张确认卡）—— 有它就**在会话流里**
-              //    画卡（要的形态），不再开那张模态确认卡；`proposals` 只作为老服务端的兼容回落。
+              // 3 期：写工具的提议（数组，**可选字段** —— 没有提议时这一帧与 2 期逐字相同）。
+              // 去重是服务端做的（同轮按「标题 + 截止日期」），前端原样收。
+              // -⑲：服务端现在还会带 `card`（**落库之后**的那张确认卡）—— 有它就**在会话流里**
               if (f.card && cardMsg(f.card)) proposalItems = null;
               else if (Array.isArray(f.proposals) && f.proposals.length) proposalItems = f.proposals;
             } else if (f.type === 'error') {
@@ -1567,11 +1369,9 @@ export function createAiThreadView() {
       }
       // 流断了但两个收尾帧都没来 —— 按失败处理，绝不把半截话当好答案
       if (started && !gotDone) throw new Error('连接中断了，这段回复没有保存');
-      // ⭐ 3 期：写工具的提议交给**端**去开确认卡（本视图没有弹层能力）。
-      //    走留白事件而不是直接调 `host.openForm`：`createAiThreadView()` 不接 host，
-      //    而两端的 `bindTeamworkMsgMenuHook(host)` 手里已经拿全了 toast / openForm ⇒
-      //    电脑端与手机端**都**通，且两端文件一行都不用改。
-      //    ⚠️ 只在**真的成功收尾**时才发：失败的那一轮提议不作数，别让用户对着半截话点确认。
+      // 3 期：写工具的提议交给**端**去开确认卡（本视图没有弹层能力）。
+      // 走留白事件而不是直接调 `host.openForm`：`createAiThreadView()` 不接 host，
+      // 而两端的 `bindTeamworkMsgMenuHook(host)` 手里已经拿全了 toast / openForm ⇒
       if (proposalItems) {
         document.dispatchEvent(
           new CustomEvent('zx:ai-proposals', { detail: { proposals: proposalItems, fromTool: true } }),
@@ -1585,7 +1385,6 @@ export function createAiThreadView() {
         if (!msgsBox.querySelector('.teamwork-msg')) emptyBox.hidden = false;
         if (!aborted) {
           inputBox.value = content;
-          // ⭐ 0.7.7-⑭：退回的文本可能有好几行 ⇒ 高度得跟着长回去，否则字被压在框里看不见
           autoGrow(inputBox);
           errorLine(e && e.message ? e.message : '请求失败');
         }
@@ -1594,7 +1393,6 @@ export function createAiThreadView() {
         if (assistantBox) {
           assistantBox.firstChild.classList.remove('ai-streaming');
           if (acc) {
-            // ⭐ 0.7.6：残段同样重画成渲染后的 DOM（与正常收尾同一口径，否则半截话会留下裸星号）
             paintMd(assistantBox.firstChild, acc);
             const st = el('div', 'ai-msg-state');
             st.textContent = aborted ? '已停止 —— 这段回复没有保存' : '这段回复没有保存';
@@ -1612,8 +1410,7 @@ export function createAiThreadView() {
     }
   }
 
-  // ⭐ 插槽会话被关掉（或切到别的屏导致容器被卸载）时：停掉在途的流式请求，监听器自摘。
-  //    服务端会跟着掐掉上游请求（30 秒总时长闸门），已落库的用户消息不会丢。
+  // 服务端会跟着掐掉上游请求（30 秒总时长闸门），已落库的用户消息不会丢。
   const onClose = (e) => {
     if (!e || !e.detail || e.detail.key !== AI_CONV_KEY) return;
     document.removeEventListener('zx:teamwork-conv-close', onClose);
@@ -1622,7 +1419,7 @@ export function createAiThreadView() {
   document.addEventListener('zx:teamwork-conv-close', onClose);
   sendBtn.addEventListener('click', () => {
     if (streaming) {
-      // ⭐ 停止是常驻控制：点了立刻改界面（乐观），服务端随后把上游请求一并掐掉
+      // 停止是常驻控制：点了立刻改界面（乐观），服务端随后把上游请求一并掐掉
       if (ctrl) ctrl.abort();
       return;
     }
@@ -1630,18 +1427,18 @@ export function createAiThreadView() {
   });
   inputBox.addEventListener('keydown', (e) => {
     // Enter 发送、Shift+Enter 换行（与主流聊天框同一习惯；手机上软键盘自带换行键）。
-    // ⚠️ 发送中必须忽略：此时点「发送」按钮是「停止」，回车不该把它误触发成停止。
+    // 发送中必须忽略：此时点「发送」按钮是「停止」，回车不该把它误触发成停止。
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && !streaming) {
       e.preventDefault();
       sendFromComposer();
     }
   });
-  // ⭐ 0.7.7-⑭：输入即自增高（⚠️ 别只挂在 keydown 上：粘贴 / 语音输入 / 脚本赋值都不发 keydown）
+  // -⑭：输入即自增高（⚠️ 别只挂在 keydown 上：粘贴 / 语音输入 / 脚本赋值都不发 keydown）
   inputBox.addEventListener('input', () => autoGrow(inputBox));
 
-  // ⭐⭐ 0.8.55：圆圈 ＋ —— 与好友聊天同一套菜单、三项同一顺序（图片 / 协作项目任务 / 普通任务）。
-  //    ⚠️ 图片：选了就发（不再有预览条）；任务：借宿主的**同一个选择器**（留白事件），
-  //    选中后把那张卡片当一条用户消息发给 AI —— 它会读到任务并回答。
+  // 圆圈 ＋ —— 与好友聊天同一套菜单、三项同一顺序（图片 / 协作项目任务 / 普通任务）。
+  // 图片：选了就发（不再有预览条）；任务：借宿主的**同一个选择器**（留白事件），
+  // 选中后把那张卡片当一条用户消息发给 AI —— 它会读到任务并回答。
   plusBtn.addEventListener('click', () => {
     if (root.querySelector('[data-ai-send-menu]')) closeHostPopover();
     else openAiSendMenu();
@@ -1662,8 +1459,8 @@ export function createAiThreadView() {
     if (act === 'collab' || act === 'daily') return void pickTaskForAi(act);
   });
 
-  // ⚠️ 「能不能发图」**以服务端为准**（配置屏与提示词用的都是它那一处口径）；读不到就按「没开」画
-  //    —— 失败方向安全：宁可置灰，也不给一颗点了会被服务端 400 的按钮。
+  // 「能不能发图」**以服务端为准**（配置屏与提示词用的都是它那一处口径）；读不到就按「没开」画
+  // —— 失败方向安全：宁可置灰，也不给一颗点了会被服务端 400 的按钮。
   api('GET', '/api/ai/config')
     .then((cfg) => {
       visionOn = !!(cfg && cfg.vision);
@@ -1672,9 +1469,9 @@ export function createAiThreadView() {
       visionOn = false;
     });
 
-  // ⭐ 挂载即取历史：插槽会话只在「点开它」时才挂载，进场就该看到历史（以前是「展开面板」那一拍才拉）
+  // 挂载即取历史：插槽会话只在「点开它」时才挂载，进场就该看到历史（以前是「展开面板」那一拍才拉）
   loadHistory();
-  // ⭐ 0.7.6：段进度句也一并读（它就在这一屏顶上，进场就该是准的）
+  // 段进度句也一并读（它就在这一屏顶上，进场就该是准的）
   loadSeg().catch(() => {});
   return root;
 }
@@ -1685,11 +1482,8 @@ export function createAiThreadView() {
  * 功能：往对话模块的消息菜单里添「🤖 问 AI / 记成任务」（`zx:teamwork-msg-menu` 留白事件的消费端）。
  *
  * 说明：⭐ **只挂一次**（模块级标记）：片段每次进对话页都会重新渲染，事件监听不能跟着重复挂，
- *        否则菜单里会多出几条一样的项。⚠️ 片段只在模块开着时才会被挂载，
- *        所以监听器存在 = 功能开着 —— 关掉后菜单自然恢复两项，不需要额外判断。
+ * 所以监听器存在 = 功能开着 —— 关掉后菜单自然恢复两项，不需要额外判断。
  *
- * @param {Object} host - 端注入：`openForm(opts)`（见 `runExtractFlow`）与 `toast`
- * @returns {void}
  */
 export function bindTeamworkMsgMenuHook(host) {
   if (bindTeamworkMsgMenuHook._bound) return;
@@ -1703,11 +1497,9 @@ export function bindTeamworkMsgMenuHook(host) {
       run: () => runExtractFlow(detail.msg, host),
     });
   });
-  // ⭐ 3 期：AI **自己**提议建任务（写工具 `tasks.propose_create` 的产物随 `done` 帧下来）
-  //    —— 在这里开确认卡。会话视图（`createAiThreadView()`）不接 host，所以它把提议发成
-  //    这个留白事件，由已经拿全 host 的这里收口；两端因此都通，且两端文件都不用改。
-  //    ⚠️ 与「被点消息 → 记成任务」**共用同一张卡**，只是卡上多一句「由 AI 提议（可改）」；
-  //    落库依旧**逐条确认**、走 `core/task-create.js`（任务创建的唯一入口）。
+  // 3 期：AI **自己**提议建任务（写工具 `tasks.propose_create` 的产物随 `done` 帧下来）
+  // —— 在这里开确认卡。会话视图（`createAiThreadView()`）不接 host，所以它把提议发成
+  // 这个留白事件，由已经拿全 host 的这里收口；两端因此都通，且两端文件都不用改。
   document.addEventListener('zx:ai-proposals', (e) => {
     const list = e && e.detail && Array.isArray(e.detail.proposals) ? e.detail.proposals : null;
     if (!list || !list.length) return;
@@ -1716,8 +1508,6 @@ export function bindTeamworkMsgMenuHook(host) {
 }
 
 /**
- * 功能：预览层的正文 HTML —— 顶部**逐字展示将要发出去的原文**（发送前看得到，方案 §八-9），
- *      下面一个可选的补充输入框。
  * @param {string} sourceBody - 被点的消息原文
  * @returns {string} HTML
  */
@@ -1733,17 +1523,8 @@ export function extractPreviewHtml(sourceBody) {
  * 功能：确认卡的正文 HTML —— **每条提议一个可编辑的块**，各自带一枚「添加到任务」。
  *
  * 说明：归属下拉在这里只有「日常任务」一项，项目选项由 `bindConfirmCard()` 拉到清单后补上
- *      （HTML 与数据分离：模板不依赖拉取时序）。
- *      ⭐ 3 期：这条卡现在**两个来源共用** —— ① 被点消息的「让 AI 记成任务」（`extract`）；
- *      ② AI 自己提议建任务（写工具 `tasks.propose_create`，提议随 `done` 帧下来）。
- *      两者的条目字段略有不同（`extract` 给 `priority`/`note`/`assignee`，写工具给
- *      `important`/`urgent`/`scope`），所以这里两套都认、不要求调用方先归一。
- *
- * @param {Array.<{title: string, assignee?: string, due?: string, priority?: string, note?: string,
- *     important?: (number|boolean), urgent?: (number|boolean), scope?: (string|number)}>} tasks - AI 提议
- * @param {Object} [opts] - 可选项
- * @param {boolean} [opts.byAi] - 由**写工具**提议的（卡上写明「由 AI 提议（可改）」）
- * @returns {string} HTML
+ * （HTML 与数据分离：模板不依赖拉取时序）。
+ * 3 期：这条卡现在**两个来源共用** —— ① 被点消息的「让 AI 记成任务」（`extract`）；
  */
 export function confirmCardHtml(tasks, opts) {
   const o = opts || {};
@@ -1791,14 +1572,8 @@ export function confirmCardHtml(tasks, opts) {
  * 功能：给确认卡绑上行为 —— 归属联动（日常任务没有负责人）与逐条落库（走既有任务接口）。
  *
  * 说明：⚠️ 日常任务表没有负责人列（`checkDailyTask` 不认），选「日常任务」时负责人栏必须收起来；
- *      ⚠️ 落库成功把该块置灰成「✓ 已添加」，绝不替用户连加多条 —— 一条一次确认。
+ * 落库成功把该块置灰成「✓ 已添加」，绝不替用户连加多条 —— 一条一次确认。
  *
- * @param {HTMLElement} root - 确认卡的容器（弹层正文）
- * @param {Object} opts - 上下文
- * @param {Array.<Object>} opts.tasks - AI 提议（`/api/ai/extract` 的 `tasks`）
- * @param {number} opts.sourceMsgId - 来源对话消息 id（0 = 不是从对话消息来的，不带溯源）
- * @param {{toast: Function, onCreated: Function}} host - 端注入：toast 与「加完刷一下项目侧栏」
- * @returns {Promise.<void>}
  */
 export async function bindConfirmCard(root, opts, host) {
   let projects = [];
@@ -1815,9 +1590,9 @@ export async function bindConfirmCard(root, opts, host) {
       o.textContent = `${p.icon || '📁'} ${p.name || ''}`.trim();
       sel.appendChild(o);
     }
-    // ⭐ 3 期：AI 提议里带了归属就替用户**预选**上（用户仍可改）。
-    //    ⚠️ 只在自己名下的项目才预选 —— 模型给了一个不属于自己的项目 id 时，
-    //    那个 option 根本不存在，select 自然回落「日常任务」，⛔ 不会静默换成别人的项目。
+    // 3 期：AI 提议里带了归属就替用户**预选**上（用户仍可改）。
+    // 只在自己名下的项目才预选 —— 模型给了一个不属于自己的项目 id 时，
+    // 那个 option 根本不存在，select 自然回落「日常任务」，⛔ 不会静默换成别人的项目。
     const blk = sel.closest('[data-ai-task]');
     const want = blk ? blk.dataset.aiScope : '';
     if (want && want !== 'daily' && [...sel.options].some((op) => op.value === want)) sel.value = want;
@@ -1860,7 +1635,7 @@ export async function bindConfirmCard(root, opts, host) {
       };
       addBtn.disabled = true;
       try {
-        // ⭐ 0.7.1：统一走「任务创建」的对外入口（两套字段名它都认，调用方不必记得自己是哪一套）
+        // 统一走「任务创建」的对外入口（两套字段名它都认，调用方不必记得自己是哪一套）
         await createTask(scope, {
           ...common,
           content: f('note').value.trim(),
@@ -1883,13 +1658,8 @@ export async function bindConfirmCard(root, opts, host) {
  * 功能：「问 AI / 记成任务」的完整流程 —— 预览 → 发送 → 确认卡。
  *
  * 说明：⭐ 弹层容器由端注入（`host.openForm`）：桌面 = 通用模态框，手机 = 底部弹层。
- *      `openForm({ title, bodyHtml, saveLabel, onSave })` 里 `onSave(close)` 的 `close`
- *      由调用方收下，先 `close()` 再开下一层（预览 → 确认卡是两次弹层）。
- *      ⚠️ 发送期间主按钮**禁用并写明在等什么** —— 出网要几秒，空白按钮最像卡死。
- *
- * @param {Object} msg - 被点的对话消息（`zx:teamwork-msg-menu` 的 `detail.msg`，至少有 `id` 与 `body`）
- * @param {{toast: Function, onCreated?: Function, openForm: Function}} host - 端注入
- * @returns {void}
+ * `openForm({ title, bodyHtml, saveLabel, onSave })` 里 `onSave(close)` 的 `close`
+ * 由调用方收下，先 `close()` 再开下一层（预览 → 确认卡是两次弹层）。
  */
 export function runExtractFlow(msg, host) {
   const body = String(msg && msg.body ? msg.body : '');
@@ -1936,7 +1706,6 @@ export function runExtractFlow(msg, host) {
  * @param {number} sourceMsgId - 来源对话消息 id（0 = 无来源）
  * @param {{toast: Function, onCreated?: Function, openForm: Function}} host - 端注入
  * @param {boolean} [byAi] - 来自**写工具**（卡上标明「由 AI 提议（可改）」）
- * @returns {void}
  */
 function openConfirmCard(tasks, sourceMsgId, host, byAi) {
   host.openForm({
@@ -1950,37 +1719,32 @@ function openConfirmCard(tasks, sourceMsgId, host, byAi) {
   });
 }
 
-// ================================================================ 0.7.7-⑲：会话流里的「任务确认卡」
 //
-// ⭐ 与上面那张**模态确认卡**是两条路，别混：
-//   · 模态卡（`confirmCardHtml()` / `bindConfirmCard()`）= 用户**主动**点一条消息、让 AI「记成任务」
-//     那条路（右键菜单里的选择）—— 保留原样（用户本来就是去看那张卡的）。
-//   · 会话流里的这张卡 = AI **自己**在会话里提议建任务 —— 「AI 整理后在聊天框里发出
-//     一张卡，卡下方有拒绝和同意」。
-// ⚠️ 两条路的**建任务入口仍是同一个** `core/task-create.js`。
+// 与上面那张**模态确认卡**是两条路，别混：
+// 模态卡（`confirmCardHtml()` / `bindConfirmCard()`）= 用户**主动**点一条消息、让 AI「记成任务」
 
 /** 确认卡的消息种类（`ai_messages.kind`）—— 与服务端 `store.js` 的 `KIND_TASK_PROPOSAL` 同值 @type {string} */
 export const PROPOSAL_KIND = 'task_proposal';
 
-/** ⭐ 0.8.4：记账确认卡的消息种类 —— 与服务端 `store.js` 的 `KIND_LEDGER_PROPOSAL` 同值 @type {string} */
+/** 记账确认卡的消息种类 —— 与服务端 `store.js` 的 `KIND_LEDGER_PROPOSAL` 同值 @type {string} */
 export const LEDGER_PROPOSAL_KIND = 'ledger_proposal';
 
-/** ⭐ 0.8.5：收藏确认卡 —— 与服务端 `store.js` 的 `KIND_BOOKMARKS_PROPOSAL` 同值 @type {string} */
+/** 收藏确认卡 —— 与服务端 `store.js` 的 `KIND_BOOKMARKS_PROPOSAL` 同值 @type {string} */
 export const BOOKMARKS_PROPOSAL_KIND = 'bookmarks_proposal';
 
-/** ⭐ 0.8.5：随手记确认卡 —— 与服务端 `store.js` 的 `KIND_IDEA_PROPOSAL` 同值 @type {string} */
+/** 随手记确认卡 —— 与服务端 `store.js` 的 `KIND_IDEA_PROPOSAL` 同值 @type {string} */
 export const IDEA_PROPOSAL_KIND = 'idea_proposal';
 
-/** ⭐ 0.8.5：硬件确认卡 —— 与服务端 `store.js` 的 `KIND_HARDWARE_PROPOSAL` 同值 @type {string} */
+/** 硬件确认卡 —— 与服务端 `store.js` 的 `KIND_HARDWARE_PROPOSAL` 同值 @type {string} */
 export const HARDWARE_PROPOSAL_KIND = 'hardware_proposal';
 
-/** ⭐ 0.8.6：车票确认卡（行程模块）—— 与服务端 `store.js` 的 `KIND_TRIP_PROPOSAL` 同值 @type {string} */
+/** 车票确认卡（行程模块）—— 与服务端 `store.js` 的 `KIND_TRIP_PROPOSAL` 同值 @type {string} */
 export const TRIP_PROPOSAL_KIND = 'trip_proposal';
 
-/** ⭐⭐ 0.8.55：资产确认卡 —— 与服务端 `store.js` 的 `KIND_ASSETS_PROPOSAL` 同值 @type {string} */
+/** 资产确认卡 —— 与服务端 `store.js` 的 `KIND_ASSETS_PROPOSAL` 同值 @type {string} */
 export const ASSETS_PROPOSAL_KIND = 'assets_proposal';
 
-/** ⭐⭐ 0.8.55：日程确认卡 —— 与服务端 `store.js` 的 `KIND_CALENDAR_PROPOSAL` 同值 @type {string} */
+/** 日程确认卡 —— 与服务端 `store.js` 的 `KIND_CALENDAR_PROPOSAL` 同值 @type {string} */
 export const CALENDAR_PROPOSAL_KIND = 'calendar_proposal';
 
 /** 八种确认卡（判据的唯一出处）。 @type {Array.<string>} */
@@ -1999,10 +1763,8 @@ const PROPOSAL_KINDS = [
  * 功能：判断一条消息是不是**确认卡**（任务 / 记账 / 收藏 / 随手记 / 硬件 / 车票 / 资产 / 日程 八种）。
  *
  * 说明：⭐ 判据只写这一处（与服务端 `store.js` 的 `isProposalKind()` 是**同一份契约的两端**）：
- *      ⛔ 别在渲染代码里再写一遍 `=== 'task_proposal' || === 'ledger_proposal' || …` ——
- *      漏一处就是「卡画不出来、且不报错」（历史消息退回成一行降级文本）。
- * @param {*} kind - `ai_messages.kind` 的值
- * @returns {boolean} 是确认卡返回 true
+ * 别在渲染代码里再写一遍 `=== 'task_proposal' || === 'ledger_proposal' || …` ——
+ * 漏一处就是「卡画不出来、且不报错」（历史消息退回成一行降级文本）。
  */
 export function isProposalMsgKind(kind) {
   return PROPOSAL_KINDS.includes(String(kind == null ? '' : kind));
@@ -2015,10 +1777,8 @@ const MAX_AI_PROPOSAL_ITEMS = 20;
 const MAX_AI_LEDGER_ITEMS = 10;
 
 /**
- * ⭐ 0.8.5：收藏 / 随手记 / 硬件 三条各自的「一次同意最多几条」——
- * ⚠️ **必须与服务端 `tools-write.js` 的 `PROPOSE_BM_MAX` / `PROPOSE_IDEA_MAX` / `PROPOSE_HW_MAX` 同值**
- * （两边各写一份是刻意的：前端要**可见地拒绝**，服务端要独立挡请求 —— 改一处必须改另一处）。
- * @type {number}
+ * 收藏 / 随手记 / 硬件 三条各自的「一次同意最多几条」——
+ * **必须与服务端 `tools-write.js` 的 `PROPOSE_BM_MAX` / `PROPOSE_IDEA_MAX` / `PROPOSE_HW_MAX` 同值**
  */
 const MAX_AI_BOOKMARK_ITEMS = 10;
 /** 同上（随手记）。 @type {number} */
@@ -2028,14 +1788,12 @@ const MAX_AI_HARDWARE_ITEMS = 5;
 
 /**
  * 同上（车票 —— ⚠️ **与服务端 `tools-write.js` 的 `PROPOSE_TRIP_MAX` 同值**）。
- * 一张票要核的东西不比硬件少，而且**转机换乘算两张票** ⇒ 一次只让它整理一段行程。
  * @type {number}
  */
 const MAX_AI_TRIP_ITEMS = 5;
 
 /**
  * 同上（资产 / 日程 —— ⚠️ **与服务端 `tools-write.js` 的 `PROPOSE_ASSET_MAX` /
- * `PROPOSE_EVENT_MAX` 同值**）。两者都是 10：字段少，但日程错一天就是白跑一趟。
  * @type {number}
  */
 const MAX_AI_ASSET_ITEMS = 10;
@@ -2043,7 +1801,6 @@ const MAX_AI_ASSET_ITEMS = 10;
 const MAX_AI_EVENT_ITEMS = 10;
 
 /**
- * 功能：把卡片快照里的一条**任务**提议画成一行 —— ⭐ **只读**（编辑权交给 AI，这正是「拒绝 ⇒ 我继续修改」的意义）。
  * @param {Object} it - 快照条目
  * @returns {string} HTML（用户 / 模型给的文字一律 `esc()`）
  */
@@ -2066,16 +1823,8 @@ function proposalItemHtml(it) {
 }
 
 /**
- * 功能：把卡片快照里的一条**记账**提议画成一行（0.8.4）—— 同样是**只读**的。
  *
  * 说明：⚠️ 三处刻意的写法：
- *      · 金额取服务端算好的 `amount`（**前端不算钱**，项目 一族）—— 缺了才退回用 `amount_fen`
- *        除 100（只在老数据 / 手工构造的快照上会发生）；
- *      · 分类 / 账户**解析不到时把模型的原话带出来**（`category_want` / `account_want`）——
- *        用户点确认之前就该看见「它想记到『餐饮』，本机没这个分类，会记成未分类」；
- *      · 日期只显示到天（`at` 是 `YYYY-MM-DD HH:MM:SS`，时刻那半截在卡上没用）。
- * @param {Object} it - 快照条目
- * @returns {string} HTML（模型给的文字一律 `esc()`）
  */
 function ledgerItemHtml(it) {
   const s = it && typeof it === 'object' ? it : {};
@@ -2084,7 +1833,7 @@ function ledgerItemHtml(it) {
   const ie = String(s.ie || '') === '收入' ? '收入' : '支出';
   const day = /^\d{4}-\d{2}-\d{2}/.test(String(s.at || '')) ? String(s.at).slice(0, 10) : '';
   const cat = String(s.category_name || '').trim();
-  // ⭐ 0.9.7：二级分类允许重名 ⇒ 卡上把**一级 / 二级**分开写（`餐饮 / 其他`），不是只写「其他」
+  // 二级分类允许重名 ⇒ 卡上把**一级 / 二级**分开写（`餐饮 / 其他`），不是只写「其他」
   const catParent = String(s.category_parent || '').trim();
   const catLabel = cat ? (catParent ? `${catParent} / ${cat}` : cat) : '';
   const want = String(s.category_want || '').trim();
@@ -2100,7 +1849,7 @@ function ledgerItemHtml(it) {
         ? `分类未匹配（AI 说的是「${want}」${catWhy ? `，${catWhy}` : ''}）`
         : '未分类',
   );
-  // ⭐ 0.9.7：`account_default` = 这一格来自用户设置的默认账户（模型没点名账户）
+  // `account_default` = 这一格来自用户设置的默认账户（模型没点名账户）
   if (acct) bits.push(s.account_default ? `账户 ${acct}（默认）` : `账户 ${acct}`);
   if (wantAcct) bits.push(`账户未匹配（AI 说的是「${wantAcct}」，已改用默认账户）`);
   return (
@@ -2113,15 +1862,8 @@ function ledgerItemHtml(it) {
 }
 
 /**
- * 功能：把卡片快照里的一条**收藏**提议画成一行（0.8.5）—— 只读。
  *
  * 说明：⚠️ 两处刻意的写法：
- *      · 网址**完整显示**：这张卡是给**用户自己**核对用的 —— ⛔ 与「发给模型的那一份」不同
- *        （出网那一侧只给域名，见 `lib/tools-read.js` 的 `hostOf()`）；
- *      · `dup`（服务端拿库里的网址核过）**必须显眼写出来**：用户点确认之前就该知道
- *        「这条已经收藏过了，点了也不会重复写入」，而不是点完才吃一个 400。
- * @param {Object} it - 快照条目
- * @returns {string} HTML（模型给的文字一律 `esc()`）
  */
 function bookmarkItemHtml(it) {
   const s = it && typeof it === 'object' ? it : {};
@@ -2142,12 +1884,8 @@ function bookmarkItemHtml(it) {
 }
 
 /**
- * 功能：把卡片快照里的一条**随手记**提议画成一行（0.8.5）—— 只读。
  *
  * 说明：⚠️ 正文**压成一行、截到 100 字**再显示：这张卡是让人**扫一眼核对**的，不是阅读器 ——
- *      快照里存的是全文，落库落的也是全文（⛔ 这里截的只是**显示**）。
- * @param {Object} it - 快照条目
- * @returns {string} HTML
  */
 function ideaItemHtml(it) {
   const s = it && typeof it === 'object' ? it : {};
@@ -2164,12 +1902,8 @@ function ideaItemHtml(it) {
 }
 
 /**
- * 功能：把卡片快照里的一条**硬件**提议画成一行（0.8.5）—— 只读。
  *
  * 说明：⚠️ 只画**这张卡上真有的那几样**（服务端提议里本来就没有序列号 / 位置 / 详细内容，
- *      见 `lib/tools-write.js` 的 `proposeHardware()`）—— ⛔ 不在这里补一个「未填」出来。
- * @param {Object} it - 快照条目
- * @returns {string} HTML
  */
 function hardwareItemHtml(it) {
   const s = it && typeof it === 'object' ? it : {};
@@ -2194,16 +1928,8 @@ function hardwareItemHtml(it) {
 }
 
 /**
- * ⭐ 0.8.6：车票确认卡的条目渲染。
+ * 车票确认卡的条目渲染。
  *
- * 说明：⚠️⭐ **`bad` 那一行必须显示出来**：服务端认出「出发时刻没看懂 / 缺站名」时会标 `bad:true`
- *      并给一句 `why` —— 卡上不显示的话，用户点「同意」只会看到「有 N 张没能加上」，
- *      却**不知道为什么**。而这一条恰恰是「⛔ 不猜一个时间」那条纪律的可见面。
- *      ⚠️ 票型归一化成 `other` 而模型原本说了别的（`kind_want`）时，也把那句话带出来 ——
- *      与记账「它想记到『餐饮』，本机没有这个分类」同一个手法。
- *
- * @param {Object} it - 卡片快照里的一张票
- * @returns {string} HTML
  */
 function tripItemHtml(it) {
   const s = it && typeof it === 'object' ? it : {};
@@ -2232,17 +1958,16 @@ function tripItemHtml(it) {
 }
 
 /**
- * ⭐ 0.8.55：资产条目 —— 名称 / 分组 / 金额（分 → 元）/ 日期；`bad` 时写明为什么。
  * @param {Object} it - 卡片里的一条
  * @returns {string} HTML
  */
 function assetItemHtml(it) {
   const s = it && typeof it === 'object' ? it : {};
   const bits = [];
-  // ⚠️ 分组名可能是空（模型没说 / 本机没有那个分组）—— 后一种情况下面单独一行说清楚
+  // 分组名可能是空（模型没说 / 本机没有那个分组）—— 后一种情况下面单独一行说清楚
   const group = String(s.group_name || '').trim();
   if (group) bits.push(group);
-  // ⚠️ 金额单位是**分**（与记账同一个口径）：卡上给人看的一律换成元
+  // 金额单位是**分**（与记账同一个口径）：卡上给人看的一律换成元
   const fen = s.amount_fen;
   if (fen !== null && fen !== undefined && fen !== '') {
     const yuan = Number(fen) / 100;
@@ -2263,7 +1988,6 @@ function assetItemHtml(it) {
 }
 
 /**
- * ⭐ 0.8.55：日程条目 —— 标题 / 日期（含跨天）/ 时刻（全天时写明「全天」）。
  * @param {Object} it - 卡片里的一条
  * @returns {string} HTML
  */
@@ -2288,13 +2012,8 @@ function eventItemHtml(it) {
 }
 
 /**
- * ⭐ 0.8.5：五种确认卡各自的**卡头 / 量词 / 结论词 / 条目画法** —— 表驱动，
+ * 五种确认卡各自的**卡头 / 量词 / 结论词 / 条目画法** —— 表驱动，
  * 加一种卡只加一行（⛔ 别在渲染代码里再摊一串 if）。
- *
- * 说明：⚠️ 落库函数（`createProposalTasks` 那几个）**不在**这张表里：它们住在会话闭包内
- *      （要用 `own` / `api` 那些上下文），而这张表在模块级 —— 两张表各管一段，见 `resolveProposal`。
- *      ⚠️ 文案刻意与 0.8.4 那两句**逐字一致**（改文案要一起改测试里那几条断言）。
- * @type {Object.<string, {head: string, unit: string, done: string, verb: string, paint: Function}>}
  */
 const PROPOSAL_UI = {
   [PROPOSAL_KIND]: { head: '任务确认卡', unit: '条', done: '已加入任务', verb: '加上', paint: proposalItemHtml },
@@ -2369,13 +2088,8 @@ function proposalStateText(meta) {
  * 功能：画那张**会话流里的确认卡**（一次提议一张卡，几条都列在同一张里）。
  *
  * 说明：⚠️ 已处理的卡（`state` 不是 `pending`）**不画**那两颗按钮，改成一句结论 ——
- *      摆两颗点了必然报错的按钮是更坏的选择（本轮口径）。
- *      ⚠️ 认不出 `meta`（缺 / 坏）时**返回空串**，调用方退回普通消息渲染（`content` 是降级文本）。
- *      ⭐ 0.8.4：卡的种类**在 `meta.kind` 里**（服务端落的快照带它）—— 任务卡与记账卡的
- *      标题、条目行、结论文案各一套；`meta.kind` 缺省（老数据）一律按任务卡画。
- *
- * @param {{id: number, meta: ?Object}} card - 卡片（id + 快照）
- * @returns {string} HTML；`meta` 认不出来时为空串
+ * 摆两颗点了必然报错的按钮是更坏的选择（本轮口径）。
+ * 认不出 `meta`（缺 / 坏）时**返回空串**，调用方退回普通消息渲染（`content` 是降级文本）。
  */
 export function proposalCardHtml(card) {
   const meta = card && card.meta && typeof card.meta === 'object' ? card.meta : null;
@@ -2385,10 +2099,9 @@ export function proposalCardHtml(card) {
   const ui = uiOfKind(meta.kind);
   const state = String(meta.state || 'pending');
   const head = `${ui.head} · ${items.length} ${ui.unit}`;
-  // ⭐⭐ 0.8.55（「除了有接受、拒绝两种还要加一个修改按键。点修改直接进入新建弹窗，
-  //    ai 生成的预填入，可以修改」）：待处理时**三颗**——修改 / 拒绝 / 同意。
-  //    ⚠️ 「修改」**不改卡片状态**：它只是把这张卡的内容带进那个模块自己的「新建」弹窗里让用户改完再存；
-  //    卡片留在「待处理」，用户改完若没存，回头还能点同意或拒绝。
+  // （「除了有接受、拒绝两种还要加一个修改按键。点修改直接进入新建弹窗，
+  // ai 生成的预填入，可以修改」）：待处理时**三颗**——修改 / 拒绝 / 同意。
+  // 「修改」**不改卡片状态**：它只是把这张卡的内容带进那个模块自己的「新建」弹窗里让用户改完再存；
   const foot =
     state === 'pending'
       ? `<div class="ai-prop-foot">` +
@@ -2411,17 +2124,13 @@ export function proposalCardHtml(card) {
 /**
  * 「每次带多少条历史」的可选范围（**前端一份**；必须与服务端 `routes.js` 的区间同值） @type {number}
  *
- * ⚠️⭐ 0.7.7-⑰：上限 50 → 200。它与服务端是**两份**（前后端各写一份是刻意的：前端要画
- *    `min` / `max` 与本地校验，服务端要挡请求）—— 改一处忘一处 = 前端不让填 200（或填了被服务端 400）。
- * ⚠️ 同时服务端把字符兜底常数抬到 60000（`store.js` 的 `AI_CTX_MAX_CHARS`）—— 只抬条数不抬它，
- *    200 条会被字符上限悄悄截成几十条。
  */
 const CTX_TURNS_MIN = 20;
 const CTX_TURNS_MAX = 200;
 
-// ⚠️ 0.7.6：「每次最多带几条记忆」这个配置**已从界面撤掉**（记忆改为全量注入）⇒
-//    原来的 `MEM_MAX_MIN` / `MEM_MAX_MAX` 两个常量与生成下拉的 `rangeOptions()` 一并删掉。
-//    ⛔ 服务端的 `mem_max` 列与校验**保留**（向后兼容 + 老备份恢复），它不再影响注入条数。
+// 「每次最多带几条记忆」这个配置**已从界面撤掉**（记忆改为全量注入）⇒
+// 原来的 `MEM_MAX_MIN` / `MEM_MAX_MAX` 两个常量与生成下拉的 `rangeOptions()` 一并删掉。
+// 服务端的 `mem_max` 列与校验**保留**（向后兼容 + 老备份恢复），它不再影响注入条数。
 
 /** 记忆单条长度上限（与服务端 `checkAiMemory` 的 2000 同值 —— 改一处必须改另一处） @type {number} */
 const MEM_TEXT_MAX = 2000;
@@ -2432,25 +2141,12 @@ const MEM_LABEL_MAX = 20;
 /**
  * 除「连接设置」之外，每一个区顶部那句指引 —— ⭐ 只有一份，面板与工具块都用它。
  *
- * 说明：它讲的是**保存语义**：连接设置那三样要攒着点保存，其余开关都是点了就生效。
- *      ⚠️ 改这句话只改这里（别在别处再抄一份字面量）。
- * @type {string}
  */
 const SAME_HINT = '这一区的开关点了就生效，不用保存。';
 
 /**
- * ⭐ 0.7.7-⑱：**永远存在的三条预设**（「预设这三条，且不能删除，只能填内容」）——
+ * -⑱：**永远存在的三条预设**（「预设这三条，且不能删除，只能填内容」）——
  * 名称已定稿，**内容框里是填写提示**（灰字 `placeholder`），照着填就行。
- *
- * 说明：⚠️ 与旧版（0.7.1）的两点不同，都是既定的：
- *      ① **名称只读、行不能删** —— 所以每行**不画 × 键**（摆一颗必然点不动的按钮是更坏的选择）；
- *         服务端另有一道护栏：`DELETE /api/ai/memories/<id>` 命中这三条的名称一律 400。
- *      ② **永远存在** —— 打开记忆界面时先把这三行摆上，用户自己加的接在后面；
- *         老版是「一条记忆都没有时才预填」，一旦库里有内容这三行就再也不出现，等于提出了预设。
- *      ⚠️⭐ **靠名称复用**（不是靠新建列 / 新表）：库里已经有同名行就直接用那一行、**内容一个字节都不动**
- *      —— 库里正好就有这三条（截图里就是），升级之后必须原样在。
- *
- * @type {Array.<{label: string, hint: string}>}
  */
 const MEM_PRESETS = [
   { label: '用户名称', hint: '怎么称呼你，例如：叫我老张' },
@@ -2459,12 +2155,8 @@ const MEM_PRESETS = [
 ];
 
 /**
- * 预设三条的**名称** —— ⭐ 「哪几行是预设」**只此一处**判（本文件里别处不许再列一遍名字）。
  *
  * 说明：⚠️ 服务端有一份**镜像**（`modules/ai/store.js` 的 `MEM_PRESET_LABELS`）：那边要在
- *      `aiDeleteMemory()` 里挡住「删预设」，两层各一份是刻意的（前端是体验、服务端是护栏，
- *      与「两端文案」「前后端区间常量」同一套路）。**改这里必须同步改那一份**。
- * @type {Array.<string>}
  */
 const MEM_PRESET_LABELS = MEM_PRESETS.map((p) => p.label);
 
@@ -2479,33 +2171,14 @@ const isPresetLabel = (label) => MEM_PRESET_LABELS.includes(String(label == null
  * 功能：建「连接」块 —— 接口地址 / 模型名 / API 密钥 / 总开关 / 允许访问内网地址 / 测连通 / 清除密钥。
  *
  * 说明：⭐ 这就是 1 期设置页那一栏的 DOM 与行为（**原样搬过来**，不重写）——
- *      搬走之后 `desktop-settings-pane.js` / `mobile-settings-pane.js` 两个薄壳一起删掉，
- *      全项目只有这一份（方案 §15.6 第 11 条：两处各一份 = 两套真相）。
- *      ⭐ 「绝不回显」在界面上的样子：密钥框**永远空着**，配没配只看那句状态说明
- *      （「已配置 —— 留空表示不修改」）；⭐ 开关点了就生效；
- *      ⚠️ `http://` 地址放行但必须给明文提示（方案 §八-5）。
- *      ⭐ 「允许访问内网地址」是**安全审查报告 009 的 R1**：地址由用户自填，此前任意地址都放行，
- *      登录成员可以拿它探测 NAS 所在内网（错误文案能区分「连不上 / 不存在 / 超时」）。
- *      后端因此默认拦私网地址，但**本地 ollama（`http://127.0.0.1:11434`）是真实用法**，
- *      一刀切会伤它，所以留了这个显式开关（默认关 = 拦）。开关只是一次 `PUT`，
- *      当前值永远以服务端返回的 `allowPrivate` 为准（`fill` 回填，不做本地记忆）。
- *      ⭐ 0.9.8：接口地址下面多一条**常显**说明（`data-ai="tlsnote"`）—— 本地模型（ollama /
- *      LM Studio / vLLM）默认只开明文 http://，地址写成 https 连不上，而这句话必须在**填地址
- *      的那一刻**就看得到：⛔ 别只把它塞进「测连通」的失败结果里（那时的报错会被理解成
- *      「产品不支持本地模型」，其实只要把 https 改回 http）。
- *
- * @param {{toast: Function, ask: Function, notice?: Function}} host - 端注入：toast / 二次确认 / 只读提示
- *        （`ask({title, text, ok, danger}, fn)` —— 桌面走确认模态框、手机走确认弹层；
- *        `notice(title, text)` —— 只有一颗「知道了」的提示框，0.9.8 起用于「https 连不上」那一类）
- * @param {{sync: Function}} [hooks] - 面板级联动：任一块保存成功后，把最新视图推给另外两块
- * @returns {{node: HTMLElement, fill: Function, fail: Function}} 块节点 + 回填 / 报错入口
+ * 搬走之后 `desktop-settings-pane.js` / `mobile-settings-pane.js` 两个薄壳一起删掉，
+ * 「绝不回显」在界面上的样子：密钥框**永远空着**，配没配只看那句状态说明
  */
 export function createAiConnBlock(host, hooks) {
   const toast = host && host.toast ? host.toast : () => {};
   const ask = host && host.ask ? host.ask : (_o, fn) => fn();
-  // ⭐ 0.9.8：只读提示（就是「https 连不上」那一类）—— 端没注入也**不许静默**：
-  //    退回一条红色 toast，用户至少能看到那句话（`host.notice` 两端都注入了，
-  //    这条兜底只防将来有人少传一个键）
+  // 退回一条红色 toast，用户至少能看到那句话（`host.notice` 两端都注入了，
+  // 这条兜底只防将来有人少传一个键）
   const notice = host && host.notice ? host.notice : (t, m) => toast(`${t} —— ${m}`, true);
   const sync = hooks && hooks.sync ? hooks.sync : () => {};
   const root = el('div', 'ai-task');
@@ -2563,8 +2236,8 @@ export function createAiConnBlock(host, hooks) {
   const onBtn = q('on');
   const clearBtn = q('clear');
   const privBtn = q('privon');
-  // ⭐ 0.8.6（行程 1 期 ·）：「支持图片输入」开关 —— 与上面那些开关同一口径
-  //    （状态一律以服务端返回的 `vision` 为准，前端不做本地记忆）
+  // ：「支持图片输入」开关 —— 与上面那些开关同一口径
+  // （状态一律以服务端返回的 `vision` 为准，前端不做本地记忆）
   const visionBtn = q('vision');
   const saveBtn = q('save');
   const dirtyBox = q('dirty');
@@ -2572,11 +2245,11 @@ export function createAiConnBlock(host, hooks) {
   let enabled = false;
   // 009-R1：是否允许接口地址指向私网（默认关 —— 后端 NULL 也按 0 处理）
   let allowPrivate = false;
-  /** ⭐ 0.8.6：图片能力开关的当前值（同样以服务端为准） */
+  /** 图片能力开关的当前值（同样以服务端为准） */
   let visionOn = false;
-  // 0.7.6（批次 A3）：已保存内容的快照 —— 用来判断「输入框里有没有没保存的改动」
+  // ：已保存内容的快照 —— 用来判断「输入框里有没有没保存的改动」
   let snap = { url: '', model: '', key: '' };
-  // ⭐ 0.7.6：手机端「入口行」要看「配没配密钥」⇒ 把它留在手里（`summary()` 用，⛔ 不为它多发请求）
+  // 手机端「入口行」要看「配没配密钥」⇒ 把它留在手里（`summary()` 用，⛔ 不为它多发请求）
   let keySet = false;
 
   /**
@@ -2599,11 +2272,8 @@ export function createAiConnBlock(host, hooks) {
    * 功能：这个地址是不是「本机 / 局域网」那一类（界面据此提示「要打开内网开关」）。
    *
    * 说明：⭐ 与服务端 `lib/openai-client.js` 的 `isPrivateBaseUrl()` **不是同一份判据** ——
-   *      这里只用于**提前提示**（少一次「保存被 400」的往返），真正的放行判据永远在服务端。
-   *      ⚠️ 判定刻意宽一点（连 `http://` 也算）：`http://` 与局域网地址几乎总是同一批用法，
-   *      而这里多提示一句的代价只是一行字，漏提示的代价是用户撞一次 400 还不知道去哪开。
-   * @param {string} raw - 地址输入框里的原文
-   * @returns {boolean} 该提示「打开内网开关」为 true
+   * 这里只用于**提前提示**（少一次「保存被 400」的往返），真正的放行判据永远在服务端。
+   * 判定刻意宽一点（连 `http://` 也算）：`http://` 与局域网地址几乎总是同一批用法，
    */
   function looksLocal(raw) {
     const s = String(raw || '').trim();
@@ -2622,13 +2292,9 @@ export function createAiConnBlock(host, hooks) {
   /**
    * 功能：这个地址**能不能不填密钥**（本机 / 私网 ⇒ 本地模型）。
    *
-   * 说明：⭐⭐ 0.9.8（缺陷索引第 33 条 ②）：判据对齐服务端 `isPrivateBaseUrl()`，
-   *      **但刻意不看协议** —— 上一条 `looksLocal()` 把 `http://` 一律算「本地」是为了提示内网开关，
-   *      用它来判断「密钥可留空」会把 `http://api.example.com` 这种公网明文地址也说成不用密钥，
-   *      那是错的。这里只看主机名，与服务端真正放行的那一批一致。
-   *      ⚠️ 仍然只是**提前提示**：真正放不放行由服务端判（`aiOutboundConfig`）。
-   * @param {string} raw - 地址输入框里的原文
-   * @returns {boolean} 这个地址可以不填密钥为 true
+   * **但刻意不看协议** —— 上一条 `looksLocal()` 把 `http://` 一律算「本地」是为了提示内网开关，
+   * 用它来判断「密钥可留空」会把 `http://api.example.com` 这种公网明文地址也说成不用密钥，
+   * 那是错的。这里只看主机名，与服务端真正放行的那一批一致。
    */
   function keyCanBeEmpty(raw) {
     const host = hostOf(raw);
@@ -2643,9 +2309,8 @@ export function createAiConnBlock(host, hooks) {
    * 功能：重画密钥这一栏的说明与占位符 —— 跟着地址实时变。
    *
    * 说明：⭐ 「本地模型也得瞎填一个密钥」曾经是这个功能最大的劝退点：ollama / LM Studio / vLLM
-   *      本机部署本来就没有密钥，界面上却只有一个空的必填感输入框，没有一个字说「这里可以留空」。
-   *      现在按地址给三种话术，用户敲完地址当场就知道要不要填。
-   * @returns {void}
+   * 本机部署本来就没有密钥，界面上却只有一个空的必填感输入框，没有一个字说「这里可以留空」。
+   * 现在按地址给三种话术，用户敲完地址当场就知道要不要填。
    */
   function paintKeyNote() {
     const local = keyCanBeEmpty(urlIn.value);
@@ -2674,7 +2339,7 @@ export function createAiConnBlock(host, hooks) {
    * 功能：重画「有没有没保存的改动」—— 输入框里与已保存内容不一致时亮出来。
    *
    * 说明：⭐ 解决「改了地址不保存就切走 = 静默丢失」：用户至少能看到「有东西没存」。
-   *      ⚠️ 密钥框的比对口径是「**非空**即有改动」：它永远不回显，填了字就是要改。
+   * 密钥框的比对口径是「**非空**即有改动」：它永远不回显，填了字就是要改。
    * @returns {void}
    */
   function paintDirty() {
@@ -2688,7 +2353,7 @@ export function createAiConnBlock(host, hooks) {
    * 功能：把一份配置视图填进连接块（初次加载 / 自己保存之后 / 别处保存时同步过来）。
    * @param {Object} v - 配置视图（`GET|PUT /api/ai/config` 的响应）
    * @param {{keepInputs?: boolean}} [opts] - 为真时**不覆盖**地址与模型输入框。⚠️ 别处保存触发的同步
-   *        必须带上它：用户可能正改着地址还没保存，覆盖 = 悄悄抹掉他刚打的字。
+   * 必须带上它：用户可能正改着地址还没保存，覆盖 = 悄悄抹掉他刚打的字。
    * @returns {void}
    */
   function fill(v, opts) {
@@ -2708,15 +2373,15 @@ export function createAiConnBlock(host, hooks) {
     privBtn.classList.toggle('on', allowPrivate);
     privBtn.setAttribute('aria-pressed', allowPrivate ? 'true' : 'false');
     privBtn.setAttribute('data-on', allowPrivate ? '1' : '0');
-    // ⭐ 0.8.6：图片开关（同一个口径 —— 旧后端没这个键时按关处理）
+    // 图片开关（同一个口径 —— 旧后端没这个键时按关处理）
     visionOn = !!v.vision;
     visionBtn.classList.toggle('on', visionOn);
     visionBtn.setAttribute('aria-pressed', visionOn ? 'true' : 'false');
     visionBtn.setAttribute('data-on', visionOn ? '1' : '0');
     keySet = !!v.keySet;
     clearBtn.hidden = !v.keySet;
-    // ⭐ 0.9.8：密钥栏的说明与占位符改由 `paintKeyNote()` 统一画 —— 它要**跟着地址**变
-    //    （本地模型可留空），写死在这里就跟不上用户改地址的动作
+    // 密钥栏的说明与占位符改由 `paintKeyNote()` 统一画 —— 它要**跟着地址**变
+    // （本地模型可留空），写死在这里就跟不上用户改地址的动作
     paintLocalHint();
     paintDirty();
   }
@@ -2725,13 +2390,13 @@ export function createAiConnBlock(host, hooks) {
    * 功能：给**手机端的入口行**一句话状态（「还没配置密钥 / 未启用 / 已启用 · <模型名>」）。
    *
    * 说明：⚠️ 这是 1 期起就在手机端当过摘要的那三态（见 `docs/公共/开发方案/14-AI辅助任务-2期.md`），
-   *      **只用手里已有的字段**算，⛔ 不为它单独发请求。
+   * **只用手里已有的字段**算，⛔ 不为它单独发请求。
    * @returns {string} 一句短文案
    */
   function summary() {
-    // ⭐ 0.9.8：本地 / 内网地址（本地模型）可以没有密钥 —— 这里若照旧报「还没配置密钥」，
-    //    用户会以为自己还差一步，实际已经能用了。判据用**已保存的**地址（`snap.url`），
-    //    不是输入框里的实时值：没保存的改动不该改变「已存下来的配置」的说法。
+    // 本地 / 内网地址（本地模型）可以没有密钥 —— 这里若照旧报「还没配置密钥」，
+    // 用户会以为自己还差一步，实际已经能用了。判据用**已保存的**地址（`snap.url`），
+    // 不是输入框里的实时值：没保存的改动不该改变「已存下来的配置」的说法。
     if (!keySet && !keyCanBeEmpty(snap.url)) return '还没配置密钥';
     if (!enabled) return '未启用';
     return `已启用 · ${snap.model || '还没填模型名'}`;
@@ -2748,16 +2413,16 @@ export function createAiConnBlock(host, hooks) {
     r.textContent = msg;
   }
 
-  // ⭐ 0.7.6（A3）：三个输入框任何变化都要重算「有没有没保存的改动」；
-  //    地址还要顺带重算「私网提示」（用户可能刚把它改成本机 / 局域网地址）
+  // ：三个输入框任何变化都要重算「有没有没保存的改动」；
+  // 地址还要顺带重算「私网提示」（用户可能刚把它改成本机 / 局域网地址）
   [urlIn, modelIn, keyIn].forEach((inp) => {
     inp.addEventListener('input', () => {
       paintDirty();
       paintLocalHint();
     });
   });
-  // ⭐ 0.7.6（A4）：就地打开内网开关 —— 与高级区里那颗开关走同一套保存逻辑，
-  //    省掉「保存被 400 → 自己回头找开关」那一次往返
+  // ：就地打开内网开关 —— 与高级区里那颗开关走同一套保存逻辑，
+  // 省掉「保存被 400 → 自己回头找开关」那一次往返
   q('iion').addEventListener('click', async () => {
     const btn = q('iion');
     btn.disabled = true;
@@ -2801,7 +2466,7 @@ export function createAiConnBlock(host, hooks) {
     }
   });
   // 009-R1：点一下就存（与上面的总开关同一口径）。⚠️ 字段名是下划线 `allow_private`（与 `mem_enabled` 一致）；
-  //        ⚠️ 关掉而地址还是私网时**不在这里拦**——后端会回 400、文案已写明要打开哪个开关，原样 toast 给用户。
+  // 关掉而地址还是私网时**不在这里拦**——后端会回 400、文案已写明要打开哪个开关，原样 toast 给用户。
   privBtn.addEventListener('click', async () => {
     const next = !allowPrivate;
     try {
@@ -2812,8 +2477,8 @@ export function createAiConnBlock(host, hooks) {
       toast(e.message, true);
     }
   });
-  // ⭐ 0.8.6：图片能力开关 —— 点一下就存（与上面两个开关同一口径）。
-  //    ⚠️ 它**只影响「能不能发图」**，不改变任何已存的数据；关掉之后历史里那些图照样看得见。
+  // 图片能力开关 —— 点一下就存（与上面两个开关同一口径）。
+  // 它**只影响「能不能发图」**，不改变任何已存的数据；关掉之后历史里那些图照样看得见。
   visionBtn.addEventListener('click', async () => {
     const next = !visionOn;
     try {
@@ -2825,16 +2490,8 @@ export function createAiConnBlock(host, hooks) {
     }
   });
   /**
-   * 功能：把「这个地址的 https 连不上」**弹出来**（老大 2026-11-11：「https 不行就弹窗说请使用 http 再次尝试」）。
    *
    * 说明：⭐ 为什么必须弹，而不是只在结果行写一行小字：那一行很容易被略过，
-   *      于是「连不上」被理解成「产品不支持本地模型」—— 实际只要把协议换个字。
-   *      ⚠️ **只提示、不替用户改输入框**：改地址是用户的决定（他可能正想配一张受信任证书的
-   *      自签反代），我们只把原因和下一步说清；⛔ 不做「静默把 https 换成 http」这种自作主张。
-   *      ⚠️ 标题按 `out.tls` 分两种：`protocol`（打到明文端口）/ `certificate`（证书不通过）——
-   *      两句话要用户做的事不一样，标题就得不一样。
-   * @param {{reason: string, tls?: string}} out - `/api/ai/test` 的失败结果
-   * @returns {void}
    */
   function popupTls(out) {
     const cert = out.tls === 'certificate';
@@ -2844,9 +2501,9 @@ export function createAiConnBlock(host, hooks) {
   q('test').addEventListener('click', async () => {
     const btn = q('test');
     const r = q('result');
-    // ⭐ 0.7.6（A3/B3）：测连通测的是**服务端已保存的那份配置**（接口不带 body）——
-    //    有没保存的改动时，先把这句话写在结果行上，别让「✅ 连通正常」把用户骗过去。
-    //    ⚠️ 仍然照测（不把按钮变成死的）：用户想验的往往是「上次保存的那份还能不能用」。
+    // ：测连通测的是**服务端已保存的那份配置**（接口不带 body）——
+    // 有没保存的改动时，先把这句话写在结果行上，别让「✅ 连通正常」把用户骗过去。
+    // 仍然照测（不把按钮变成死的）：用户想验的往往是「上次保存的那份还能不能用」。
     const warn = dirtyBox.hidden ? '' : '请先保存连接设置，再测连通。\n本次测的是已保存的配置：\n';
     btn.disabled = true;
     btn.textContent = '正在测试…';
@@ -2855,8 +2512,8 @@ export function createAiConnBlock(host, hooks) {
       const out = await api('POST', '/api/ai/test', {}, { timeout: 45000 });
       r.hidden = false;
       r.textContent = warn + (out.ok ? `✅ 连通正常，用时 ${out.ms} 毫秒` : `❌ ${out.reason}`);
-      // ⭐ 0.9.8：TLS 这一类**同时弹窗** —— 结果行照旧留着（可回看），弹窗负责「别让它被略过」。
-      //    ⚠️ 判据只看 `kind === 'tls'`：网络类错误弹窗会变成噪音。
+      // TLS 这一类**同时弹窗** —— 结果行照旧留着（可回看），弹窗负责「别让它被略过」。
+      // 判据只看 `kind === 'tls'`：网络类错误弹窗会变成噪音。
       if (!out.ok && out.kind === 'tls') popupTls(out);
     } catch (e) {
       r.hidden = false;
@@ -2895,15 +2552,8 @@ export function createAiConnBlock(host, hooks) {
  * 功能：建「上下文」块 —— 每次带多少条历史。
  *
  * 说明：⚠️ 「带多少条历史」改一下就生效（与总开关同一口径）：数字框在**失焦 / 回车**时保存，
- *      ⛔ 没有「保存」按钮。非法值（空 / 非整数 / 越界）**一个请求都不发**、就地给一句提示、
- *      把框拨回服务端的真值 —— 界面上留一个没生效的值比报错更糟，
- *      而「悄悄钳到 20 或 200 再发」是**静默截断**。
- *      ⭐ 0.7.6：「开启新对话」已搬去**会话屏**（`createAiThreadView()`）—— 那本就是会话的事，
- *      这一块原来带着的 `newseg` / `segstate` / `segmsg` / `loadSeg()` 全部随之搬走。
- *
- * @param {{toast: Function}} host - 端注入：toast
- * @param {{sync: Function}} [hooks] - 面板级联动
- * @returns {{node: HTMLElement, fill: Function, summary: Function}} 块节点 + 回填 / 入口行摘要
+ * 没有「保存」按钮。非法值（空 / 非整数 / 越界）**一个请求都不发**、就地给一句提示、
+ * 把框拨回服务端的真值 —— 界面上留一个没生效的值比报错更糟，
  */
 export function createAiCtxBlock(host, hooks) {
   const toast = host && host.toast ? host.toast : () => {};
@@ -2937,7 +2587,7 @@ export function createAiCtxBlock(host, hooks) {
    * 功能：读输入框并校验 —— 合法返回整数，非法返回 `null`（调用方据此**不发请求**）。
    *
    * 说明：⚠️ 别信浏览器：`type="number"` 允许手打 `e` / `-` / 小数，`min` / `max` 也不挡手输 ⇒
-   *      这里自己按「纯整数串 + 区间」判一遍（与服务端 `checkCtxTurns` 同一口径）。
+   * 这里自己按「纯整数串 + 区间」判一遍（与服务端 `checkCtxTurns` 同一口径）。
    * @returns {?number} 合法值；空 / 非整数 / 越界一律 null
    */
   function readTurns() {
@@ -2973,7 +2623,6 @@ export function createAiCtxBlock(host, hooks) {
       toast(`每次会带 ${n} 条历史`);
     } catch (e) {
       toast(e.message, true);
-      // 没生效就把框拨回服务端的真值（界面上不许留一个假的当前值）
       try {
         fill(await api('GET', '/api/ai/config'));
       } catch (_e) {
@@ -3009,13 +2658,8 @@ export function createAiCtxBlock(host, hooks) {
  * 功能：建「记忆」块 —— 开关 / 条数结论 / 管理记忆（增删改在那个弹层里）。
  *
  * 说明：⭐ 「本次会带几条」是**算出来的实话**（有几条带几条），不是配置值的复述 ——
- *      0.7.6 起记忆**全量注入**，那个「每次最多带几条」的下拉已撤（服务端 `mem_max` 保留仅为兼容）。
- *      ⭐ 清空要二次确认（那是唯一会一次删掉多条的操作）；单条删除不必 —— 记忆是随时能再添一句的东西。
- *      ⚠️ 内容一律 `textContent` 落进 DOM：它是用户自己打的字，也可能粘自别处（XSS 口径同消息区）。
- *
- * @param {{toast: Function, ask: Function}} host - 端注入：toast 与清空的二次确认
- * @param {{sync: Function}} [hooks] - 面板级联动
- * @returns {{node: HTMLElement, fill: Function, loadList: Function, summary: Function}} 块节点 + 回填 / 重读列表 / 入口行摘要
+ * 起记忆**全量注入**，那个「每次最多带几条」的下拉已撤（服务端 `mem_max` 保留仅为兼容）。
+ * 清空要二次确认（那是唯一会一次删掉多条的操作）；单条删除不必 —— 记忆是随时能再添一句的东西。
  */
 export function createAiMemBlock(host, hooks) {
   const toast = host && host.toast ? host.toast : () => {};
@@ -3046,12 +2690,10 @@ export function createAiMemBlock(host, hooks) {
   /**
    * 功能：把「现在有几条、下次会带几条」写成一句实话（关掉时明说一条都不带）。
    *
-   * 说明：⭐ 0.7.6 起记忆是**全量注入**（没有「最多带几条」这个配置了）⇒ 三句话都按全量口径写，
-   *      ⛔ 别再出现「会带 min(N, 上限) 条」那种说法，那会让用户以为还有个数在管着。
    * @returns {void}
    */
   function paintSum() {
-    // ⭐ 0.7.6（A9）：条数并进按钮文案 —— 原来那排末尾挂着一个裸 span，读起来像两件事
+    // ：条数并进按钮文案 —— 原来那排末尾挂着一个裸 span，读起来像两件事
     openBtn.textContent = items.length ? `管理记忆（${items.length} 条）…` : '管理记忆…';
     if (!cfg.memEnabled) {
       sumBox.textContent = `记忆已关闭 —— 下次对话不会带上任何一条（这 ${items.length} 条都还留着）。`;
@@ -3067,8 +2709,7 @@ export function createAiMemBlock(host, hooks) {
   /**
    * 功能：重新读一次记忆列表，并把「有几条 / 会带几条」一起刷新。
    *
-   * 说明：⭐ 0.7.1 起卡片**不由这里画** —— 记忆的增删改都在独立配置界面（`openMemDialog()`）
-   *      里一次性完成，这里的职责只剩「取最新列表 + 刷外面那行小字」。
+   * 里一次性完成，这里的职责只剩「取最新列表 + 刷外面那行小字」。
    * @returns {Promise.<void>}
    */
   async function loadList() {
@@ -3106,19 +2747,8 @@ export function createAiMemBlock(host, hooks) {
   });
 
   /**
-   * 功能：打开**记忆的配置界面**（0.7.1）—— 一个自己搭的模态层，两端共用同一份实现。
    *
    * 说明：⭐ 形态就是给的示意图：**每行两个框（左名称 / 右内容）+ 行尾一个 ✕**，
-   *      底部「＋ 添加 / 保存 / 清空全部」。⛔ 别做成「左边一列预设字段 + 右边卡片」那种两层结构 ——
-   *      上一版正是那样，是「点一次左边创建一个，不需要怎么复杂」。
-   *      ⚠️ 为什么**自己搭**而不复用宿主的弹层：本文件两端共用，而电脑端的 `openModal` 与手机端的
-   *      `openSheet` 是**两套 API**，在共用文件里调谁都等于把另一端写死。
-   *      样式类 `.ai-mem-*` 因此要在两端各写一份（与 `.ai-*` 同款规矩）。
-   *
-   * ⭐ **保存是「整表对齐」而不是逐行落库**：界面上只有一颗「保存」，用户改完一次交 ——
-   *    新增的 POST、改过的 PUT、被 ✕ 掉的 DELETE 都在 `saveAll()` 里一起算出来。
-   *    ⚠️ 内容为空的行 = 不要它（有 id 就删、没落库的跳过），这是「清空一个框」最自然的解释。
-   * @returns {Promise.<void>}
    */
   async function openMemDialog() {
     const mask = el('div', 'ai-mem-mask');
@@ -3146,16 +2776,16 @@ export function createAiMemBlock(host, hooks) {
     /**
      * 功能：画一行「名称 + 内容 + ✕」。
      * @param {{id?: number, label?: string, content?: string, hint?: string, preset?: boolean}} d - 行数据；
-     *     `id` 缺省 / 0 = 还没落库；`hint` 只给预设那三行用（内容框里的灰字提示）；
-     *     `preset` = 预设行（名称只读、不画 ✕）
+     * `id` 缺省 / 0 = 还没落库；`hint` 只给预设那三行用（内容框里的灰字提示）；
+     * `preset` = 预设行（名称只读、不画 ✕）
      * @returns {HTMLElement} 这一行
      */
     const addRow = (d) => {
       const row = el('div', 'ai-mem-row');
-      // ⚠️ 预设行打标记：`saveAll()` 与「清空全部」都要按它走不同的分支（不删、名称不改）
+      // 预设行打标记：`saveAll()` 与「清空全部」都要按它走不同的分支（不删、名称不改）
       if (d.preset) row.dataset.preset = '1';
       row.dataset.id = String(Number(d.id) || 0);
-      // ⚠️ 原始值记在数据集里：保存时靠它判断「这一行到底改没改」，省掉一次多余的 PUT
+      // 原始值记在数据集里：保存时靠它判断「这一行到底改没改」，省掉一次多余的 PUT
       row.dataset.origLabel = String(d.label == null ? '' : d.label);
       row.dataset.origContent = String(d.content == null ? '' : d.content);
       const nameIn = el('input', 'ai-input ai-mem-name');
@@ -3164,7 +2794,7 @@ export function createAiMemBlock(host, hooks) {
       nameIn.placeholder = '名称（可留空）';
       nameIn.value = row.dataset.origLabel;
       if (d.preset) {
-        // ⭐ 0.7.7-⑱：预设行的名称**只读**（⛔ 不用 `disabled`：那会连值一起变灰、还给不出可读的焦点）
+        // -⑱：预设行的名称**只读**（⛔ 不用 `disabled`：那会连值一起变灰、还给不出可读的焦点）
         nameIn.readOnly = true;
         nameIn.title = '这三条是预设，名称不能改';
       }
@@ -3175,7 +2805,7 @@ export function createAiMemBlock(host, hooks) {
       valIn.value = row.dataset.origContent;
       row.append(nameIn, valIn);
       if (!d.preset) {
-        // ⭐ 预设行**不画** ✕（服务端也拒删）—— 摆一颗点了必然报错的按钮是更坏的选择
+        // 预设行**不画** ✕（服务端也拒删）—— 摆一颗点了必然报错的按钮是更坏的选择
         const del = el('button', 'ai-btn ai-btn-mini ai-btn-danger ai-mem-x');
         del.type = 'button';
         del.textContent = '✕';
@@ -3190,9 +2820,7 @@ export function createAiMemBlock(host, hooks) {
     /**
      * 功能：把库里已有的行原样画出来（**预设三条排在最前、且永远在**）。
      *
-     * 说明：⭐ 0.7.7-⑱：先把三条预设摆上，内容取库里同名那一行（没有就是空的）；
-     *      再把用户**自己加的**其它行接在后面 —— ⛔ 预设行不许在这里被画成第二遍
-     *      （同名行已经在预设那三行里被复用了）。
+     * （同名行已经在预设那三行里被复用了）。
      * @returns {void}
      */
     const paintAll = () => {
@@ -3202,8 +2830,7 @@ export function createAiMemBlock(host, hooks) {
         if (hit) used.add(Number(hit.id));
         addRow({ id: hit ? hit.id : 0, label: p.label, content: hit ? hit.content : '', hint: p.hint, preset: true });
       });
-      // ⚠️ 预设行**已经在上面那三行里复用过了**，这里必须把它们排掉（否则库里那条同名行会被画第二遍）——
-      //    用的是同一个判据 `isPresetLabel()`（⛔ 别在这里另写一遍名字比对）。
+      // 用的是同一个判据 `isPresetLabel()`（⛔ 别在这里另写一遍名字比对）。
       items
         .filter((m) => !used.has(Number(m.id)) && !isPresetLabel(m.label))
         .forEach((m) => addRow({ id: m.id, label: m.label, content: m.content }));
@@ -3212,12 +2839,9 @@ export function createAiMemBlock(host, hooks) {
     /**
      * 功能：把界面上的全部行与库里的记忆**一次性对齐**（新增 / 改 / 删）。
      *
-     * 说明：⭐ 0.7.7-⑱：预设三行**永不删**，所以它们与用户自己那几行走两条分支 ——
-     *      · 预设行内容留空 ⇒ 库里那行**留着但内容清空**（服务端只对预设放行空内容）；
-     *        还没落过库的（`id` 0）直接跳过（本来就"不存在"，没什么可清）。
-     *      · 非预设行内容留空 ⇒ 照旧「这一行不要它」（有 id 就删、没落库的跳过）。
-     * @returns {Promise.<void>}
-     * @throws {Error} 任何一步被服务端拒绝时抛出（调用方 toast；界面**不关**，让用户改完重试）
+     * 预设行内容留空 ⇒ 库里那行**留着但内容清空**（服务端只对预设放行空内容）；
+     * 还没落过库的（`id` 0）直接跳过（本来就"不存在"，没什么可清）。
+     * 非预设行内容留空 ⇒ 照旧「这一行不要它」（有 id 就删、没落库的跳过）。
      */
     async function saveAll() {
       const rows = Array.from(rowsBox.querySelectorAll('.ai-mem-row')).map((row) => ({
@@ -3229,7 +2853,7 @@ export function createAiMemBlock(host, hooks) {
         origContent: row.dataset.origContent,
       }));
       // ① 界面上已经没有的行 = 被 ✕ 掉了 ⇒ 删（先删后写，避开"删了又立刻重建"这种顺序歧义）
-      //    ⚠️ 预设行**不参与**这一段：它们永远在界面上（没有 ✕），所以永远进不了这个差集
+      // 预设行**不参与**这一段：它们永远在界面上（没有 ✕），所以永远进不了这个差集
       const keep = new Set(rows.filter((r) => r.id).map((r) => r.id));
       for (const m of items.filter((x) => !keep.has(Number(x.id)))) {
         await api('DELETE', `/api/ai/memories/${Number(m.id)}`, undefined);
@@ -3303,7 +2927,7 @@ export function createAiMemBlock(host, hooks) {
     mask.appendChild(panel);
     document.body.appendChild(mask);
     await loadList();
-    // ⭐ 0.7.7-⑱：**三条预设永远排在最前**（内容取库里同名那一行），自己加的接在后面
+    // -⑱：**三条预设永远排在最前**（内容取库里同名那一行），自己加的接在后面
     paintAll();
   }
 
@@ -3325,37 +2949,17 @@ export function createAiMemBlock(host, hooks) {
 
 /**
  * 功能：建「AI 能力（工具）」块（⭐ 3 期）—— 总开关 / 读授权（任务板、课表）/
- *      写授权（任务板）/ 审计。
+ * 写授权（任务板）/ 审计。
  *
  * 说明：⭐ 这一屏是「把选择权交给用户」的落点（调的第 3 条）。
- *      ⭐⭐ 两轮反馈把文案收成「**每区顶上一句**」：
- *      ① 第一轮（「移除这些开关的提示语」）撤掉读区七句；
- *      ② 第二轮（「这里的提示语也删掉」）撤掉写区六句 + 写区底部那句汇总。
- *      ⇒ 现在每区只有**一句人话**（读区「打开哪一项，AI 才读得到哪一项」／写区「写操作永远
- *      只生成『提议』」），⛔ 别再按开关逐条加回去（那是同一件事说六七遍）。
- *      顶部那句是**不可配置的边界**：密码库与对话永远不进工具面。
- *      ⚠️⭐ 服务端 `modules/ai/lib/tools-read.js` 的 `PANEL_READ` 与 `tools-write.js` 的
- *      `PANEL_WRITE` **一条不少地留着**（`GET /api/ai/tools` 照旧原样回给界面）——
- *      它是「界面上说只发标题、实际发了课表」这类事故的**对账依据**，⛔ 不许因为界面不显示就删。
- *      边界由 `ttt/test/ai.test.js` 的「授权页文案」用例机械盯着（服务端一条不少 ＋ 界面仍有说明）。
- *      ⚠️ 开关是**点了就存**（与总开关 / 记忆开关同一口径）；任一开关保存失败就把界面拨回
- *      服务端的真值 —— 界面上留一个没生效的开关，比报错更糟。
- *      ⚠️ 只复用既有类名（`.ai-switch` / `.ai-note` / `.ai-warn` / `.ai-f`）——
- *      本模块两端各有一份 CSS，新造类名就要两端各改一遍 CSS，而这一块不需要新样式。
- *
- * @param {{toast: Function, ask: Function}} host - 端注入：toast（这一块不需要二次确认，`ask` 不收）
- * @param {{sync: Function}} [hooks] - 面板级联动：任一块保存成功后，把最新视图推给另外几块
- * @returns {{node: HTMLElement, fill: Function}} 块节点 + 回填入口
+ * 两轮反馈把文案收成「**每区顶上一句**」：
  */
 export function createAiToolsBlock(host, hooks) {
   const toast = host && host.toast ? host.toast : () => {};
   const sync = hooks && hooks.sync ? hooks.sync : () => {};
-  // ⭐ 0.7.6（本轮）：这一块从「一个大块」拆成 **一个常驻块 + 三个区**。
-  //    ⛔ 刻意**不拆成三个独立的 createXxxBlock**：那几个开关共用同一份 `cfg`、同一个 `put()`、
-  //    同一个 `paint()` —— 拆成多块就会让 `cfg` 出现多份拷贝，那是**两套真相**，
-  //    必然长出「开了这一个、那个被顶掉」的 bug（0.7.6 的 B1 就是这类事故）。
-  //    所以这里只拆 **DOM**：四个平级的子容器，闭包一个都不多。
-  //    旧块里那两个 `.ai-f-label` 小标题（「可以让它读」「可以让它做」）已删 —— 区标题接管了这个角色。
+  // ：这一块从「一个大块」拆成 **一个常驻块 + 三个区**。
+  // 刻意**不拆成三个独立的 createXxxBlock**：那几个开关共用同一份 `cfg`、同一个 `put()`、
+  // 所以这里只拆 **DOM**：四个平级的子容器，闭包一个都不多。
   const gate = el('div', 'ai-task');
   const readSec = el('div', 'ai-task');
   const writeSec = el('div', 'ai-task');
@@ -3368,11 +2972,8 @@ export function createAiToolsBlock(host, hooks) {
     </button>
     <div class="ai-note">关掉后，AI 只能聊天，不会读取你的任何数据，也不会提议新建任何东西。</div>`;
   // 区一：读工具
-  // ⭐⭐ 2026-10-19（截图：「移除这些开关的提示语」）—— 每个开关下面那句
-  //    「打开后，你的任务标题、截止时间、优先级与归属会被发送给你配置的模型。」整块撤掉：
-  //    七个开关说了七遍同一件事（「打开后…会被发送给你配置的模型」），
-  //    而**这一区顶上那句已经把规则说清楚了**（「打开哪一项，AI 才读得到哪一项」）。
-  //    ⛔ 别把逐项明细加回来 —— 用户要判断的是「要不要给这一项」，不是逐字读一遍字段清单。
+  // 「打开后，你的任务标题、截止时间、优先级与归属会被发送给你配置的模型。」整块撤掉：
+  // 七个开关说了七遍同一件事（「打开后…会被发送给你配置的模型」），
   readSec.innerHTML = `
     <div class="ai-note">打开哪一项，AI 才读得到哪一项；没打开的，一个字都不会发出去。</div>
     <div class="ai-note" data-ai="offhintread" hidden>总开关关着，这些暂不生效。</div>
@@ -3411,13 +3012,8 @@ export function createAiToolsBlock(host, hooks) {
     </button>
     <div class="ai-verdict" data-ai="readsum">正在读取…</div>`;
   // 区二：写工具
-  // ⭐⭐ 第二轮（截图：「这里的提示语也删掉」）—— 与读区同一刀：
-  //    六个开关下面那六句「AI 可以提议…；每次都会先给你看，你点确认才会…」整块撤掉
-  //    （同一件事说了六遍），底部那句「AI 可以提议建任务与记账与…」的汇总也撤掉 ——
-  //    ⛔ 别把逐项明细加回来：用户要判断的是「要不要放开这一项」，不是逐条读一遍
-  //    「点了会怎样」（区顶那句已经把「只会生成提议」说清楚了）。
-  //    ⚠️ 服务端 `lib/tools-write.js` 的 `PANEL_WRITE` **一句不少地留着**（`GET /api/ai/tools`
-  //    照旧回给界面），它是「界面上说只提议、实际落了库」这类事故的对账依据。
+  // 第二轮—— 与读区同一刀：
+  // 六个开关下面那六句「AI 可以提议…；每次都会先给你看，你点确认才会…」整块撤掉
   writeSec.innerHTML = `
     <div class="ai-note">写操作永远只生成「提议」，真正落库那一下永远由你点。</div>
     <div class="ai-note" data-ai="offhintwrite" hidden>总开关关着，这些暂不生效。</div>
@@ -3461,9 +3057,8 @@ export function createAiToolsBlock(host, hooks) {
    * 功能：按 `data-ai` 名取节点 —— ⚠️ **在四个子容器里依次找**。
    *
    * 说明：拆分之后这些节点**不再是同一个 root 的后代**（它们分散在常驻块与三个区里），
-   *      而它们又要被同一份闭包统一 paint ⇒ 取节点必须跨这四个容器找。
+   * 而它们又要被同一份闭包统一 paint ⇒ 取节点必须跨这四个容器找。
    * @param {string} name - `data-ai` 的值
-   * @returns {?HTMLElement} 命中的节点（没有为 null，与拆分前的 `root.querySelector` 同语义）
    */
   const scopes = [gate, readSec, writeSec, recordSec];
   function q(name) {
@@ -3497,7 +3092,7 @@ export function createAiToolsBlock(host, hooks) {
    * 功能：**读区**那句结论 —— 只谈「读得到什么」（总开关关着时明说读不到）。
    *
    * 说明：⚠️ 这是**界面上的结论句**，与 `PANEL_READ` 里那几句风险告知**不是一回事** ——
-   *      ⛔ 别拿这里的句子去替 PANEL 的任何一句（那几句必须逐字留在源码里，测试盯着）。
+   * 别拿这里的句子去替 PANEL 的任何一句（那几句必须逐字留在源码里，测试盯着）。
    * @returns {string} 一句人话
    */
   function readSummaryText() {
@@ -3522,10 +3117,8 @@ export function createAiToolsBlock(host, hooks) {
    * 功能：**写区**那句结论 —— 只谈「能不能提议新建东西」。
    *
    * 说明：⚠️ 第二轮把它从「AI 可以提议建任务与记账与…；每次都要你点确认才会真的落库。」
-   *      改成**纯状态句**：前半句用顿号列全（原来连「与」读起来像一句话套一句话），
-   *      后半句「每次都要你点确认」撤掉 —— 区顶那句「写操作永远只生成『提议』」已经说过了，
-   *      这里再说一遍就是同一件事的第三遍。⛔ 别把「提议 → 确认 → 落库」的流程再写回这一行。
-   * @returns {string} 一句人话
+   * 改成**纯状态句**：前半句用顿号列全（原来连「与」读起来像一句话套一句话），
+   * 后半句「每次都要你点确认」撤掉 —— 区顶那句「写操作永远只生成『提议』」已经说过了，
    */
   function writeSummaryText() {
     if (!cfg.toolsEnabled) return '现在是关闭状态 —— AI 不会提议新建任何东西。';
@@ -3546,7 +3139,7 @@ export function createAiToolsBlock(host, hooks) {
    * 功能：**手机端入口行**的三个摘要文案 —— 只讲「这一项现在是什么状态」。
    *
    * 说明：⚠️ 与上面两句「结论句」不是一回事：结论句是给**区里面**读的完整判断（含总开关关着时
-   *      的说明），入口行只有一行字的宽度，只报这一项自己的状态（总开关状态由常驻块表达）。
+   * 的说明），入口行只有一行字的宽度，只报这一项自己的状态（总开关状态由常驻块表达）。
    * @returns {string} 一句短文案
    */
   function readRowText() {
@@ -3612,14 +3205,12 @@ export function createAiToolsBlock(host, hooks) {
     paintSwitch('audit', cfg.toolsAudit);
     readSum.textContent = readSummaryText();
     writeSum.textContent = writeSummaryText();
-    // ⭐ 0.7.6（A6）：总开关关着 ⇒ 下面四个开关变淡 + **读 / 写两区顶上各一句**说明。
-    //    ⛔ 刻意**不 disabled、不隐藏**：允许用户先把权限配好，也避免「关一次就丢状态」；
-    //    点了照旧保存（后端本来就不看它们，总开关关着一律不生效）。
-    //    ⚠️ 两句说明必须是**两个不同的 data-ai 名** —— 它们现在住在两个区里，
-    //       而 `q()` 只返回第一个命中的节点（同名会让其中一句永远不显示）。
+    // ：总开关关着 ⇒ 下面四个开关变淡 + **读 / 写两区顶上各一句**说明。
+    // 刻意**不 disabled、不隐藏**：允许用户先把权限配好，也避免「关一次就丢状态」；
+    // 点了照旧保存（后端本来就不看它们，总开关关着一律不生效）。
     for (const n of ['offhintread', 'offhintwrite']) q(n).hidden = cfg.toolsEnabled;
-    // ⚠️ 0.8.4：这一串是**逐项**列的（⛔ 别写成「读区全部 + 写区全部」那种推导）——
-    //    漏一个开关的表现是「那一颗在保存处理中仍可点」，而它写的是同一份配置。
+    // 这一串是**逐项**列的（⛔ 别写成「读区全部 + 写区全部」那种推导）——
+    // 漏一个开关的表现是「那一颗在保存处理中仍可点」，而它写的是同一份配置。
     for (const n of [
       'readtasks',
       'readtt',
@@ -3646,23 +3237,17 @@ export function createAiToolsBlock(host, hooks) {
     }
   }
 
-  // ⭐ 0.7.6（B2）：去重 —— 拨一次开关会依次走到 `fill()` 与面板的 `sync()`，两处都调本函数，
-  //    于是每次都打两次 `/api/ai/audit`（列表还会闪一下）。复用同一个未决请求即可。
+  // ：去重 —— 拨一次开关会依次走到 `fill()` 与面板的 `sync()`，两处都调本函数，
+  // 于是每次都打两次 `/api/ai/audit`（列表还会闪一下）。复用同一个未决请求即可。
   /** @type {?Promise.<void>} 正在读审计的那次请求（没在读时为 null） */
   let auditInflight = null;
 
   /**
    * 功能：把「AI 用过哪些工具」画成几行 —— ⛔ 只画工具名 / 参数摘要 / 成败与拒绝原因。
    *
-   * 说明：⭐ 0.8.5：审计从「**进程内**环形缓冲、重启即清」改成
-   *      **落文件 `ai-<uid>.log`**（见 `core/logs.js` 的文件头）⇒ 旧文案里那句「随重启清空」
-   *      已经不成立，换成「每个账号一份记录文件 …… 重启也在」。
-   *      ⛔ 别再写回旧文案：`ai.test.js` 的 3期-4-1 与 `ai-probe.js` 的 G6 都盯着这一条，
-   *      而且是**对整个文件做串扫描** —— ⚠️ 连**注释里**出现旧串都会让它们红（这次就踩了一脚）。
-   *      ⚠️ 只回**自己**的（文件名里带 uid）；管理员在「全局设置 → 日志」里能看全部。
-   *      ⚠️ 每行都用 `textContent` 拼 —— 审计里虽然没有用户内容，但「不拼 HTML」是本模块
-   *      一以贯之的口径，别开特例。
-   * @returns {Promise.<void>} 本次读取（或正在读的那一次）
+   * **落文件 `ai-<uid>.log`**（见 `core/logs.js` 的文件头）⇒ 旧文案里那句「随重启清空」
+   * 已经不成立，换成「每个账号一份记录文件 …… 重启也在」。
+   * 别再写回旧文案：`ai.test.js` 的 3期-4-1 与 `ai-probe.js` 的 G6 都盯着这一条，
    */
   function loadAudit() {
     if (auditInflight) return auditInflight;
@@ -3740,9 +3325,8 @@ export function createAiToolsBlock(host, hooks) {
     'writecal',
     'audit',
   ];
-  // ⭐ 0.7.6（B1）：串行守卫。快速连点两个开关时，第二次 PUT 必须**等第一次的结果回来**再发 ——
-  //    否则两次请求都基于「点击那一刻的本地 cfg」，后发的那次会把前一次改动**顶掉**
-  //    （现场：连点「读我的任务板」+「读我的课表」，刷新后只剩一个）。
+  // ：串行守卫。快速连点两个开关时，第二次 PUT 必须**等第一次的结果回来**再发 ——
+  // （现场：连点「读我的任务板」+「读我的课表」，刷新后只剩一个）。
   let saving = false;
 
   /** 功能：把这一组开关临时禁用（保存处理中）。 @param {boolean} on - 禁用为 true @returns {void} */
@@ -3753,8 +3337,7 @@ export function createAiToolsBlock(host, hooks) {
   /**
    * 功能：保存一项授权并刷新（失败就把界面拨回服务端的真值）。
    *
-   * 说明：⭐ 0.7.6（B1）：**串行化** —— 处理中直接忽略新的点击（同组开关在这期间本来就是禁用的），
-   *      等响应回来再按服务端返回的视图重画。
+   * 等响应回来再按服务端返回的视图重画。
    * @param {Object} patch - 要写的键（只带这一个键，与「带哪个键写哪个键」同口径）
    * @returns {Promise.<void>}
    */
@@ -3814,8 +3397,8 @@ export function createAiToolsBlock(host, hooks) {
   q('writetrip').addEventListener('click', () => put({ tools_write: toggled(cfg.toolsWrite, 'trip') }));
   q('writeassets').addEventListener('click', () => put({ tools_write: toggled(cfg.toolsWrite, 'assets') }));
   q('writecal').addEventListener('click', () => put({ tools_write: toggled(cfg.toolsWrite, 'calendar') }));
-  // ⭐ 0.7.6（本轮）：这一块交出去的是**一个常驻块 + 三个区**（而不是原来的单个 node）。
-  //    `gate` 由面板挂在导航下面（不在导航里、不属于任何区）；`sections` 的 key 只用于 id。
+  // ：这一块交出去的是**一个常驻块 + 三个区**（而不是原来的单个 node）。
+  // `gate` 由面板挂在导航下面（不在导航里、不属于任何区）；`sections` 的 key 只用于 id。
   return {
     gate,
     sections: [
@@ -3827,7 +3410,7 @@ export function createAiToolsBlock(host, hooks) {
         hint: SAME_HINT,
         node: recordSec,
         summary: recordRowText,
-        // ⭐ 手机端打开这一区时顺手刷一次审计（打开就要看最新流水）；电脑端不用（面板一次性填好）
+        // 手机端打开这一区时顺手刷一次审计（打开就要看最新流水）；电脑端不用（面板一次性填好）
         whenOpen: () => loadAudit(),
       },
     ],
@@ -3842,26 +3425,13 @@ export function createAiToolsBlock(host, hooks) {
 /**
  * 功能：装配 AI 配置的**六个区**（两端共用同一份内容）—— 常驻块 + 六区清单 + 取数入口。
  *
- * 说明：⭐ 0.7.6（M0）：从 `createAiPanel()` 里抽出来的。电脑端把六个区铺成「左导航 + 右内容」，
- *      手机端把它们收进**六个入口行各自的底部弹层**（一次只看一区）—— 但两端的区是
- *      **同一份 DOM 节点、同一份闭包状态**，⛔ 不许为手机端另建一套块：那会让 `cfg` 出现两份拷贝
- *      （两套真值），必然重演「开了这一个、那个被顶掉」（0.7.6 批次 B1 的根因）。
- *      ⭐ 顺序固定：连接设置 → 对话上下文 → 长期记忆 → AI 读工具 → AI 写工具 → AI 使用记录 ——
- *      「先能连上 → 再定带多少上下文 → 再定记住什么 → 最后才谈放权」，越往后越要用户多想一步。
- *      ⚠️ 取数只用**两个并行请求**：`GET /api/ai/config`（各块共用）+ `GET /api/ai/memories`（记忆块）。
- *      ⚠️ 工具那一块交上来的是「一个常驻块 + 三个区」：常驻块（安全承诺 + 总开关）**不属于任何区**
- *      （所以它既不进导航、也没得跳），由两端自己决定挂哪儿。
- *
- * @param {{toast: Function, ask: Function, onSaved?: Function}} host - 端注入（toast / 二次确认 /
- *        可选的「保存成功后」回调 —— 手机端用它把入口行的摘要一起刷新，见 `mobile.js`）
- * @returns {{gate: HTMLElement, sections: Array.<{key: string, title: string, hint: string,
- *          node: HTMLElement, summary: Function, whenOpen?: Function}>, refresh: Function,
- *          loadSeg: Function}} 常驻块 + 六区清单 + 「重新取数」/「重读对话进度」入口
+ * 手机端把它们收进**六个入口行各自的底部弹层**（一次只看一区）—— 但两端的区是
+ * 顺序固定：连接设置 → 对话上下文 → 长期记忆 → AI 读工具 → AI 写工具 → AI 使用记录 ——
+ * 「先能连上 → 再定带多少上下文 → 再定记住什么 → 最后才谈放权」，越往后越要用户多想一步。
  */
 export function createAiSections(host) {
-  // ⭐ 手机端的入口行与这里的区是**两份状态**：任一块保存成功之后，行上的摘要得跟着变，
-  //    否则会出现「弹层里改完了、退回屏上还是旧状态」。怎么知道「保存成功了」——
-  //    就是下面这个 `sync()`（它本来就是「任一块保存成功后把最新视图推给其他块」的钩子）。
+  // 手机端的入口行与这里的区是**两份状态**：任一块保存成功之后，行上的摘要得跟着变，
+  // 就是下面这个 `sync()`（它本来就是「任一块保存成功后把最新视图推给其他块」的钩子）。
   const onSaved = host && typeof host.onSaved === 'function' ? host.onSaved : null;
   const sync = (v) => {
     conn.fill(v, { keepInputs: true });
@@ -3893,9 +3463,8 @@ export function createAiSections(host) {
    * 功能：重新取数并回填六区（两端共用的入口）。
    *
    * 说明：⚠️ 两个页面级请求**并行**发出（首屏能合并的就得合并）；
-   *      失败时把原因写进面板（不静默），并**继续抛给调用方** —— 手机端的入口行
-   *      也要知道读失败（它要把原因写在行的摘要位置）。
-   * @returns {Promise.<void>}
+   * 失败时把原因写进面板（不静默），并**继续抛给调用方** —— 手机端的入口行
+   * 也要知道读失败（它要把原因写在行的摘要位置）。
    */
   async function refresh() {
     try {
@@ -3918,12 +3487,8 @@ export function createAiSections(host) {
  * 功能：组装 **电脑端 AI 卡片屏** —— 左侧竖排导航 + 右侧六个区（锚点版，一次看到全部）。
  *
  * 说明：⭐ 内容与手机端是**同一份**（都来自 `createAiSections()`），差别只在摆法：
- *      电脑端屏宽、可以「左导航 + 右内容」；手机端屏窄，改成「入口行 + 每区一个弹层」。
- *      ⚠️ 不做「一次只显示一个区」的 tab —— 那会牵扯手机端每屏的 history 规矩。
- *
- * @param {{toast: Function, ask: Function, onSaved?: Function}} host - 端注入（toast / 二次确认）
- * @returns {{node: HTMLElement, refresh: Function}} 面板根节点 + 「重新取数并回填六区」入口
- *          （异步把内容填进来，先把骨架交出去）
+ * 电脑端屏宽、可以「左导航 + 右内容」；手机端屏窄，改成「入口行 + 每区一个弹层」。
+ * 不做「一次只显示一个区」的 tab —— 那会牵扯手机端每屏的 history 规矩。
  */
 export function createAiPanel(host) {
   const box = el('div', 'ai-cfg');
@@ -3932,10 +3497,9 @@ export function createAiPanel(host) {
   const nav = el('nav', 'ai-cfg-nav');
   nav.setAttribute('aria-label', '配置分区');
   const body = el('div', 'ai-cfg-body');
-  // ⭐ 常驻块挂在**导航下方、第一个区之前**（`ai-cfg-body` 里）。
-  //    ⚠️ 刻意不塞进 `.ai-cfg` 里排在 nav 前面：那个容器在电脑端是**两栏 grid**（左导航 + 右内容），
-  //      多一个直接子节点会把三块挤成「gate 左上 / nav 右上 / body 左下」。
-  //      挂进 body 首部既满足「常驻、不在导航里、在导航下方」，也不动任何布局规则。
+  // 常驻块挂在**导航下方、第一个区之前**（`ai-cfg-body` 里）。
+  // 刻意不塞进 `.ai-cfg` 里排在 nav 前面：那个容器在电脑端是**两栏 grid**（左导航 + 右内容），
+  // 多一个直接子节点会把三块挤成「gate 左上 / nav 右上 / body 左下」。
   body.appendChild(built.gate);
   const items = SECTIONS.map((s) => {
     const btn = document.createElement('button');
@@ -3979,12 +3543,9 @@ export function createAiPanel(host) {
       if (on) it.btn.setAttribute('aria-current', 'true');
       else it.btn.removeAttribute('aria-current');
     });
-    // ⭐ 0.7.6：导航**横向可滚**时，切到靠后的区要把选中的那颗滚进视野
-    //    （否则它停在屏幕外，用户看不到自己点的是哪个）。
-    //    ⚠️ 手机端现在**不再渲染导航**（改成「入口行 + 每区一个弹层」，见 `mobile.js`），
-    //      所以这段眼下只有「电脑端左竖列」一种情形 —— 竖列时 `scrollWidth ≈ clientWidth`，
-    //      这个判断是空操作。保留它是为了将来真有横滚导航时不必再想一遍。
-    //    ⚠️ `block` 必须是 `'nearest'` —— 用默认值会把整个页面纵向拽一下，而用户此刻正滚着区。
+    // 导航**横向可滚**时，切到靠后的区要把选中的那颗滚进视野
+    // 手机端现在**不再渲染导航**（改成「入口行 + 每区一个弹层」，见 `mobile.js`），
+    // 所以这段眼下只有「电脑端左竖列」一种情形 —— 竖列时 `scrollWidth ≈ clientWidth`，
     if (nav.scrollWidth > nav.clientWidth + 1) {
       const onBtn = items[i].btn;
       if (onBtn.scrollIntoView) onBtn.scrollIntoView({ inline: 'nearest', block: 'nearest' });

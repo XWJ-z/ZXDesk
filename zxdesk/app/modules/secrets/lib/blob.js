@@ -1,44 +1,9 @@
 'use strict';
 /**
- * modules/secrets/lib/blob.js —— 附件密文文件的**格式与读写原语**（0.9.8）
- *
+ * modules/secrets/lib/blob.js —— 附件密文文件的**格式与读写原语**
  * 功能：把「一条附件」定义成一种可分块、可随机访问的文件格式，并给出四件事：
- *      `encodeHeader()` / `parseHeader()`（头）、`aadOf()`（每块的认证数据）、
- *      `writeFrame()` / `writeFrames()`（写）、`readRange()`（**只解相交的块**地读）。
- *
- * 格式（**只此一处**，改它等于改磁盘上所有附件的兼容性）：
- *
- * ```
- * header 24 B : magic "ZXDS"(4) | ver(1) | flags(3) | metaLen u32BE | chunkSize u32BE | plainSize u64BE
- * meta        : UTF-8 JSON（metaLen 字节，≤ 1024）
- * frame  i    : plainLen u32BE | iv 12 B | tag 16 B | cipher(plainLen)
- * AAD         : header(24 + metaLen) ‖ frameIndex u32BE ‖ totalFrames u32BE
- * frameOffset(i) = 24 + metaLen + i × (32 + chunkSize)
- * ```
- *
- * ⭐⭐ **为什么头里要写元信息**：老格式（`SDB1`）的文件头只有尺寸，不知道「这是谁的、哪一条、
- *      哪个模块写的」—— 于是「重新关联」只能靠路径形状 ＋ 大小 ＋ 长度三条去猜，
- *      将来的迁移 / 集中整理工具更是没有任何可读的落点。元信息是明文 JSON，
- *      ⛔ 只放**身份**（应用 / 种类 / 模块 / 账号 / 条目 / 写入时间），
- *      **不放**原文件名、标题、mime —— 文件名往往就是秘密（「证件照.jpg」），
- *      头是明文，写进去等于把秘密摊在磁盘上。
- *
- * ⭐⭐ **为什么第 i 帧的偏移仍然可以直接算**：AES-GCM 是流模式，`密文长度 === 明文长度`，
- *      而除了最后一帧之外每帧都是整块 ⇒ 偏移只与 `metaLen` 和 `chunkSize` 有关，
- *      与文件多大**无关**。视频拖进度时只解那几块（O(1)）。
- *      ⚠️ 这条公式成立的前提是**所有帧都用同一个 chunkSize** ⇒ 块大小是常量（1 MiB），
- *      ⛔ 绝不按文件大小动态调整（那样偏移就不可算了，内存也会随文件长）。
- *      ⚠️ 元信息必须放在**帧前面**：放到帧后面会让「算偏移」退化成「整文件扫一遍」。
- *
- * ⭐ **AAD 把「整个头（含元信息） ＋ 第几块 ＋ 共几块」绑进标签**：改头里任何一个字节
- *    （包括 JSON 里的 uid / id）、把两帧互换、把文件截短，解密那一刻就失败，
- *    ⛔ 不会静默读成「半份但看着正常」，也不会出现「标签对、身份被换」的文件。
- *
- * ⚠️ 本文件是**纯逻辑 ＋ 文件描述符上的同步读写**：不碰 HTTP、不碰数据库、不认识 `uid`
- *    （`uid` / `id` 由调用方塞进元信息）。加密/解密由调用方以 `seal(buf, aad)` /
- *    `open(parts, aad)` 两个**函数**传进来（真正的实现在 `modules/vault/store.js` 的
- *    `sealBytes()` / `openBytes()`）—— 这样「DEK 不出 vault」与「格式可单测」同时成立。
- *
+ * `encodeHeader()` / `parseHeader()`（头）、`aadOf()`（每块的认证数据）、
+ * `writeFrame()` / `writeFrames()`（写）、`readRange()`（**只解相交的块**地读）。
  * @author zx
  * @date   2026-11-07
  * @since 0.9.7
@@ -77,7 +42,6 @@ const MAX_META = 1024;
 
 /**
  * 功能：从固定 24 B 头里读出元信息长度（顺带把魔数与版本校验完）。
- *
  * 说明：⚠️ 先判魔数再判版本，最后才读 `metaLen` —— 顺序反了会让一个随机文件里
  *      碰巧存在的字节被当成长度去分配内存。
  * @param {Buffer} buf - 至少 24 字节
@@ -128,14 +92,11 @@ function encodeHeader(opts) {
 
 /**
  * 功能：解析并**严格校验**文件头（含元信息）。
- *
  * 说明：⚠️ 这里的失败一律抛错（不是返回 null）：调用方要把「这个文件不是我们写的 / 被改过 /
  *      是升级前的老文件」明确告诉用户，而不是当成「没有附件」跳过。
  * @param {Buffer} buf - 至少 24 ＋ metaLen 字节
  * @returns {{chunkSize: number, plainSize: number, totalFrames: number, metaLen: number,
- *      meta: Object, buf: Buffer}} 头里的事实；`buf` 是**恰好覆盖头**的那一段（AAD 要用它）
  * @throws {Error} 头不完整 / 魔数不符 / 旧版格式 / 版本不认识 / 块大小非法 / 大小为 0 /
- *      元信息超长或不是合法 JSON 时抛出
  */
 function parseHeader(buf) {
   const metaLen = metaLenOf(buf);
@@ -160,16 +121,10 @@ function parseHeader(buf) {
 
 /**
  * 功能：只读文件**头（固定 24 B ＋ 元信息）**并解析 —— 重新关联与下载都用它认文件。
- *
  * 说明：⭐⭐ 与「读帧」分开，是为了让**认文件**这件事只花几十字节：重新关联要挨个候选
  *      `stat` ＋ 读头，绝不能顺手把 200 MB 读进来（否则就是一次 OOM）。
- *      ⚠️ 本函数**不解密**、也不需要 DEK —— 头是明文元数据（`plainSize` 本来就要给 Range 用）。
- *      ⚠️ 任何不合法一律抛（由调用方归到 `damaged`），⛔ 不返回 null：
- *      `null` 会让「这不是我们的文件」和「读盘失败」长得一样。
- *
  * @param {number} fd - 已打开的文件描述符（`'r'`）
  * @returns {{chunkSize: number, plainSize: number, totalFrames: number, metaLen: number,
- *      meta: Object, buf: Buffer}} 同 `parseHeader()`
  * @throws {Error} 文件不足 24 字节、头不合法、或读盘失败时抛出
  */
 function readHeaderOnly(fd) {
@@ -200,10 +155,7 @@ function frameOffset(index, chunkSize, metaLen) {
 
 /**
  * 功能：这一帧的 AAD —— `整个头(24 + metaLen) ‖ 帧序号 u32BE ‖ 总帧数 u32BE`。
- *
  * 说明：⚠️ 把 `totalFrames` 也绑进来，是为了让「把文件尾部砍掉几帧」也能被认出来
- *      （否则截断之后前几帧照样解得开，用户会看到一个「播到一半就没了」的视频）。
- *      ⚠️ 元信息在头里 ⇒ 它自动进 AAD：改 JSON 里一个字节，解密当场失败。
  * @param {Buffer} headerBuf - 完整头（24 ＋ metaLen）
  * @param {number} index - 帧序号（0 基）
  * @param {number} totalFrames - 总帧数
@@ -231,10 +183,6 @@ function fileSizeOf(header) {
 }
 
 /**
- * 功能：写**一帧**到文件描述符的指定偏移。
- *
- * 说明：⚠️ 帧内布局固定（`plainLen | iv | tag | cipher`），一次性拼好再 `writeSync`：
- *      分三次写会在「写了一半崩掉」时留下更难判的残骸。
  * @param {Object} p - 参数
  * @param {number} p.fd - 已打开的文件描述符（`'w'` 或 `'r+'`）
  * @param {Buffer} p.headerBuf - 完整头（24 ＋ metaLen）
@@ -262,7 +210,6 @@ function writeFrame(p) {
 }
 
 /**
- * 功能：按顺序写**多帧**（测试与离线工具用；上传走 `receive.js` 的边收边写）。
  * @param {Object} p - 参数
  * @param {number} p.fd - 文件描述符
  * @param {Buffer} p.headerBuf - 完整头
@@ -286,7 +233,6 @@ function writeFrames(p) {
 }
 
 /**
- * 功能：读一帧并解密（内部用；不导出 —— 导出会让「绕过 Range 校验」变得很容易）。
  * @param {Object} p - 参数
  * @param {number} p.fd - 文件描述符
  * @param {{chunkSize: number, plainSize: number, totalFrames: number}} p.header - 头
@@ -316,13 +262,6 @@ function readFramePlain(p) {
 }
 
 /**
- * 功能：读 `[start, end]`（含两端）区间，**只解与区间相交的块**。
- *
- * 说明：⭐⭐ 这是 Range 请求与「视频能拖进度」的全部实现：拖到 70% 时只解那 1~2 块。
- *      ⚠️ 生成器逐块 yield：调用方 `res.write()` 之后内存就可以回收，
- *      峰值 ≈ 1 块明文 ＋ 1 块密文。
- *      ⚠️ 区间合法性由**调用方**先校验（本函数信 `start ≤ end` 且在文件内）：
- *      它拿不到 `size` 之外的上下文，编不出用户话术。
  * @param {Object} p - 参数
  * @param {number} p.fd - 文件描述符
  * @param {{chunkSize: number, plainSize: number, totalFrames: number}} p.header - 头
@@ -347,15 +286,8 @@ async function* readRange(p) {
 
 /**
  * 功能：算**整个文件**的 SHA-256（小写 hex）—— 顺序读、1 MiB 缓冲。
- *
  * 说明：⭐⭐ 这是「重新关联」第五道关，也是本模块**唯一与内容有关的判据**：
  *      前四道（路径形状 / 魔数版本 / `plainSize === size` / 长度自洽）全都只证明「形状对」，
- *      同大小、同头、内容不同的另一个文件照样能过。
- *      ⚠️ 范围是**整文件**（头 ＋ 全部帧）：只算帧区会漏掉「改头」这一种最省事的伪造。
- *      ⚠️ 不解密、不要 DEK —— 认文件不该要求主密码已经解出来。
- *      ⚠️ 只有**用户点「重新关联」**时才调它：一次全文件读，200 MB × N 条在 NAS 上是几十秒；
- *      ⛔ 绝不要把它放进列表 / 面板的自动统计里（那会让打开设置页就听见硬盘响）。
- *
  * @param {number} fd - 已打开的文件描述符（`'r'`）
  * @returns {string} 64 位小写 hex
  * @throws {Error} 读盘失败时抛出（由调用方归到 `damaged`）

@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：ApkDownloader.kt
- * 职责：APK 下载与三重校验，字节数、SHA256、包内版本
  */
 
 package com.zxdesk.core.update
@@ -28,12 +26,6 @@ data class ProbeResult(val url: String, val ok: Boolean, val ms: Long)
 /**
  * 安装包下载：探测 → 下载 → 三重校验。
  *
- * 校验三道，任何一项不过就删包：
- * 1. **字节数**：响应头 `Content-Length` 与清单 `fileSize` 不一致 ⇒ 一个字节都不下，直接换源；
- * 2. **SHA256**：按服务器下发值比对，镜像改包在这里被拦下；
- * 3. **包内版本**：由调用方用 PackageManager 读 APK 的 versionCode 比对（APK 是 zip，本模块不解析）。
- *
- * hash 只能证明「字节没被换」，证明不了「服务器记录写对了」，所以第 3 道不能省。
  */
 class ApkDownloader(
     private val http: OkHttpClient = defaultDownloadClient(),
@@ -42,7 +34,6 @@ class ApkDownloader(
     /**
      * 并发探测候选地址（`Range: bytes=0-0`），返回可达的源、按响应快慢排序。
      *
-     * 先探测再下载的理由：连不上的源逐个等超时会让用户干等好几分钟。
      */
     suspend fun probe(urls: List<String>, timeoutMs: Long = 4_000): List<ProbeResult> = coroutineScope {
         urls.map { url -> async(Dispatchers.IO) { probeOne(url, timeoutMs) } }
@@ -75,12 +66,7 @@ class ApkDownloader(
 
     /**
      * 下载到 [dest]，边下边算 SHA256。
-     *
      * @param expectedSize 清单里的字节数（>0 时强制核对）
-     * @param expectedHash 清单里的 SHA256（小写 hex，比较时忽略大小写）
-     * @param isCancelled 每读一块问一次；返回 true 抛 [DownloadCancelled] 并删掉半截文件
-     * @throws DownloadException 大小 / hash 不符（调用方应换源）
-     * @throws DownloadCancelled 用户取消（调用方应安静收场）
      */
     fun download(
         url: String,
@@ -102,15 +88,15 @@ class ApkDownloader(
 
         val request = Request.Builder()
             .url(checked.uri.toString())
-            // ⚠️ 要 identity：让 Content-Length 就是 APK 的真实字节数。
-            //    默认协商 gzip 后，响应头里是压缩后的长度，与清单的 fileSize 一比就误判「大小不符」
+            // 要 identity：让 Content-Length 就是 APK 的真实字节数。
+            // 默认协商 gzip 后，响应头里是压缩后的长度，与清单的 fileSize 一比就误判「大小不符」
             .header("Accept-Encoding", "identity")
             .get()
             .build()
         val call = http.newCall(request)
-        // ⚠️ 这里**不设** call 级总超时：十兆级的包在慢网下总耗时可能几分钟，
-        //    按总时长掐断会在还有数据在流的时候把连接砍掉（表现为「下载到某个时间点必失败」）。
-        //    用客户端上的 readTimeout 管「多久没收到数据」就够了。
+        // 这里**不设** call 级总超时：十兆级的包在慢网下总耗时可能几分钟，
+        // 按总时长掐断会在还有数据在流的时候把连接砍掉（表现为「下载到某个时间点必失败」）。
+        // 用客户端上的 readTimeout 管「多久没收到数据」就够了。
 
         try {
             call.execute().use { response ->
@@ -179,9 +165,6 @@ class ApkDownloader(
         /**
          * 下载专用 HTTP 客户端：**只有读超时，没有 call 级总超时**。
          *
-         * 十兆级的包在移动网络下总耗时可能几十秒到几分钟；用 `call.timeout()` 按总时长掐断，
-         * 会在还有数据在流的时候把连接砍掉 —— 现象是「每次都下载到同一时间点失败」，
-         * 换源重来同样失败，用户看到的就是「一直在下载然后报错」。
          */
         fun defaultDownloadClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)

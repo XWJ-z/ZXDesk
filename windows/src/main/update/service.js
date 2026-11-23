@@ -1,16 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：service.js
- * 职责：更新服务：把「查最新版 → 下载 → 校验」串成一个带状态的对象
- *
- * 只做三件事，别的一律不做（打开安装包、弹窗、写界面都在上层）：
- * 1. 调接口并判定「有没有新版」；
- * 2. 按接口给的地址下载、按接口给的 SHA256 校验；
- * 3. 把当前阶段告诉上层（`onState`）。
- *
- * 失败分两类，处理方式不同：
- * - 「没有发布记录 / 网络不通 / 接口 5xx」→ 安静收场（客户端不能因为更新服务挂了就打不开）；
- * - 「hash 对不上 / 大小不对」→ 明确报错并删包（下到的字节不可信，不能交给用户运行）。
  */
 
 import fs from 'node:fs';
@@ -28,11 +17,6 @@ const PROGRESS_INTERVAL_MS = 200;
 /**
  * 一次「下载更新」最多下载几次。
  *
- * 为什么要有上限：镜像可能缓存了旧包（hash / 大小 / 包内版本都对不上），
- * 而候选地址有 4 个（1 个官方 + 3 个前缀），逐个试下来会把 150 MB 反复拖好几遍 ——
- * 用户看到的就是「一直在下载」。⛔ 内容不对的源会被标记为坏源，不再碰。
- *
- * 两次还不行就停手，交给网盘兜底（见 controller 的 update.pan）。
  */
 const MAX_DOWNLOAD_ATTEMPTS = 2;
 
@@ -41,14 +25,6 @@ export class UpdateService {
    * @param {object} input
    * @param {string} input.currentVersion
    * @param {string} input.apiUrl
-   * @param {string} [input.channel]
-   * @param {string} input.dir - 安装包落盘目录（数据目录下的 updates/）
-   * @param {Function} input.fetchImpl
-   * @param {Function} input.transport
-   * @param {(level:'info'|'warn', message:string)=>void} [input.log]
-   * @param {()=>void} [input.onState]
-   * @param {number} [input.timeoutMs]
-   * @param {number} [input.probeTimeoutMs]
    */
   constructor(input) {
     this.currentVersion = String(input.currentVersion || '');
@@ -112,10 +88,8 @@ export class UpdateService {
     const silent = options.silent === true;
     if (this.pendingCheck) return this.pendingCheck;
     /**
-     * ⚠️ 下载正在进行时**不查**：更新窗口关掉再打开就会再调一次 `openUpdate → check`，
+     * 下载正在进行时**不查**：更新窗口关掉再打开就会再调一次 `openUpdate → check`，
      * 而 `doCheck` 会把阶段改成 checking / available 并把 progress 清空 ——
-     * 用户看到的是「下载进度突然没了、又变回『点下载更新』」，任务栏进度也跟着断。
-     * 直接回当前状态，下载继续跑（进度照旧经 onState 推进窗口）。
      */
     if (this.pendingDownload) {
       this.log('info', '更新包正在下载，跳过这次版本检查');
@@ -177,12 +151,8 @@ export class UpdateService {
     // 强制更新：服务端点名 force，或当前版本低于它给的最低支持版本
     const belowMinimum = info.minVersion && isValidVersion(info.minVersion) ? isNewer(info.minVersion, this.currentVersion) : false;
     /**
-     * ⚠️ 已经下好的包要认回来。
+     * 已经下好的包要认回来。
      *
-     * 「下载更新 → 关掉窗口 → 再从菜单打开」会再查一次版本；旧逻辑在这里无条件
-     * `filePath: ''`，于是 150 MB 的包明明还在磁盘上，界面却退回「点下载更新」——
-     * 想装就得从头再拖一遍（而且下次下载开头还会把它删掉）。
-     * 同一版 + 同一份 hash + 文件在且大小对得上 ⇒ 直接算「已就绪」。
      */
     const readyFile = available ? this.reusablePackage(info) : '';
 
@@ -248,7 +218,6 @@ export class UpdateService {
     pruneOldPackages(this.dir, fileName);
 
     // ① 探测：官方地址 ＋ 镜像一起测，按响应快慢排序。
-    //    先探测再下载的理由：连不上的源逐个等超时会让用户干等好几分钟。
     const candidates = expandDownloadUrls(info.downloadUrls);
     this.state = { ...this.state, phase: 'downloading', progress: null, error: null };
     this.emit();

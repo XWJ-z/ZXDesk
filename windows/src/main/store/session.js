@@ -25,14 +25,11 @@ export class SavedSession {
     this.flow = value.flow === 'GATEWAY' ? 'GATEWAY' : 'DIRECT';
     this.relayHost = value.relayHost || null;
     this.portalUrl = value.portalUrl || null;
-    // ⚠️ 旧快照里的 `lanBaseUrl`（0.1.5 那套「FNID 猜局域网地址」）**一律忽略**：
+    // ⚠️ 旧快照里的 `lanBaseUrl`**一律忽略**：
     // 那是自创机制，Android 的 FNID 路径只有中继。读到也不认、下次保存就没了。
     /**
      * ZXDesk **网页会话**（`zxdesk_sid`）。
-     *
      * 服务端刻意把它做成会话级 Cookie（飞牛账号和 ZXDesk 账号是两套，持久化会把上一个
-     * ZXDesk 账号带过来）。客户端为了「桌面免登录」，把这一条**加密**存进 session.bin，启动时按
-     * 同一 host 回注 —— 不服务端语义、只本机保存；「设置 → 自动登录」可关。
      */
     this.webSession = normalizeWebSession(value.webSession);
     this.cleartext = value.cleartext === true;
@@ -75,7 +72,7 @@ export class SavedSession {
   startUrl() {
     const base = this.baseUrl.replace(/\/+$/, '');
     // 有 ZXDesk 网页会话 ⇒ 直接进应用根（`/app/zxdesk/`），不再绕登录页；
-    // ⚠️ 这一判断必须在 `flow === 'DIRECT'` **之前**：0.1.6 初版顺序反了，
+    // ⚠️ 这一判断必须在 `flow === 'DIRECT'` **之前**：初版顺序反了，
     // 直连 8990 时永远落回 login.html，自动登录对直连模式等于没有。
     // 会话失效时前端自己会回登录页，不需要我们在 URL 上做判断。
     if (this.webSession && this.webSession.value) return `${base}${this.gatewayPath}/`;
@@ -88,9 +85,7 @@ export class SavedSession {
 
 /**
  * 网关凭据快照的归一：只认「有名字 + 有值」的条目，坏数据一律丢掉。
- *
  * 上限与 `GATEWAY_COOKIE_LIMIT` 对齐（20 条）—— 快照要进 safeStorage，
- * 没必要为了几条无关 Cookie 把整份 session.bin 撑大。
  */
 export function normalizeGatewayCookies(raw) {
   if (!Array.isArray(raw)) return [];

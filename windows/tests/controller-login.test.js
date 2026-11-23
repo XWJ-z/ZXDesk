@@ -1,8 +1,5 @@
 /**
  * 登录链路的整体串联（Controller + 真 FnLoginFlow + 假 RPC + 假网关）：
- * 提交账号密码 → 2FA → ticket → 会话落盘 → Cookie 注入 → 探针 → 进浏览模式 / 进访问码页。
- *
- * 这是本机唯一能验「编排」的方式（没有显示器起不了 Electron，也不许联网打真 NAS）。
  */
 
 import assert from 'node:assert/strict';

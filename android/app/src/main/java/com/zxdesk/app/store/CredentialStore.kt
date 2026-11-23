@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：CredentialStore.kt
- * 职责：「记住密码」的多账号存取，整份映射作为一段 Keystore 密文落盘
  */
 
 package com.zxdesk.app.store
@@ -19,36 +17,26 @@ data class SavedCredential(
 /**
  * 「记住密码」的存取（多账号）。
  *
- * 复用 [SecureStore]（Android Keystore AES-256-GCM）：整份「地址＋账号 → 密码」的映射作为一个
- * JSON 密文落盘，⛔ 明文不落盘、⛔ 不进日志、⛔ 不进诊断文本 —— 本类不打印任何内容。
- * `allowBackup="false"` 已在 Manifest 声明：Keystore 密文跨机本来就解不开，别让系统备份白拷一份。
- *
- * ⚠️ 兼容 0.2.16 之前的**单条**格式（键 [LEGACY_KEY]）：老用户升级后第一次读取仍能取到密码，
- *    下一次保存时自动并入新格式并删掉旧键。
  */
 class CredentialStore(context: Context) {
     private val secure = SecureStore(context)
 
     /**
      * 记下某个账号的密码（已存在则覆盖）。
-     *
      * @param address 用户输入的地址（与账号一起构成键）
-     * @param user 飞牛账号
-     * @param password 明文密码，只在内存里过一手
      */
     fun save(address: String, user: String, password: String) {
         val target = SavedCredential(address.trim(), user.trim(), password)
         if (target.address.isBlank() || target.user.isBlank() || password.isBlank()) return
         val key = keyOf(target.address, target.user)
         val kept = loadAll().filterNot { keyOf(it.address, it.user) == key }
-        // ⚠️ 必须 takeLast：target 是刚写进来的那条，`take` 保留的是最早的 20 条 ——
-        //    第 21 个账号保存时，被丢掉的恰恰是用户刚输入的那一条（看着像「记住密码没生效」）。
+        // 必须 takeLast：target 是刚写进来的那条，`take` 保留的是最早的 20 条 ——
+        // 第 21 个账号保存时，被丢掉的恰恰是用户刚输入的那一条（看着像「记住密码没生效」）。
         write((kept + target).takeLast(MAX_ENTRIES))
     }
 
     /**
      * 取某个账号的密码。
-     *
      * @return 没有保存过（或解不开）时为 null
      */
     fun load(address: String, user: String): SavedCredential? {
@@ -81,9 +69,8 @@ class CredentialStore(context: Context) {
     private fun write(items: List<SavedCredential>) {
         if (items.isEmpty()) {
             secure.remove(KEY)
-            // ⚠️ 0.3.1：旧键必须一起删。只删新键的话，下一次 `loadAll()` 会从 0.2.16 之前的
-            //    单条格式里把刚删掉的那条读回来 —— 用户看到的是「清除了密码，重启又回来了」。
-            //    这一条与下面那行是同一件事的两半，⛔ 别只留一处。
+            // 单条格式里把刚删掉的那条读回来 —— 用户看到的是「清除了密码，重启又回来了」。
+            // 这一条与下面那行是同一件事的两半，⛔ 别只留一处。
             secure.remove(LEGACY_KEY)
             return
         }
@@ -100,7 +87,6 @@ class CredentialStore(context: Context) {
             append(']')
         }
         secure.put(KEY, text)
-        // 新格式写成功就删掉旧键：否则删掉某个账号后旧键还在，会出现「删了又回来」
         secure.remove(LEGACY_KEY)
     }
 

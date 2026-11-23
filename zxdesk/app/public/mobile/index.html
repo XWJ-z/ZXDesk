@@ -267,9 +267,7 @@
         <!-- ⭐⭐ 0.9.8 zx 实验室（方案 41 / 决策 143）：**纯屏宿主**，分两层 ——
              ① 首页是**卡片**（一个实验一张卡，项与说明由 `slotDefs()` 从两端接线表算出来，⛔ 一个都不写死）；
              ② 点卡片进去才是那个实验的界面，**动态挂**进 `#lab-body`。
-             ⚠️ 药丸（`#lab-tabs`）只在**实验视图**里出现、且 ≥2 个实验时才画：首页用卡片，不需要它。
-             它住第一行、在 `#lab-body` **外面**（手机端的标题在全局固定顶栏里，塞不进药丸）
-             —— ⛔ 不许放进 `#lab-body`：后者每挂一次就被整块清掉，药丸会跟着一起没。
+             ⭐⭐ **实验之间没有切换控件**：模块互相独立，进了哪个就只做那一件事；换实验＝返回卡片再点一张。
              ⚠️ 这一屏必须进 `mobile/app.js` 的 `switchTab()` 视图清单，否则切过去整块内容不动
              （而它**不报错**）。
              ⚠️ 0 个实验时 `#lab-body` 里由 JS 画一句空状态（「这里将来放实验功能」），⛔ 不许空白屏。 -->
@@ -284,7 +282,6 @@
                ⚠️⚠️ 它必须住 `#lab-body` **外面**：后者每挂一次就被整块清掉，放里面会跟着没。
                内容由 `modules/lab/mobile.js` 的 `openLab()` 画**一次**（⛔ 别放进 `paint()`）。 -->
           <div class="lab-tools" id="lab-tools"></div>
-          <div id="lab-tabs"></div>
           <div id="lab-body"></div>
         </section>
 
@@ -542,7 +539,6 @@
     <!-- ⭐ 原生日期 / 时间控件的「点任意处都开选择器」（记账两端都静态 import 它） -->
     <link rel="modulepreload" href="../core/native-picker.js" />
     <!-- ⭐ 已授权目录的逐层浏览（设置页里「修改数据位置」静态 import 它） -->
-    <link rel="modulepreload" href="../core/dir-tree.js" />
     <!-- ⭐ 模块自己的前端（0.5.0 模块化重构）：一个模块一个目录，前后端模块名对齐 -->
     <!-- ⭐ 0.8.7（方案 27）：网址收藏夹与密码库**不再有自己的屏**（并进 `webpass` 那一屏，
          界面由视图片段动态挂载）⇒ 它们的静态 import 已从 `mobile/app.js` 摘掉 ⇒
@@ -609,6 +605,7 @@
     <link rel="modulepreload" href="../core/vault-watch.js" />
     <link rel="modulepreload" href="../core/backup.js" />
     <link rel="modulepreload" href="../core/cache.js" />
+    <link rel="modulepreload" href="../core/draft.js" />
     <!-- ⭐ 0.5.2：「绑定网址」下拉的唯一实现（任务表单与对话弹窗共用） -->
     <link rel="modulepreload" href="../core/bookmarks.js" />
     <!-- ⭐ 0.3.5：对话的实时通道（SSE + 降级轮询），两端共用一份实现 -->

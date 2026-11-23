@@ -40,7 +40,7 @@ class DataSourceTest {
 
     @Test
     fun lanPortAloneIsDirectNotHttps() = runTest {
-        // 0.1.0 的病根：`10.1.2.3:8990` 被补成 https，必然 TLS 失败
+        // 的病根：`10.1.2.3:8990` 被补成 https，必然 TLS 失败
         val entry = NasDataSource().resolve(Profile("10.1.2.3:8990"))
         assertEquals("http://10.1.2.3:8990", entry.baseUrl)
         assertEquals(EntryFlow.DIRECT, entry.flow)
@@ -54,7 +54,7 @@ class DataSourceTest {
         assertEquals("https://demo-nas.fnos.net", entry.baseUrl)
         assertEquals("demo-nas.fnos.net", entry.relayHost)
         assertEquals(EntryFlow.GATEWAY, entry.flow)
-        // 0.2.1：先进官方门户登录飞牛 —— 中继根是 NAS 桌面 SPA 空壳，不是登录页
+        // 先进官方门户登录飞牛 —— 中继根是 NAS 桌面 SPA 空壳，不是登录页
         assertEquals("https://fnos.net/demo-nas/", entry.portalUrl)
         assertEquals("https://fnos.net/demo-nas/", entry.startUrl)
         assertEquals("https://demo-nas.fnos.net/app/zxdesk/login.html", entry.zxDeskLoginUrl)
@@ -69,7 +69,6 @@ class DataSourceTest {
 
     @Test
     fun withNativeSessionGoesStraightToZxDesk() = runTest {
-        // 0.2.2：有 WS 会话就别再加载门户（否则白转一圈回登录页）
         val resolver = FakeResolver(FnIdAddresses(relay = listOf("demo-nas.fnos.net")))
         val entry = NasDataSource(resolver).resolve(Profile("demo-nas"))
             .copy(fnSession = com.zxdesk.core.connection.FnSession(token = "tk", entryToken = "et"))

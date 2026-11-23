@@ -2,18 +2,9 @@
  * routes/auth.js —— 鉴权 / 会话 / 内置管理员 / 成员管理路由
  *
  * 功能：`handleAuth` 管登录、注册、改密、**改自己的登录名**、退出、会话状态与**个人偏好**（`PUT /api/auth/prefs`，三项）；
- *      `handleAdmin` 管成员列表、增删成员、**改成员登录名**、
- *      重置成员密码、自治注册开关与「数据位置」；`ensureBuiltinAdmin` 负责出厂内置管理员
- *      `admin` / `admin123` 的兜底；`currentUser` 从签名 Cookie 解出当前账号；
- *      `loginThrottle` 是登录失败节流；`validateUsername` / `validateCredentials` 是账号入参校验。
- *
- * ⚠️ 拆自 `server.js`（002 报告 §5.1 ①），**只搬家不改逻辑**；运行期单例从 `../context.js` 取。
- * ⚠️ 越权与「不存在」统一 404（不是 403）—— 403 等于告诉对方「这条记录存在，只是不归你」。
- * ⚠️ **管理面板不显示成员的任务条数**（需求红线：管理员也看不到成员的数据）。
- * ⚠️ 登录失败节流按**「IP + 账号名」**计（并另有一条纯 IP 上限），换用户名绕不过去，
- *    也不能靠打某个名字把别人锁死。
- * ⚠️ 内置管理员**仍在使用初始凭据**时，除改用户名 / 改密码 / 登出 / 取自己信息之外一律拦下
- *    （`mustSetupUser()`，服务端与静态页两处都要拦）。
+ * `handleAdmin` 管成员列表、增删成员、**改成员登录名**、
+ * 重置成员密码、自治注册开关与「数据位置」；`ensureBuiltinAdmin` 负责出厂内置管理员
+ * `admin` / `admin123` 的兜底；`currentUser` 从签名 Cookie 解出当前账号…
  *
  * @author zx
  * @date   2026-09-12
@@ -23,7 +14,7 @@
 'use strict';
 
 const { AUTH_SECRET, BUILTIN_ADMIN, builtinAdminId, logLine, store } = require('../context.js');
-// ⭐ 0.8.5：日志文件（目录 / 清单 / 读尾部 / 删账号时清）—— 见 `/api/admin/logs` 那两个分支
+// 日志文件（目录 / 清单 / 读尾部 / 删账号时清）—— 见 `/api/admin/logs` 那两个分支
 const logs = require('../logs.js');
 const {
   MIN_PASSWORD_LENGTH,
@@ -36,21 +27,17 @@ const {
   verifyPassword,
 } = require('../auth.js');
 const { httpError, idParam, json, readBody } = require('../http-util.js');
-// ⭐ 数据位置（设置页「修改位置」）：动作与判据都在那一处，这里只做分派
-const { handleAdminLocation } = require('./data-location.js');
 
 /**
  * 功能：从 Cookie 携带的会话令牌解析出当前登录账号；任何一项校验不过都返回 null（即未登录）。
- *
  * 说明：以下任一情况都视为**未登录**：
  *   令牌缺失/签名不对/已过期、账号已被删除、账号改过密码（`session_epoch` 变了）。
  * 返回的是 `sanitizeUser` 过的元信息（**不含口令哈希**）。
- *
  * @param {Object} req - HTTP 请求对象（Node `http.IncomingMessage`），只使用 `headers.cookie`
  * @returns {?Object} 已登录时返回当前账号的公开元信息，未登录返回 null
  */
 function currentUser(req) {
-  // 数据位置不可用时进程里没有库：任何会话都视为无效（恢复页在未登录状态下工作）
+  // 防御：没有库就没有会话可言（正常启动流程里 `core/context.js` 早已退出）
   if (!store) return null;
   const s = readSession(AUTH_SECRET, req.headers.cookie, Date.now());
   if (!s) return null;
@@ -61,23 +48,15 @@ function currentUser(req) {
 
 /**
  * 「这个账号的口令是不是还是公开初始值」的记忆表（uid → { hash, yes }）。
- *
- * ⚠️⭐ 必须有：`verifyPassword` 内部是 **scrypt**（本机实测 ≈250 ms）。而这条判定挂在
- *      **每个已登录请求**上（`server.js` 的闸门之后、`static.js` 的静态页之前），
- *      不缓存就等于给管理员账号的每次点击加四分之一秒、还占满事件循环。
- * 缓存键取 `password_hash` 本身：口令一改散列就变 ⇒ 自动失效，不需要任何手动清理。
- *
  * @type {Map.<number, {hash: string, yes: boolean}>}
  */
 const defaultPwCache = new Map();
 
 /**
  * 功能：判断某个账号的口令是否**仍是公开的初始口令**（不看用户名）。
- *
  * 说明：给「首登改密」用的一条例外：账号还在用 `admin123` 时，改密接口允许不填「当前密码」——
  *      那串口令本来就是公开的，多问一次没有任何安全收益，只会让首登多一道坎。
  * ⚠️ 结果按散列记忆（见 `defaultPwCache`），别删 —— 删了就是每请求一次 scrypt。
- *
  * @param {Object} user - `currentUser()` 返回的账号元信息
  * @returns {boolean} 仍在用初始口令返回 true
  */
@@ -94,19 +73,9 @@ function usesDefaultPassword(user) {
 
 /**
  * 功能：判断某个账号是否**仍处在「必须先做首登设置」的状态**。
- *
- * 说明：⭐ 两件事都要成立 ——
- *      ① **它是内置管理员**：认 `settings.builtin_admin_id`（**改名之后 id 不变**）；
- *         只有那个键还没落下时才退回按名字 `admin` 认。
- *         ⚠️ 这一段是安全关键：早先整条判据绑在「用户名等于 admin」上，用户只要改一次用户名
- *         就能绕过闸门（改完密码还是公开的 `admin123`，`/api/bootstrap` 却已经 200）。
- *      ② **两项都还没换干净**：仍能用初始口令登录（`usesDefaultPassword`，按散列比、有缓存），
- *         **或者**用户名还是 `admin`。
- *      ⇒ 只有「用户名与密码都换掉」才解除拦截 —— 与对外承诺「必须先改用户名和密码」逐字一致；
- *         任一项单独完成都不算（改密不能顶替改名，改名更不能顶替改密）。
- *      ⚠️ 副作用是：任何仍叫 `admin` 的内置管理员（含用户自己注册后被升上来的那个）都会被要求
- *         完成设置。这是刻意的：`admin` 是公开的初始标识，留着它就等于留着「先猜这个」的入口。
- *
+ * 说明：⭐ 只问一件事 —— **这个内置管理员的口令是不是还是公开初始值**（`usesDefaultPassword`，
+ *      按散列比、有缓存）。用户名**不参与判定**。
+ *      ⚠️⚠️ 为什么不再看用户名：闸门与 setup 页的能力必须一致。setup 页只会「不填当前密码就改密」
  * @param {Object} user - `currentUser()` 返回的账号元信息（不含口令散列）
  * @returns {boolean} 命中时 true（调用方必须拦住它，逼用户先完成设置）
  */
@@ -115,15 +84,13 @@ function mustSetupUser(user) {
   const claimedId = builtinAdminId();
   const isBuiltin = claimedId !== null ? claimedId === user.id : user.username === BUILTIN_ADMIN.username;
   if (!isBuiltin) return false;
-  return usesDefaultPassword(user) || user.username === BUILTIN_ADMIN.username;
+  return usesDefaultPassword(user);
 }
 
 /**
  * 功能：判断本次请求是否走 HTTPS（决定会话 Cookie 要不要带 `Secure`）。
- *
  * 说明：线程内没有 TLS 时 `req.socket.encrypted` 是 undefined；经统一网关（Socket）时它也不是 TLS，
  *      所以再看一眼 `x-forwarded-proto`。两样都不成立就是明文 http（端口入口），不加 `Secure`。
- *
  * @param {Object} req - HTTP 请求对象
  * @returns {boolean} 走了 HTTPS 返回 true
  */
@@ -142,16 +109,11 @@ function selfRegisterAllowed() {
 
 /**
  * 功能：登录失败节流器（内存 Map，按登录名计数）—— 对外只暴露 `check` / `fail` / `reset` 三个方法。
- *
  * 说明：窗口 5 分钟。两个维度同时计：**「来源 IP + 登录名」10 次**（防定向爆破某个账号）、
  * **「来源 IP」30 次**（防换着名字试，且不让攻击者靠打某个名字把别人锁死）。
  * 为什么必须有：登录是**唯一可被匿名反复尝试**的入口，而每次尝试都要跑一遍 scrypt，
  * 而 `scryptSync` 会阻塞事件循环 —— 不设限就等于把「猜密码」变成「打垮服务」。
  * 阈值刻意宽松，避免误伤：正常用户打错几次不会被锁。
- *
- * ⚠️ 计数只在内存里，进程重启即清空（这是刻意的：没有持久化就有没有「重启绕过」之外的副作用）。
- * ⚠️ 取的是 `req.socket.remoteAddress` —— 经网关时它是**本机**，此时真正的来源在
- *    `x-forwarded-for` 里；本项目不让用户配反代头，所以不做猜测（宁可退化成「按网关 IP 计数」）。
  */
 const loginThrottle = (() => {
   const WINDOW_MS = 5 * 60 * 1000;
@@ -227,11 +189,9 @@ const loginThrottle = (() => {
 
 /**
  * 功能：注册 / 加成员 / **改名**共用的**用户名**校验（长度与字符集）。
- *
- * 说明：⭐ 0.2.1 从 `validateCredentials` 里拆出来，因为「改登录名」是**唯一一个不需要口令**的账号操作 ——
+ * 说明：从 `validateCredentials` 里拆出来，因为「改登录名」是**唯一一个不需要口令**的账号操作 ——
  *      复用整包校验会逼着改名请求也带上密码（前端得多问一次、后端多一处没意义的比较）。
  *      拆开还有一层好处：用户名规则**只有这一份**，将来放宽/收紧字符集不会出现两套口径。
- *
  * @param {string} username - 待校验的用户名
  * @returns {?string} 不合法时返回可展示的中文错误文案，合法返回 null
  */
@@ -262,18 +222,9 @@ const NAV_LIST_MAX = 24;
 const NAV_ITEM_MAX = 40;
 
 /**
- * 功能：把 `PUT /api/auth/nav` 收到的一侧顺序值**校验并拼成落库用的字符串**（0.8.5 导航排序）。
- *
+ * 功能：把 `PUT /api/auth/nav` 收到的一侧顺序值**校验并拼成落库用的字符串**。
  * 说明：⚠️ 这里刻意**只做结构校验**，不做「这个模块名真的存在吗」的白名单 ——
  *      清单是「`app/modules/` 下的目录」决定的（`registry.frontendList()`），前端本来就按清单渲染，
- *      脏名字最坏只是在渲染时被忽略；在这里再维护一份白名单，等于给清单开了第二个真相
- *      （删掉一个模块目录时忘了同步它，用户存的顺序就会被我们自己判成 400）。
- *      ⚠️ 三种取值的语义**必须分清**（见 `schema/core.js` 的 `nav_order` / `nav_tabs`）：
- *      · `null`（显式传 null）⇒ 回 `null` ⇒ 落库 SQL NULL = **恢复默认顺序**；
- *      · 合法数组 ⇒ 回逗号分隔的串；**空数组回空串**（`''`）= 「用户明确排成空的」；
- *      · 其它（不是数组 / 项不是字符串 / 空项 / 超长 / 超项数）⇒ 400。
- *      ⚠️ 重复项按**首次出现**去重：同一个模块排两次会让界面画出两个一样的入口。
- *
  * @param {*} v - 请求体里 `desktop` 或 `mobile` 的值
  * @returns {?string} 落库值（null 或逗号分隔的模块名）
  * @throws {Error} 结构不合法时抛 400
@@ -294,10 +245,6 @@ function navList(v) {
 // ---- 认证与账号 ----
 /**
  * 功能：处理 `/api/auth/*` 全部认证接口 —— 登录页状态查询、自主注册、登录、登出、取当前账号、修改本人密码。
- *
- * 说明：`state` / `register` / `login` 免登录（否则没人能进门），
- * `logout` / `me` / `password` / `username` / `prefs` 要求已登录。
- *
  * @param {Object} req - HTTP 请求对象
  * @param {Object} res - HTTP 响应对象
  * @param {Array.<string>} parts - URL 路径按 `/` 切开后的片段（`parts[1]` 为 'auth'）
@@ -407,18 +354,18 @@ function handleAuth(req, res, parts, user) {
 
   if (method === 'GET' && parts[2] === 'me') return json(res, 200, user);
 
-  // PUT /api/auth/prefs —— 改**自己**的个人偏好（0.2.1，0.3.0 加收藏夹，0.3.1 加硬件管理，0.3.2 加密码库，0.3.5 加对话，0.6.0 加 AI 辅助任务，0.7.1 加灵感库，0.7.5 加番茄钟与日历，0.8.0 加记账，0.8.6 加行程）
-  //   ⭐ 0.9.8 起**多一项**：`hideLab`（不显示 zx 实验室）—— 它同样来自某个 `module.json`
+  // PUT /api/auth/prefs —— 改**自己**的个人偏好
+  //   起**多一项**：`hideLab`（不显示 zx 实验室）—— 它同样来自某个 `module.json`
   //   的 `switchField`，但关掉的是**整个沙箱的入口**（里面的实验功能没有各自的开关）。
   //   现有十二项：`hideTimetable`（不显示课表）、`hideBookmarks`（不显示网址收藏夹）、
   //   `hideIdea`（不显示灵感库）、`hideHardware`（不显示 NAS硬件管理）、`hidePomodoro`（不显示番茄钟）、
   //   `hideCalendar`（不显示日历）、`hideLedger`（不显示记账）、`hideTrip`（不显示行程）、`hideVault`（不显示密码库）、
-  //   `hideTeamwork`（不显示对话）、`hideAi`（不显示 AI 辅助任务）、`hideDigital`（不显示数码管理，0.8.10）。
-  //   ⭐ 0.8.21 起**多一项、但类型不同**：`hideLedgerAmount`（记账里那颗眼睛的**初值**，`true` = 进记账就把
+  //   `hideTeamwork`（不显示对话）、`hideAi`（不显示 AI 辅助任务）、`hideDigital`。
+  //   起**多一项、但类型不同**：`hideLedgerAmount`（记账里那颗眼睛的**初值**，`true` = 进记账就把
   //   金额糊成圆点）。⚠️ 那十一个是「关掉某个功能」（每个来自某个 `module.json` 的 `switchField`），
   //   而它是「金额默认糊不糊」——用户当场仍能点眼睛看回来，只是下次进来还按这个初值。⛔ 别把它
   //   与模块开关混在一起（`module-ui.test.js` 会把「模块派生出来的键」与这里逐项比）。
-  //   ⚠️ `hideHardware` 自 0.8.10 起是**退役的键**（模块 hardware 改名 digital）：仍然接受、
+  //   ⚠️ `hideHardware` 自 是**退役的键**（模块 hardware 改名 digital）：仍然接受、
   //   仍然写那一列，但界面上已没有任何入口会发它 —— 留着是为了不弄丢老用户残留的偏好。
   //   ⭐ 它们是**每账号各管各的**，所以放在 `/api/auth/*` 下而不是 `/api/admin/settings`
   //   （后者是全局开关，仅管理员可写）。
@@ -436,9 +383,9 @@ function handleAuth(req, res, parts, user) {
       // ⚠️ 这个数组的**顺序要与「模块清单按 order 排出来的顺序」一致**（`module-ui.test.js` 逐项比对）：
       //    它只是用来「过滤出请求里带了哪些键」，顺序不影响行为 —— 但门禁要求两处一致，
       //    免得下次加开关时两边各写一份顺序、谁也说不清哪个对。
-      //    ⭐ 0.8.13：课表 / 番茄钟 / 行程并成一个模块 `time`（`order` 20）
-      //    ⇒ 它的三个子开关**连在一起**排在这一位；`hideHardware`（0.8.10 起由 `hideDigital` 取代）
-      //    与 `hideCalendar`（0.8.7 起 `switchField` 已是 null）**继续收** —— 删键会让老设备
+      //    课表 / 番茄钟 / 行程并成一个模块 `time`（`order` 20）
+      //    ⇒ 它的三个子开关**连在一起**排在这一位；`hideHardware`
+      //    与 `hideCalendar`**继续收** —— 删键会让老设备
       //    提交时 400，而列也保留着（列保留、语义退役）。
       const keys = [
         'hideTimetable',
@@ -457,7 +404,7 @@ function handleAuth(req, res, parts, user) {
         //    所以这个键也**跟着挪到最后一位**。
         //    ⚠️ 顺序不是随便排的：下面那条断言要求「这个数组与清单按 order 排出来的顺序逐项一致」。
         'hideLab',
-        // ⭐ 0.8.21（「隐藏要具有记忆功能…并且手机端和电脑端同步」）：**记账里那颗
+        // （「隐藏要具有记忆功能…并且手机端和电脑端同步」）：**记账里那颗
         //    眼睛的初值**（`true` = 进记账就把金额糊成圆点）。⚠️ 它不是「关掉某个功能」那十一个
         //    模块开关之一（不来自任何 `module.json` 的 `switchField`）⇒ 放在**末尾**：
         //    `module-ui.test.js` 只要求「**共有键的顺序**一致」，排在末尾不扰动那个顺序。
@@ -484,7 +431,7 @@ function handleAuth(req, res, parts, user) {
         store.setHideHardware(user.id, b.hideHardware);
         said.push(`${b.hideHardware ? '关闭' : '打开'}了硬件管理显示`);
       }
-      // ⭐ 0.8.10：数码管理的开关 —— 模块 `hardware` 改名 `digital` 之后的继任者。
+      // 数码管理的开关 —— 模块 `hardware` 改名 `digital` 之后的继任者。
       //    ⚠️ 上面那一支**刻意留着**：老偏好键 `hideHardware` 仍被接受（用户残留的偏好，
       //    留着无害），它改的是退役的那一列 `hide_hardware`，界面上已没有任何入口写它。
       if (has('hideDigital')) {
@@ -529,7 +476,7 @@ function handleAuth(req, res, parts, user) {
         store.setHideLab(user.id, b.hideLab);
         said.push(`${b.hideLab ? '关闭' : '打开'}了 zx 实验室显示`);
       }
-      // ⭐ 0.8.21：记账里那颗眼睛的初值（不是「关掉某个功能」，见上面 `keys` 那一段）。
+      // 记账里那颗眼睛的初值（不是「关掉某个功能」，见上面 `keys` 那一段）。
       if (has('hideLedgerAmount')) {
         store.setHideLedgerAmount(user.id, b.hideLedgerAmount);
         said.push(`${b.hideLedgerAmount ? '打开' : '关闭'}了记账的金额隐藏`);
@@ -545,7 +492,7 @@ function handleAuth(req, res, parts, user) {
     });
   }
 
-  // PUT /api/auth/nav —— 改**自己**的导航顺序（0.8.5 导航排序：电脑端侧栏拖动 / 手机端底栏定制）
+  // PUT /api/auth/nav —— 改**自己**的导航顺序
   //   body：`{ desktop?: string[]|null, mobile?: string[]|null }`，两项都可选，但至少带一项。
   //   · `desktop` = **电脑端侧栏**里模块入口的先后（排列；不在里面的模块按清单 `order` 排在其后）；
   //   · `mobile`  = **手机端底部标签栏**放哪几个模块（顺序即标签顺序；最多两个由前端把关，见下）。
@@ -575,7 +522,7 @@ function handleAuth(req, res, parts, user) {
     });
   }
 
-  // PUT /api/auth/username —— 改**自己**的登录名（0.2.1）
+  // PUT /api/auth/username —— 改**自己**的登录名
   //   ⚠️ 与改密码**恰好相反**：这里**不动 `session_epoch`**，一个设备都不踢 ——
   //      登录名不参与会话校验（Cookie 里是 `uid` + `session_epoch`），改个名字没有理由把人在
   //      其他设备上踢下线；但改完**旧名字立刻登不上**，这正是「改登录名」本身的含义。
@@ -627,17 +574,6 @@ function handleAuth(req, res, parts, user) {
 // ---- 管理（仅管理员） ----
 /**
  * 功能：处理 `/api/admin/*` 全部管理员接口 —— 查看成员、添加成员、删除成员、重置成员密码、
- *      **改成员登录名（含管理员账号自己）**、读「数据位置」运维信息、读写「自主注册」开关；非管理员一律 403。
- *
- * 说明：`/api/admin/*` —— 需求 1 的全部能力：看成员、重置成员密码、开关自主注册、增删成员。
- *
- * ⭐ 架构红线（方案 §六 #2）：这里**只碰 `users` 表与 `settings` 表**。
- *    系统内**不存在**任何「以某成员身份查看其任务」的接口，管理员也看不到成员的任务数据，
- *    连任务条数这类统计都不返回 —— 列表走 `store.listUsers()`，字段由 `sanitizeUser` 白名单决定。
- *
- * ⚠️ 只加普通成员，**不提供「提升为管理员」**（方案 §十五）：本期只有一个管理员，
- *    忘记密码的兜底是离线重置；少一个提权入口就少一类「谁是管理员」的边界情况。
- *
  * @param {Object} req - HTTP 请求对象
  * @param {Object} res - HTTP 响应对象
  * @param {Array.<string>} parts - URL 路径按 `/` 切开后的片段（`parts[1]` 为 'admin'）
@@ -650,7 +586,7 @@ function handleAdmin(req, res, parts, user) {
   // 已登录但不是管理员：这里可以明说 403 —— 它不涉及任何人的数据
   if (!user.is_admin) return json(res, 403, { error: '需要管理员权限' });
 
-  // ---- ⭐⭐ 0.8.5：日志 ----
+  // ---- 日志 ----
   //   · `GET /api/admin/logs`             —— 日志目录 + 文件清单（「复制路径」与选文件用）
   //   · `GET /api/admin/logs/view/<name>` —— 读某个日志文件的**尾部 200 行**
   // ⚠️ 只给**管理员**（本函数开头已经 403 过了）：`app.log` 里有「账号「x」解锁了密码库」
@@ -701,12 +637,11 @@ function handleAdmin(req, res, parts, user) {
     const target = store.getUser(targetId);
     if (!target) return json(res, 404, { error: '账号不存在' });
 
-    // DELETE /api/admin/users/:id —— 删除成员**及其全部数据**（方案 §十二：二次确认由前端负责）
     if (method === 'DELETE' && parts.length === 4) {
       if (target.id === user.id) throw httpError(400, '不能删除自己的账号');
       if (target.is_admin) throw httpError(400, '不能删除管理员账号');
       store.deleteUser(target.id);
-      // ⭐ 0.8.5：连他的 **AI 使用记录文件**一起删 —— 账号都删了、那份痕迹还留在磁盘上，
+      // 连他的 **AI 使用记录文件**一起删 —— 账号都删了、那份痕迹还留在磁盘上，
       //    等于数据没删干净（理由写在 `core/logs.js` 的 `removeAiLog` 上）。
       logs.removeAiLog(logs.dirOfStore(store), target.id);
       logLine('info', `管理员「${user.username}」删除了成员「${target.username}」及其全部数据`);
@@ -730,7 +665,7 @@ function handleAdmin(req, res, parts, user) {
       });
     }
 
-    // PUT /api/admin/users/:id/username —— 改成员的登录名（0.2.1）
+    // PUT /api/admin/users/:id/username —— 改成员的登录名
     //   ⚠️ 与「重置密码」不同，这里**对管理员账号一样放行**：「管理员账号也要能改名」
     //      （内置 `admin` 改成自己的名字就是主要用例）。改名不踢会话、不动口令，没有「把自己登出」那个坑，
     //      所以没有理由像重置密码那样把它挡在门外。
@@ -749,12 +684,6 @@ function handleAdmin(req, res, parts, user) {
         return json(res, 200, updated);
       });
     }
-  }
-
-  // ⭐ /api/admin/data-location/* —— 数据位置的预检 / 搬迁 / 进度 / 取消（动作名在 `parts[3]`）。
-  //    ⚠️ 预检与搬迁要求**网关身份**（授权列表只认网关注入的 uid），判定在 `handleAdminLocation` 里。
-  if (parts[2] === 'data-location' && parts.length >= 4) {
-    return handleAdminLocation(req, res, parts, user);
   }
 
   // /api/admin/storage —— 「数据位置」面板（v5）。

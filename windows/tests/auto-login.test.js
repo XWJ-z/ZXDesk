@@ -1,8 +1,5 @@
 /**
- * 0.1.6：ZXDesk 网页会话（`zxdesk_sid`）的加密保存 / 回注 / 开关。
- *
- * 服务端把它做成会话级 Cookie（飞牛账号与 ZXDesk 账号是两套，持久化会把上一个 ZXDesk 账号
- * 带过来）。客户端只为「桌面免登录」在本机加密保存这一条，并在**同一 host** 回注。
+ * ：ZXDesk 网页会话（`zxdesk_sid`）的加密保存 / 回注 / 开关。
  */
 
 import assert from 'node:assert/strict';
@@ -235,7 +232,6 @@ test('快捷方式参数：目标 = 当前 exe、cwd = exe 目录、带图标；
   assert.equal(shortcutOperation(true), 'update');
 });
 
-// ---------------------------------------------------------------- 0.1.6 收尾修复（不升号）
 
 test('startUrl：直连 8990 + 有网页会话 ⇒ 也直奔应用根（顺序不能反）', () => {
   const saved = new SavedSession({
@@ -306,7 +302,6 @@ test('shortcutNeedsRepair：只有指向当前 exe 才不用修', () => {
   // 读不出来 / 空壳 ⇒ 要修
   assert.equal(shortcutNeedsRepair(null, expected), true);
   assert.equal(shortcutNeedsRepair({}, expected), true);
-  // target 对、icon 还指着旧 exe ⇒ 也要修（否则图标还是白纸）
   assert.equal(shortcutNeedsRepair({ target: expected.target, icon: 'C:\\old\\ZXDesk.exe' }, expected), true);
 });
 

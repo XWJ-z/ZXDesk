@@ -2,32 +2,11 @@
 
 /**
  * modules/tasks/backend/json.js —— 任务板存储原语（**JSON 回退版**）
- *
  * 功能：项目 / 项目任务 / 日常任务三类存储原语，与另一个后端**同名同参** ——
- *      「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，
- *      少一个 / 打错名 / 形参个数不一致 = 启动即抛。
- *
- * ⭐ 0.5.0 模块化重构（方案 `09-模块化重构` §四 第 2 行）：比对的粒度从「两个大文件」下移到**每个模块自己的一对**。
- *    ⚠️ **纯搬运**：方法体是从 `store/backend/json.js` 按**行区间逐字节**切出来的，一个字都没重写
- *    （切块前后 sha256 见 0.5.0的提交说明）。
- *    ⚠️ 任务那几个 op 在原来那个大文件里**从 `const ops = {` 的第一行就开始了**，
- *    中间还夹着**必须留在核心**的通用原语 `insert` / `update`（六个模块共用，见
- *    `core/store/methods/task-writes.js`）—— 所以本文件是把**三段不连续的行区间**拼起来的。
- *
- * ⭐ 0.8.12：**协作专属的 op**（成员 / 上报 / 状态集 / 评论 / 附件 / 存量迁移）
- *    整批搬去了 `modules/teamwork/backend/json.js`（判据与表都在那个模块）。本文件只留
- *    **读写 `projects` / `project_tasks` 那两张地基表**的 op —— 这两张表与它们的原语留在任务板
- *    （⛔ 一行没搬），「取数在 tasks、判据在 teamwork」的分工见方案 §丙-2-9-④。
- *    ⚠️⭐ 删项目 / 删项目任务对**协作五张表**的连带，改成经 `_bk` 调 teamwork 的
- *    `deleteProjectCollabData()` / `deleteTaskCollabData()`，并用 `typeof` 守卫
- *    （`modules/teamwork` 被整目录删掉时协作面本就消失）。
- *
- * ⚠️ ops 里的 `this` 是 **Store 实例**（门面用 `.apply(store, …)` 调用），所以照常访问
- *    `this.db` / `this.data` / `this._listSql()` / `this._saveJson()`。
- *
+ * 「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，
  * @author zx
  * @date   2026-09-14
- * @since 0.8.14
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md、docs/公共/架构文档/05-任务板.md、docs/公共/开发方案/09-模块化重构.md
  */
 
@@ -53,8 +32,8 @@ const ops = {
    */
   deleteProject(uid, id) {
     const before = this.data.projects.length;
-    // ⭐⭐ 0.8.14：项目的任务马上要被删 ⇒ **先**把它们的打卡记录清掉
-    //    （与 SQLite 后端同一条口径，见那边同名 op 的说明）。
+    // 项目的任务马上要被删 ⇒ **先**把它们的打卡记录清掉
+    // （与 SQLite 后端同一条口径，见那边同名 op 的说明）。
     const doomed = new Set(
       (this.data.project_tasks || [])
         .filter((t) => t.project_id === id && uidOf(t) === Number(uid))
@@ -68,9 +47,9 @@ const ops = {
     this.data.projects = this.data.projects.filter((p) => !(p.id === id && uidOf(p) === Number(uid)));
     this.data.project_tasks = this.data.project_tasks.filter((t) => !(t.project_id === id && uidOf(t) === Number(uid)));
     const removed = this.data.projects.length < before;
-    // ⭐ 0.8.12：项目真被删掉了才连带清它的**协作数据**（状态配置 /
-    //    评论 / 附件＋磁盘）—— 那五张表搬去了 `modules/teamwork`，连带清理由 teamwork 的
-    //    `deleteProjectCollabData()` 一处负责（与 SQLite 后端同一条口径，见那边同名 op 的说明）。
+    // 项目真被删掉了才连带清它的**协作数据**（状态配置 /
+    // 评论 / 附件＋磁盘）—— 那五张表搬去了 `modules/teamwork`，连带清理由 teamwork 的
+    // `deleteProjectCollabData()` 一处负责（与 SQLite 后端同一条口径，见那边同名 op 的说明）。
     if (removed && typeof this._bk.deleteProjectCollabData === 'function') {
       this._bk.deleteProjectCollabData(id);
     }
@@ -103,16 +82,8 @@ const ops = {
   },
 
   /**
-   * 功能：按「来源消息 id」反查该账号名下的任务（0.4.4）—— 与 SQLite 后端**逐字同形**。
    *
    * 说明：⭐ 返回 `{ message_id, scope, task_id, title }`，`scope` 是 `'daily'` 或项目 id（数字）。
-   *      ⚠️ 老 JSON 数据里的任务行**根本没有 `from_message_id` 这个键** —— `Number(undefined)` 是 `NaN`，
-   *      而 `NaN` 不在集合里，所以老数据天然「没有标记」（这正是想要的），不需要迁移。
-   *      ⚠️ `uidOf(t)` 过滤不能省：标记只属于我。
-   *
-   * @param {(number|string)} uid - 用户 id
-   * @param {Array.<number>} messageIds - 消息 id 列表
-   * @returns {Array.<Object>} `{ message_id, scope, task_id, title }` 数组
    */
   tasksFromMessages(uid, messageIds) {
     const me = Number(uid);
@@ -128,7 +99,7 @@ const ops = {
         scope: 'daily',
         task_id: Number(t.id),
         title: String(t.title == null ? '' : t.title),
-        // ⭐ 0.5.2 完成状态（见 SQLite 后端同名的说明）
+        // 完成状态（见 SQLite 后端同名的说明）
         status: t.status === 'done' ? 'done' : 'todo',
       });
     }
@@ -155,16 +126,16 @@ const ops = {
     const before = this.data.project_tasks.length;
     this.data.project_tasks = this.data.project_tasks.filter((t) => !(t.id === id && uidOf(t) === Number(uid)));
     const removed = this.data.project_tasks.length < before;
-    // ⭐⭐ 0.8.14：任务真被删掉了才连带清它的打卡记录
-    //    （与 SQLite 后端同一条口径，见那边同名 op 的说明）。
+    // 任务真被删掉了才连带清它的打卡记录
+    // （与 SQLite 后端同一条口径，见那边同名 op 的说明）。
     if (removed && Array.isArray(this.data.task_occurrences)) {
       this.data.task_occurrences = this.data.task_occurrences.filter(
         (o) => !(uidOf(o) === Number(uid) && o.task_source === 'project' && Number(o.task_id) === Number(id)),
       );
     }
-    // ⭐ 0.8.12：任务真被删掉了才连带清它的**任务级**协作数据
-    //    （评论 ＋ 附件行与磁盘文件）—— 由 teamwork 的 `deleteTaskCollabData()` 一处负责
-    //    （与 SQLite 后端同一条口径，见那边同名 op 的说明）。
+    // 任务真被删掉了才连带清它的**任务级**协作数据
+    // （评论 ＋ 附件行与磁盘文件）—— 由 teamwork 的 `deleteTaskCollabData()` 一处负责
+    // （与 SQLite 后端同一条口径，见那边同名 op 的说明）。
     if (removed && typeof this._bk.deleteTaskCollabData === 'function') {
       this._bk.deleteTaskCollabData(id);
     }
@@ -206,7 +177,7 @@ const ops = {
     const before = this.data.daily_tasks.length;
     this.data.daily_tasks = this.data.daily_tasks.filter((t) => !(t.id === id && uidOf(t) === Number(uid)));
     const removed = this.data.daily_tasks.length < before;
-    // ⭐⭐ 0.8.14：日常任务真被删掉了才连带清它的打卡记录。
+    // 日常任务真被删掉了才连带清它的打卡记录。
     if (removed && Array.isArray(this.data.task_occurrences)) {
       this.data.task_occurrences = this.data.task_occurrences.filter(
         (o) => !(uidOf(o) === Number(uid) && o.task_source === 'daily' && Number(o.task_id) === Number(id)),
@@ -222,7 +193,6 @@ const ops = {
    * @param {string} d - 日期，'YYYY-MM-DD'
    * @returns {{ projects: Object, daily: number }} `projects` 是「项目 id → 条数」，`daily` 是日常任务条数
    * 说明：区间口径为「`start_date || due_date` 到 `due_date`」—— 开始日期缺失时按截止日期当天算，
-   *      只能在查询侧做这种兜底推断，绝不回写用户数据；`status === 'done'` 的任务不计入。
    */
   todayCounts(uid, d) {
     const projects = {};
@@ -248,11 +218,8 @@ const ops = {
    * 功能：本模块进个人备份的那一份读取 —— 对应原先 `exportAll()` 里任务那一段（**逐字搬运**）。
    *
    * 说明：⚠️ 三张表之间有**父子引用**（`project_tasks.project_id` → `projects.id`），
-   *      导入时按这个顺序重建，所以 `ORDER BY` 一个都不许改
-   *      （个人导入的父子顺序见 `store/methods/backup.js` 的 `PERSONAL_SOURCES`）。
+   * （个人导入的父子顺序见 `store/methods/backup.js` 的 `PERSONAL_SOURCES`）。
    *
-   * @param {number} uid - 账号 id
-   * @returns {Object} `{ projects, ptasks, dtasks }` 三组行数组
    */
   exportTasks(uid) {
     const d = this.data || {};
@@ -272,29 +239,18 @@ const ops = {
    * 功能：**按 id 直接取一个项目**（不管归属）。
    * @param {(number|string)} id - 项目 id
    * @returns {?Object} 项目行；不存在时为 null
-   * 说明：⭐ 0.8.12：它是**取数原语**、绑的是 `projects`（任务板的地基表），
-   *      所以**留在本模块**（判据搬去 `teamwork` 后由那边的 `taskShareGuard()` 经 `_bk` 调它）——
-   *      「取数在 tasks、判据在 teamwork」的分工见方案 §丙-2-9-④。
+   * 所以**留在本模块**（判据搬去 `teamwork` 后由那边的 `taskShareGuard()` 经 `_bk` 调它）——
    */
   findProjectById(id) {
     return (this.data.projects || []).find((p) => Number(p.id) === Number(id)) || null;
   },
 
-  // ---- ⭐⭐ 0.8.14：周期任务的打卡记录 ----
   /**
    * 功能：给某条任务的某一期写一条完成记录；**已打过卡时什么都不做**（幂等）。
    *
    * 说明：⚠️ JSON 回退版**没有唯一索引**可撞 ⇒ 只能先查一遍再插 —— 这一步是**必须的**
-   *      （不是「顺手优化」）：漏了它，重复打卡会写进第二行，「已完成的期数」当场算错，
-   *      而 SQLite 那侧却是对的 ⇒ 两个后端行为漂移（本项目最贵的一类缺陷）。
-   *      ⚠️ `id` 走 `_seq`（JSON 后端自己的全局自增），与其它表同一口径。
-   *
-   * @param {(number|string)} uid - 用户 id
-   * @param {string} source - `'daily'` / `'project'`
-   * @param {(number|string)} taskId - 任务 id
-   * @param {string} periodKey - 本期的周期起点日期 `YYYY-MM-DD`
-   * @param {string} doneAt - 打卡时刻
-   * @returns {number} 本次**真实新增**的行数（重复打卡回 0）
+   * （不是「顺手优化」）：漏了它，重复打卡会写进第二行，「已完成的期数」当场算错，
+   * 而 SQLite 那侧却是对的 ⇒ 两个后端行为漂移（本项目最贵的一类缺陷）。
    */
   insertOccurrence(uid, source, taskId, periodKey, doneAt) {
     if (!Array.isArray(this.data.task_occurrences)) this.data.task_occurrences = [];
@@ -326,7 +282,6 @@ const ops = {
    * @param {string} source - `'daily'` / `'project'`
    * @param {(number|string)} taskId - 任务 id
    * @param {string} periodKey - 本期的周期起点日期 `YYYY-MM-DD`
-   * @returns {boolean} 是否真的删掉了一行
    */
   deleteOccurrence(uid, source, taskId, periodKey) {
     const all = this.data.task_occurrences || [];

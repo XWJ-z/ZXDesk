@@ -1,11 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：fnid.js
- * 职责：FNID 解析（移植自 `Project/Android/core/connection/{FnIdSigner,FnIdResolver,FnIdResponse}.kt`，
- * JS 侧先例 `Project/Edge/lib/fnid.js`）。协议常量集中在这里 —— 接口一旦变更只改这个文件。
- *
- * `POST https://5ddd.com/api/v1/fn/con`（备 `https://fnos.net`），8 秒超时。
- * `code != 0` ⇒ 直接「找不到这个 FNID」，**不重试备用端点**（重试只会让用户多等 8 秒）。
  */
 
 export const CONNECT_PATH = '/api/v1/fn/con';
@@ -97,11 +91,7 @@ function toLong(value) {
 
 /**
  * 解析 FNID ⇒ 中继与端口。
- *
  * @param {string} fnIdRaw
- * @param {{fetchImpl?:Function, now?:Function, nonce?:string, endpoints?:string[], timeoutMs?:number}} options
- * @returns {Promise<object>} `parseFnIdResponse` 的 `addresses`
- * @throws {{code:string, message:string}}
  */
 export async function resolveFnId(fnIdRaw, options = {}) {
   const fnId = String(fnIdRaw ?? '').trim().toLowerCase();

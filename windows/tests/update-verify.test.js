@@ -1,8 +1,5 @@
 /**
  * 包内版本核对：绿色 zip 里 `resources/app.asar` → `package.json.version`。
- *
- * 用真的 asar（`@electron/asar` 生成）＋ 真的 zip（本文件现写，deflate）当夹具，
- * 而不是手搓假字节 —— 自己编格式再自己解析，等于两头一起错还测得过。
  */
 
 import assert from 'node:assert/strict';
@@ -98,7 +95,6 @@ test('包内版本是别的版本时，读出来的是真实版本（不是文�
   fs.writeFileSync(file, zip);
   t.after(() => fs.rmSync(path.dirname(file), { recursive: true, force: true }));
 
-  // 文件名写着 0.2.2，包里其实是 0.1.6 —— 这正是「服务器记录写错 / 镜像给了旧包」的样子
   assert.equal(readPackageVersion(file), '0.1.6');
 });
 

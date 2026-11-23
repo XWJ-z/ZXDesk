@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：DataSource.kt
- * 职责：数据源接口与一期实现，仅连接 NAS
  */
 
 package com.zxdesk.core.datasource
@@ -24,8 +22,6 @@ interface DataSource {
 /**
  * 一期唯一实现：连接 NAS。
  *
- * 三种输入都走 [InputParser]，不再「一律补 https」（那是 0.1.0 的病根）：
- * IP/域名 → [ConnectionPlanner] 选路；FNID → 查中继地址。[FnIdResolver] 可注入，测试不联网。
  */
 class NasDataSource(
     private val resolver: FnIdResolver = HttpFnIdResolver(),
@@ -50,7 +46,6 @@ class NasDataSource(
             accountScope = AccountScope.NAS,
             flow = EntryFlow.GATEWAY,
             relayHost = relay,
-            // 先登飞牛门户，再由门户跳中继 —— 中继根不是登录页（0.2.0 的教训）
             portalUrl = FnPortal.urlFor(fnId),
             // 中继域名解析不了时的排障出口（只显示、不自动切）
             lanHint = addresses.lanIpv4.firstOrNull(),

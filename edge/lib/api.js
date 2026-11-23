@@ -1,17 +1,13 @@
 /**
  * api.js —— REST 封装（超时 + 错误码归一）
- *
  * 功能：`fetchJson` 发一个 JSON 请求并把失败收口成 `{code}` 异常；`fetchHealth` 是唯一的握手口，
  *      用一次 `/api/health` 同时判出「是 ZXDesk / 未登录 / 网关要登录 / 访问码 / 不是它」。
  *
- * ⛔ 只有 SW（`sw.js` → `lib/*`）调这里，UI 一律走消息。
- * ⚠️ 会话通道**只用 `credentials:'include'`**：扩展拿到 host 权限后浏览器自动带 Cookie，
+ * 只有 SW（`sw.js` → `lib/*`）调这里，UI 一律走消息。
+ * 会话通道**只用 `credentials:'include'`**：扩展拿到 host 权限后浏览器自动带 Cookie，
  *    显式 `Cookie` 头是禁改头、会被浏览器剥掉。
- * ⚠️ 登录态判定只看 health 的 `authenticated`：`cookies.getAll({url})` 在 Edge 上可能返回 0 条
- *    而 `cookies.get` 找得到，自己数 Cookie 会误判成未连接。
- *
  * @author zx
- * @since 0.1.0
+ * @since
  * 相关：Project/Edge/README.md
  */
 
@@ -23,8 +19,6 @@ const HEALTH_TIMEOUT = 3000;
  * @param {{method?:string, body?:object, timeout?:number}} [opt]
  * @returns {Promise<{status:number, data:object}>}
  * @throws {{code:'network'}} 超时 / DNS / TLS / 被拦
- * @throws {{code:'http_error', status:number, errorText?:string}} 4xx / 5xx（`errorText` = 服务端 error 字段，判「已经收藏过」用）
- * @throws {{code:'not_json'}} 200 但不是 JSON（被网关踢到登录页等）
  */
 export async function fetchJson(url, opt = {}) {
   const { method = 'GET', body, timeout = HEALTH_TIMEOUT } = opt;
@@ -65,11 +59,9 @@ export async function fetchJson(url, opt = {}) {
 /**
  * 功能：`GET {base}/api/health` 的**唯一握手口**（免登录、能区分「不是 ZXDesk」、顺带回版本与登录态）。
  * @returns {Promise<{hit:boolean, authenticated?:boolean, html?:boolean, nasLogin?:boolean, accessCode?:boolean, version?:string, status?:number, error?:string}>}
- *   - `hit:true`          响应 JSON 且 `ok===true`（`authenticated` 随响应带出）
- *   - `nasLogin:true`     200 + `text/plain` 且正文含 `invalid token` —— **网关会话缺失**（D4：一期误判成 not_zxdesk）
- *   - `accessCode:true`   HTML 且含「访问码 / 访问口令 / access code」—— 网关访问码页
- *   - `html:true`         其它 HTML（被网关踢到飞牛页等）
- *   - 其余（404 / 非 JSON / 网络错）`hit:false`，尽力带 `status` / `error`
+ * - `hit:true`          响应 JSON 且 `ok===true`（`authenticated` 随响应带出）
+ * - `nasLogin:true`     200 + `text/plain` 且正文含 `invalid token` —— **网关会话缺失**（D4：一期误判成 not_zxdesk）
+ * - `accessCode:true`   HTML 且含「访问码 / 访问口令 / access code」—— 网关访问码页
  */
 export async function fetchHealth(base) {
   try {

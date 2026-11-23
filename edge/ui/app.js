@@ -1,19 +1,13 @@
 /**
  * app.js —— 弹窗与侧边栏的唯一内容视图（同一份内容、两种外壳）
- *
  * 功能：`mountApp(root, host)` 按宿主渲染整套界面：连接卡 / 登录等待 / 收藏表单 / 列表 /
  *      行内编辑 / 密码库只读弹层 / 设置视图 / 许可协议门槛 / 新版本气泡。
  *
- * ⚠️ 两个壳（`popup.js` / `sidepanel.js`）只做三件事：设 `data-host`、调 `mountApp`、定高度。
+ * 两个壳（`popup.js` / `sidepanel.js`）只做三件事：设 `data-host`、调 `mountApp`、定高度。
  *    本文件里 ⛔ 出现 `host === 'popup'` 以外的宿主分支。两形态的差异只有五条：
- *    表单默认展开+预填（popup）↔ 折叠（侧边栏）；列表 20 条+看全部（popup）↔ 全量（侧边栏）；
- *    收藏成功自动关（popup）↔ 不关（侧边栏）；设置视图内嵌；密码库弹层相同。
- *
- * ⚠️ 连接走 `conn-ui.authorizeAndConnect`（手势内授权）；手势丢失或用户拒绝时回 `need_settings`，
- *    这里切到内嵌的设置视图，⛔ 不开整页标签。
- *
+ *    表单默认展开+预填（popup）↔ 折叠（侧边栏）；列表 20 条+看全部（popup）↔ 全量（侧边栏）…
  * @author zx
- * @since 0.1.4
+ * @since
  * 相关：Project/Edge/README.md
  */
 import { LINK_LABEL } from '../lib/address.js';
@@ -43,7 +37,7 @@ export async function mountApp(root, host) {
   let lastInput = '';
 
   // ================= 许可协议门槛（首次启动 / 协议改版后） =================
-  // ⚠️ 先判后挂：未同意前既不建视图也不发任何请求（连接与版本检测都在后面）。
+  // 先判后挂：未同意前既不建视图也不发任何请求（连接与版本检测都在后面）。
   if (!(await isEulaAccepted())) {
     createEulaPanel(root, { mode: 'gate', onAccept: () => location.reload() });
     return;
@@ -361,7 +355,7 @@ export async function mountApp(root, host) {
 
   /**
    * 功能：手动检查更新 —— 结果就地写清楚（有新版本给网盘入口），⛔ 不依赖顶部那枚气泡。
-   * ⚠️ 手动查必须如实：用户以前关掉过的那一版，这里也要报「有新版本」。
+   * 手动查必须如实：用户以前关掉过的那一版，这里也要报「有新版本」。
    */
   btnCheck.addEventListener('click', async () => {
     btnCheck.disabled = true;
@@ -471,7 +465,6 @@ export async function mountApp(root, host) {
   async function showSettings(input) {
     if (input && !sAddr.value) sAddr.value = input;
     show('settings');
-    // ⚠️ 先读回「已授权与否」再渲染：grantedNow 初始 false，否则已授权的人会看到「授权并连接」
     await renderGranted();
     const st = await send(MSG.status).catch(() => ({ state: 'idle' }));
     renderSettings(st);
@@ -482,7 +475,6 @@ export async function mountApp(root, host) {
     const input = addr.value.trim();
     show('resolving');
     resolvingTarget.textContent = input;
-    // ⚠️ 这里必须有护栏：一次 TypeError 就会让视图停在「连接中…」永不落地
     let st;
     try {
       st = await authorizeAndConnect(input);
@@ -550,7 +542,7 @@ export async function mountApp(root, host) {
   });
   /**
    * Esc 的统一口径（自内向外）—— 弹层 > 菜单 > 设置视图返主视图。
-   * ⚠️ 焦点在输入框/下拉里时不接管（那时用户按 Esc 是想取消这次输入，不是想离开这一屏）。
+   * 焦点在输入框/下拉里时不接管（那时用户按 Esc 是想取消这次输入，不是想离开这一屏）。
    */
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
@@ -592,8 +584,7 @@ export async function mountApp(root, host) {
   }
   btnFormToggle.addEventListener('click', () => {
     setFormOpen(true);
-    // ⚠️ 侧边栏不走 initForm（那是 popup 的预填路径）⇒ 必须在这里补一次标签，
-    //   否则下拉里一个选项都没有 —— 不在这一层补，它就是永远空白。
+    // 侧边栏不走 initForm（那是 popup 的预填路径）⇒ 必须在这里补一次标签，
     // 每次展开都刷：别处新建的标签也能立刻选到。
     fillTagOptions();
     inUrl.focus();
@@ -630,10 +621,10 @@ export async function mountApp(root, host) {
 
   async function fillTagOptions() {
     const r = await send(MSG.bmList, {}).catch(() => null);
-    // ⚠️ 拿不到列表（没连上 / 请求失败）时也要把下拉重置成一句可读的话，
-    //    别留一个空白下拉让人以为功能坏了。
+    // 拿不到列表（没连上 / 请求失败）时也要把下拉重置成一句可读的话，
+    // 别留一个空白下拉让人以为功能坏了。
     const tags = r && r.ok && Array.isArray(r.tags) ? r.tags : [];
-    // ⚠️「未分类」是服务端哨兵（id:'none'）不是真标签 ⇒ 不进下拉（照网页端）。
+    // 「未分类」是服务端哨兵（id:'none'）不是真标签 ⇒ 不进下拉（照网页端）。
     tagSel.textContent = '';
     const first = el('option');
     first.value = '';
@@ -652,7 +643,7 @@ export async function mountApp(root, host) {
   /**
    * 功能：给没写协议的网址补协议 —— 用户多半直接粘 `example.com/x`。
    * 判据照 `lib/address.js`：IP / IPv6 / localhost 走 http，其余走 https；
-   * ⛔ 已经写了协议的一律不动（http / https / 其它都原样交出去，由服务端判）。
+   * 已经写了协议的一律不动（http / https / 其它都原样交出去，由服务端判）。
    * @param {string} raw
    * @returns {string}
    */
@@ -668,7 +659,7 @@ export async function mountApp(root, host) {
 
   /**
    * 功能：给一个网址找「同一站点下用过的标签」。
-   * ⚠️ 只在已加载的列表里找，⛔ 不额外发请求；列表正被筛选时建议也跟着窄，属预期。
+   * 只在已加载的列表里找，⛔ 不额外发请求；列表正被筛选时建议也跟着窄，属预期。
    * @param {string} url
    * @returns {string[]} 按出现次数降序，最多 3 个
    */
@@ -721,7 +712,6 @@ export async function mountApp(root, host) {
     renderSuggestions();
   }
 
-  // 下拉选已有：先重置再挂——不重置「再选同一枚」change 不触发（网页端踩过的坑）
   tagSel.addEventListener('change', () => {
     const v = tagSel.value;
     tagSel.value = '';
@@ -837,8 +827,8 @@ export async function mountApp(root, host) {
     const full = t;
     const d = new Date(t.replace(' ', 'T'));
     const now = new Date();
-    // ⚠️ 按**本地日**取零点再比：⛔ 不能用 getTime()/86400000（那是 UTC 日，
-    //    UTC+8 的 00:00–08:00 会被算成「昨天」，白天又对）。
+    // 按**本地日**取零点再比：⛔ 不能用 getTime()/86400000（那是 UTC 日，
+    // UTC+8 的 00:00–08:00 会被算成「昨天」，白天又对）。
     const day = (x) => (x && x.getTime ? new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime() : 0);
     const diff = Math.round((day(now) - day(d)) / 86400000);
     let short = t.slice(5, 10);
@@ -1027,8 +1017,7 @@ export async function mountApp(root, host) {
 
   /**
    * 功能：标签选择器（下拉选已有 + 新标签输入 → 药丸，点药丸移除），编辑行专用。
-   * ⚠️ 与收藏表单那块**刻意不合并**：表单那条是走过真机验证的路径，不顺手重构它
-   *    （禁止清单 7）；两份都较短，重复成本低于回归风险。
+   * 与收藏表单那块**刻意不合并**：表单那条是走过真机验证的路径，不顺手重构它
    * @param {string[]} initial - 初始标签名
    * @returns {{node:HTMLElement, tags:()=>string[]}}
    */
@@ -1073,7 +1062,6 @@ export async function mountApp(root, host) {
         .forEach(addName);
       inp.value = '';
     }
-    // 下拉选已有：先重置再挂（不重置「再选同一枚」change 不触发 —— 网页端踩过的坑）
     sel.addEventListener('change', () => {
       const v = sel.value;
       sel.value = '';
@@ -1181,7 +1169,7 @@ export async function mountApp(root, host) {
       const tagNames = picker.tags();
       let r;
       try {
-        // ⛔ 只发 id/title/tags —— url 一个字都不带
+        // 只发 id/title/tags —— url 一个字都不带
         r = await send(MSG.bmUpdate, { id: it.id, title, tags: tagNames });
       } catch (_e) {
         r = { ok: false, code: 'network' };
@@ -1204,8 +1192,8 @@ export async function mountApp(root, host) {
       if (r && r.code === 'bookmark_gone') {
         err.textContent = BM_TEXT.editGone;
         err.hidden = false;
-        // ⚠️ 1.2 s 后**先 close() 再刷新**：close() 不跑 ⇒ document 上的 Esc 监听永远摘不掉
-        //    （列表重建会丢掉这一行 DOM，闭包却还挂在 document 上，且会 stopPropagation 吞掉全局 Esc）
+        // 1.2 s 后**先 close() 再刷新**：close() 不跑 ⇒ document 上的 Esc 监听永远摘不掉
+        // （列表重建会丢掉这一行 DOM，闭包却还挂在 document 上，且会 stopPropagation 吞掉全局 Esc）
         setTimeout(() => {
           close();
           loadList(false);
@@ -1329,7 +1317,7 @@ export async function mountApp(root, host) {
 
   /**
    * 功能：点 🔑 ⇒ 先问 status（不需要解锁）⇒ 未解锁给引导 / 已解锁取详情。
-   * ⚠️ 每次点开都重新问一次（解锁态是服务端的、会自动锁定，本地缓存只会骗自己）。
+   * 每次点开都重新问一次（解锁态是服务端的、会自动锁定，本地缓存只会骗自己）。
    * @param {object} it - 收藏行（要 vault_entry_id）
    */
   async function openVault(it) {
@@ -1384,8 +1372,8 @@ export async function mountApp(root, host) {
   }
 
   // popup「查看」跳转：滚动并高亮那条（UI↔UI 消息，不经 SW）。
-  // ⚠️ 必须回执：popup 靠「有没有人接」判断侧边栏是否已就绪（没人接就 300 ms 后重发）。
-  //    只处理不回应 ⇒ 发送方的 promise 会 reject，重试虽然能跑但每次都白等 4 发。
+  // 必须回执：popup 靠「有没有人接」判断侧边栏是否已就绪（没人接就 300 ms 后重发）。
+  // 只处理不回应 ⇒ 发送方的 promise 会 reject，重试虽然能跑但每次都白等 4 发。
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg && msg.type === 'bm:highlight' && msg.url) {
       highlightUrl(msg.url);
@@ -1491,7 +1479,7 @@ export async function mountApp(root, host) {
   });
   /**
    * 功能：从设置视图回收藏主视图 —— 设置是**内嵌视图**，不是标签页，
-   *      所以 ⛔ 不碰 `window.close()`（那是整页设置时代的做法）。
+   * 所以 ⛔ 不碰 `window.close()`（那是整页设置时代的做法）。
    */
   async function backToMain() {
     let st;
@@ -1571,8 +1559,7 @@ export async function mountApp(root, host) {
 
   // ================= 启动 =================
   // R4 红线：SW 每次真握手，重启后不会假装已连接
-  // ⚠️ 这一发**必须有兜底**：send() 30 s 超时会 reject，而所有卡片初始都是 hidden
-  //    ⇒ 一抛就整页空白、连错都不报（与「一直连接中」同源，只是换了个位置）。
+  // 这一发**必须有兜底**：send() 30 s 超时会 reject，而所有卡片初始都是 hidden
   let st0;
   try {
     st0 = await send(MSG.status);

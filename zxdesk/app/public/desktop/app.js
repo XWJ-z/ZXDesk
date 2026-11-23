@@ -2,23 +2,9 @@
  * desktop/app.js —— 电脑版**入口**
  *
  * 功能：
- *      `bindEvents()` 一次性给页面上所有静态控件挂事件监听（顶栏按钮、课表工具条、搜索框、
- *      快速添加、看板切换与日期轴、各类模态框，以及全局键盘与窗口 resize）；
- *      `init()` 走首屏流程 —— 渲染骨架屏、发一个聚合请求、画出首页看板。
- *      文件末尾还负责把本端的 `toast` 注册给 `core/api.js`，并给初始化挂一个可见的失败兜底。
- *
- * 职责只有两件：**绑定事件**（`bindEvents`）+ **启动**（`init`）。
- *
- * ⚠️ 0.2.0（审查报告 A1）把原来单文件 2876 行的 IIFE 拆成：
- *    `public/core/`    两端共用（常量 / 日期 / DOM / 任务语义 / REST）
- *    `public/desktop/` 电脑版自己的状态、外壳与各视图（本文件是入口）
- *    **没有构建步骤**：`<script type="module">` 是浏览器原生能力（铁律 1）。
- *
- * ⚠️ 启动流程 0.2.0 起**刻意留在本文件**（原先单独一个 `init.js`）：那两个文件互相 import
- *    （入口要 `init`，启动要 `bindEvents`）是**循环依赖**。ESM 能容忍它，但代价是
- *    「谁先求值」变成了需要推理的事，而这里没有任何理由付这个代价 —— 合并成一个入口即可。
- *
- * ⚠️ 首屏**只发一个请求**（`loadBootstrap` → `GET /api/bootstrap`），见 `init()` 里的说明。
+ * `bindEvents()` 一次性给页面上所有静态控件挂事件监听（顶栏按钮、课表工具条、搜索框、
+ * 快速添加、看板切换与日期轴、各类模态框，以及全局键盘与窗口 resize）；
+ * `init()` 走首屏流程 —— 渲染骨架屏、发一个聚合请求、画出首页看板。
  *
  * @author zx
  * @date   2026-09-10
@@ -28,7 +14,9 @@
 
 import { setNotifier } from '../core/api.js';
 import { mountOfflineBanner } from '../core/cache.js';
-// ⭐ 0.9.1：「关于我们 / 联系与反馈」两份弹窗内容 —— 与手机端共用同一份（`core/about.js`）
+// ⭐ 自动草稿：宿主只负责两件事 —— 启动后把重载前的表单重开、把恢复提示接到本端 toast
+import { runResume, setDraftNotice } from '../core/draft.js';
+// 「关于我们 / 联系与反馈」两份弹窗内容 —— 与手机端共用同一份（`core/about.js`）
 import { aboutBodyHtml, contactBodyHtml } from '../core/about.js';
 import { addDays, mondayOf, todayStr } from '../core/date.js';
 import { $, skeletonHtml } from '../core/dom.js';
@@ -59,50 +47,48 @@ import {
   snapDashView,
 } from './views/home.js';
 import { closeDetail, renderQuadrant } from '../modules/tasks/desktop-items.js';
-// ⭐⭐ 0.8.7：**网址收藏夹与密码库不再有静态 import** —— 它们不再有自己的屏，
+// **网址收藏夹与密码库不再有静态 import** —— 它们不再有自己的屏，
 //    界面挂进新那一屏「网址/密码夹」（纯屏模块 `webpass`）的视图片段里。
 //    ⛔ 不许加回来：静态 import 会让「删掉 `modules/bookmarks/`（或 `vault/`）」
-//    连累**整页起不来**，而那正是方案 §六 的删目录退化口径要守住的东西。
 //    ⇒ 开屏走下面 `openWebpass()` 的**动态** `import()`；两边模块的事件委托挂在
 //    各自视图片段的根节点上（`bindBmEvents(root)` / `bindVaultEvents(root)`）。
-// ⭐⭐ 0.8.7：**随手记不再有静态 import** —— 它不再有自己的屏（并进任务板那一屏，
+// **随手记不再有静态 import** —— 它不再有自己的屏（并进任务板那一屏，
 //    屏头药丸「任务 ｜ 随手记」），界面挂进那一屏的视图片段
 //    （`modules/idea/desktop-board-pane.js`，槽名 `board-pane`）。
 //    ⛔ 不许加回来：静态 import 会让「删掉 `modules/idea/`」连累**整页起不来**，
-//    而那正是方案 §六 的删目录退化口径要守住的东西。
 //    ⇒ 屏内那一块由视图片段自己挂；这里只剩「别处想记一条」那一处，
 //    走下面 `newIdeaEntry()` 的**动态** `import()`。
-// ⭐ 0.3.1 数码管理（原 0.3.1「NAS硬件管理」，0.8.10  改名）：静态 import 仍在
+// 数码管理：静态 import 仍在
 //    （`shell.js` 也要它的 `closeHwDetail`），但**它不再有自己的屏** ——
-//    ⭐ 0.8.10：界面上半块挂进了「个人资产管理」那一屏的视图片段
+//    界面上半块挂进了「个人资产管理」那一屏的视图片段
 //    （`modules/digital/desktop-assets-pane.js`，槽名 `assets-pane`），
 //    ⛔ 所以下面**只剩 `bindHwEvents`**：它每次挂载时按**节点身份**重挂屏内委托，
 //    弹窗那一半自己只挂一次（见该函数说明）。
 import { bindHwEvents } from '../modules/digital/desktop.js';
-// ⭐ 0.7.5 番茄钟：静态 import（它是侧栏的一屏 = 主功能入口，不是低频弹层）
+// 番茄钟：静态 import（它是侧栏的一屏 = 主功能入口，不是低频弹层）
 //    ⚠️ 屏内交互（开始 / 暂停 / 继续 / 完成 / 放弃 / 换时长 / 存默认 / 绑任务）在
 //       `bindPomodoroEvents()` 里用**一次事件委托**挂好 —— 这一屏整块重画，逐个绑必漏。
-// ⭐ 0.8.13：番茄钟并进 `time` 模块 ⇒ 它的 import 与 `OPEN_MODULE` 里那条一起撤，
+// 番茄钟并进 `time` 模块 ⇒ 它的 import 与 `OPEN_MODULE` 里那条一起撤，
 //    屏内委托改由 `home-desktop.js` 的 `bindTimeEvents()` 转手叫上（宿主不再认识实现）。
-// ⭐ 0.8.7 日历：日历**不再有自己的屏**，它现在是首页看板里的第二个视图 ——
+// 日历：日历**不再有自己的屏**，它现在是首页看板里的第二个视图 ——
 //    ⛔ 所以这里**没有**对 `modules/calendar/desktop.js` 的静态 import（那会让「删掉日历目录」
 //    连累整页起不来，也违背「宿主不认识模块实现」）；界面由 `views/home.js` 动态挂载。
-// ⭐ 0.8.0 记账：静态 import 仍在 —— 首页看板那颗悬浮「＋ → 记账」还要用它
+// 记账：静态 import 仍在 —— 首页看板那颗悬浮「＋ → 记账」还要用它
 //    （`openLedgerEntry()` 只弹表单、不需要先切屏）。
-//    ⚠️⭐ 0.8.10：**它不再有自己的屏** —— 界面挂进了「个人资产管理」那一屏的视图片段
+//    **它不再有自己的屏** —— 界面挂进了「个人资产管理」那一屏的视图片段
 //    （`modules/ledger/desktop-assets-pane.js`，槽名 `assets-pane`）⇒ 这里没有 `openLedger`，
 //    也没有 `state.view === 'ledger'` 那一支（屏名已从 `VIEW_NODES` 撤掉）。
 import { bindAiProposalEdit as bindLedgerAiEdit, bindLedgerEvents, openLedgerEntry } from '../modules/ledger/desktop.js';
-// ⭐ 0.8.6 行程：静态 import（同样是侧栏的一屏 = 主功能入口，不是低频弹层）
+// 行程：静态 import（同样是侧栏的一屏 = 主功能入口，不是低频弹层）
 //    ⚠️ 屏内交互（新建行程 / 加票 / 打卡 / 记录轨迹）、起在 `bindTripEvents()` 里挂委托。
-// ⭐ 0.8.13：行程同理 —— 它与番茄钟一样并进 `time` 模块。
-// ⭐ 0.3.5 对话：同样是静态 import（主功能入口，不是低频弹层）
+// 行程同理 —— 它与番茄钟一样并进 `time` 模块。
+// 对话：同样是静态 import（主功能入口，不是低频弹层）
 //    ⚠️ 左栏三区（好友 / 会话 / 申请）与右边的消息流每次取数都整块重画，
 //       所以屏内交互（同意 / 拒绝 / 拉黑 / 删好友 / 开会话 / 发送）在 `bindTeamworkEvents()`
 //       里用**一次事件委托**挂好；`#nav-teamwork` 是静态 DOM，在这里直接绑。
 //    ⚠️ SSE 长连接由 `modules/teamwork/desktop.js` 自己管：进屏 start、**离开时由 shell.js 的 showView 关掉**
 import { bindTeamworkEvents, openTeamwork } from '../modules/teamwork/desktop.js';
-// ⭐ 0.8.9：AI 的静态 import **已撤** —— 它不再有自己的屏，配置并入
+// AI 的静态 import **已撤** —— 它不再有自己的屏，配置并入
 //    「设置 → AI 设置」那一栏（模块贡献分栏）⇒ `OPEN_MODULE` 里也没有它了。
 //    ⚠️ `index.html` 的 `modulepreload` 那一行**必须跟着删**（两处是双向等式，见那里的注释）。
 import { clearSearch, onSearchInput } from './views/search.js';
@@ -117,11 +103,10 @@ import {
   renderTtGrid,
   ttBlockRowHtml,
 } from '../modules/time/timetable-desktop.js';
-// ⭐⭐ 0.8.13：**课表 / 番茄钟 / 行程三块并成一个模块** `time`「番茄钟与日程表」——
+// **课表 / 番茄钟 / 行程三块并成一个模块** `time`「番茄钟与日程表」——
 //    这一屏的入口、四个 pane 的显隐与屏内委托全在 `home-desktop.js`。
 //    ⚠️ 三个接口前缀一个字没改（`/api/{timetable,pomodoro,trip}`），AI 的授权键也没动。
 import { bindTimeEvents, openTime } from '../modules/time/home-desktop.js';
-// ⭐⭐ 0.9.8 第 7 轮：密码库自动锁定的**唯一计时者**（锁上时向全页派 `zx:vault-locked`）
 import { startVaultWatch } from '../core/vault-watch.js';
 
 /** 课表页头的两个下拉：`[按钮 id, 菜单 id]` —— 派发只认菜单条目上的 `data-tt-new` / `data-tt-set` */
@@ -133,7 +118,7 @@ const TT_MENUS = [
 /**
  * 模块名 → 「点侧栏那颗入口要做什么」。
  *
- * 说明：⭐ 0.5.0 模块化重构：侧栏入口由清单生成（见 `shell.js` 的 `renderNavModules()`），
+ * 说明：模块化重构：侧栏入口由清单生成（见 `shell.js` 的 `renderNavModules()`），
  *      按钮上带 `data-mod`，点击在 `bindEvents()` 里做一次事件委托，然后查这张表。
  *      ⚠️ 「有哪些模块、什么顺序」在 `module.json` 里；「这一端画成什么样」在 `desktop/modules.js` 里；
  *      「点它开哪一屏」只能在这里 —— 因为**只有本文件 import 了全部视图**
@@ -145,24 +130,24 @@ const TT_MENUS = [
  * @type {Object.<string, Function>}
  */
 const OPEN_MODULE = {
-  // ⭐ 0.8.13：三块并成一个模块 ⇒ 这里只留一条 `time`（它默认落首页「日程表」，
+  // 三块并成一个模块 ⇒ 这里只留一条 `time`（它默认落首页「日程表」，
   //    也可以带 `{ tab }` 直接落到某个子屏，见 `home-desktop.js` 的 `openTime()`）。
   time: (opts) => openTime(opts),
-  // ⭐ 0.8.7：网址/密码夹 —— 收藏夹与密码库**并成这一屏**（两个模块各自独立，
+  // 网址/密码夹 —— 收藏夹与密码库**并成这一屏**（两个模块各自独立，
   //    只是不再有自己的屏）。⚠️ 它的值**必须走动态 import**（见下面 `openWebpass()`）。
   webpass: (opts) => openWebpass(opts),
-  // ⭐ 0.8.10：个人资产管理 —— 它有自己的屏，但**必须走动态 import**
+  // 个人资产管理 —— 它有自己的屏，但**必须走动态 import**
   //    （见下面 `openAssets()`：删掉 `public/modules/assets/` 时宿主页要照常起来）。
   //    ⚠️⭐ 它也是「生活记账 / 数码管理 / 用户自建分组」那一屏 —— 三格都在它的药丸里，
   //    所以 `ledger` / `digital` **不在这张表里**（它们没有侧栏入口）。
   assets: () => openAssets(),
   teamwork: openTeamwork,
-  // ⭐ 0.9.8：zx 实验室 —— **纯屏宿主**，值同样必须走动态 import（见下面 `openLab()`：
+  // zx 实验室 —— **纯屏宿主**，值同样必须走动态 import（见下面 `openLab()`：
   //    删掉 `public/modules/lab/` 时宿主页要照常起来）。
   //    ⚠️ 必须把 `opts` 传下去：`?goto=lab:secrets`（从阅读器回来）要**直接落到那个实验**，
   //    只调 `openLab()` 会退回卡片首页 —— 用户看到的就是「回来又不在原来的地方」。
   lab: (opts) => openLab(opts),
-  // ⭐ 0.8.9：`ai` **从这里撤掉了** —— 撤了 `nav` 之后它没有独立屏可开。
+  // `ai` **从这里撤掉了** —— 撤了 `nav` 之后它没有独立屏可开。
   //    ⚠️ `module-ui.test.js` 有一条断言钉着「`OPEN_MODULE` 的键 == 接线表里带 `nav` 的模块」，
   //    所以这两处**必须同进同出**（只改一处 = 那一条当场红）。
 };
@@ -172,7 +157,6 @@ const OPEN_MODULE = {
  *
  * 说明：⚠️⭐ 静改 `import { openWebpass } from '../modules/webpass/desktop.js'` 的后果是
  *      「删掉 `public/modules/webpass/`」连累**宿主页起不来**（模块求值即抛），
- *      而方案 §六·3 要的正是「删掉它，宿主页照旧、两个真模块的接口与数据照常」。
  *      `opts.slot` = 这次要落到哪个视图（模块名）—— 由 `zx:open-module` 的 `detail.slot` 传进来。
  *      ⚠️ 动态 import 的路径必须是**字面量**：`ttt/test/frontend-modules.test.js` 的孤岛检查
  *      用正则扫 `import('…')`，写成变量它看不见 ⇒ 那个文件会被误判成「生了但从不执行」。
@@ -190,7 +174,7 @@ async function openWebpass(opts) {
 }
 
 /**
- * 功能：打开「zx 实验室」那一屏（0.9.8）—— ⛔ **必须动态 import**（与 `webpass` / `assets` 同一条纪律）。
+ * 功能：打开「zx 实验室」那一屏—— ⛔ **必须动态 import**（与 `webpass` / `assets` 同一条纪律）。
  *
  * 说明：⚠️⭐ 静态 import 的后果是「删掉 `public/modules/lab/`」连累**宿主页起不来**
  *      （模块求值即抛），而「删目录验收」要的正是「删掉它，宿主页照旧」。
@@ -213,7 +197,6 @@ async function openLab(opts) {
  * 功能：打开「个人资产管理」那一屏 —— ⛔ **必须动态 import**（与 `webpass` / `calendar` 同一条纪律）。
  *
  * 说明：⚠️⭐ 写成静态 import 的后果是「删掉 `public/modules/assets/`」连累**宿主页起不来**
- *      （模块求值即抛），而方案 §四·1 要的正是「删掉它，宿主页照旧、`ledger` / `digital`
  *      的接口与数据照常」。
  *      ⚠️ 动态 import 的路径必须是**字面量**：`ttt/test/frontend-modules.test.js` 的孤岛检查
  *      用正则扫 `import('…')`，写成变量它看不见 ⇒ 那个文件会被误判成「生了但从不执行」。
@@ -232,9 +215,8 @@ async function openAssets() {
 /**
  * 功能：从**别的屏**开「记一条灵感」的弹层（首页看板那颗悬浮 ＋ 菜单里的「💡 随手记一条」）。
  *
- * 说明：⚠️⭐ 0.8.7：**必须动态 import** —— 随手记并进任务板那一屏之后，宿主不再
+ * 说明：**必须动态 import** —— 随手记并进任务板那一屏之后，宿主不再
  *      静态认识它的实现（撤掉静态 import 才守得住「删掉 `modules/idea/` 时宿主页照旧」，
- *      方案 §六 的退化口径）。它只是弹一个模态框，不需要先切屏。
  *      ⚠️ 动态 import 的路径必须是**字面量**：`ttt/test/frontend-modules.test.js` 的孤岛检查
  *      用正则扫 `import('…')`，写成变量它看不见 ⇒ 那个文件会被误判成「生了但从不执行」。
  *
@@ -253,7 +235,7 @@ async function newIdeaEntry() {
  * 功能：打开「关于我们」弹窗（侧栏底部、刷新与设置上面那颗）。
  *
  * 说明：⭐ 只读弹层 —— `setModalSave('关闭')` 把「取消」那颗收掉，主按钮接到 `closeModal`
- *      （0.8.24 的规矩：没有保存语义的弹层不该并排摆两颗都写着「关掉」的键）。
+ *      。
  *      ⚠️ 内容来自 `core/about.js`，与手机版「更多 → 关于我们」是**同一份** ——
  *      ⛔ 别在本函数里再拼一段 HTML，那等于让两端从今天开始各说各话。
  *
@@ -312,12 +294,12 @@ export function toggleTtMenu(btnSel, menuSel) {
  *      用户要打字时才就地摘掉这个属性。
  *
  * 说明：⭐ 起因是「搜索框老是自动填入密码」（其实是 ZXDesk 的登录用户名），
- *      0.4.5 又报了一次「Edge 的『保存的密码』浮层照样弹」。
+ *      又报了一次「Edge 的『保存的密码』浮层照样弹」。
  *
- *      ⚠️ **0.4.4 那版修法是错的，别改回去**：当时给这些框写了 `autocomplete="new-password"`，
+ *      ⚠️ **那版修法是错的，别改回去**：当时给这些框写了 `autocomplete="new-password"`，
  *      以为那是「别填这儿」的信号 —— 恰恰相反，Chromium 的密码管理器是**按名字**认
  *      `new-password` / `current-password` 这两个值的（它甚至用 `new-password` 去绕过 readonly 排除），
- *      写上去等于**亲手把搜索框标成密码框**。0.4.5 起改成 `autocomplete="off"`：
+ *      写上去等于**亲手把搜索框标成密码框**。改成 `autocomplete="off"`：
  *      Chromium 忽略 `off` 只发生在「密码表单 / 信用卡」上，普通文本框是认的。
  *
  *      ⚠️ **解锁时机也不能随便挑**：`readonly` 确实挡得住**页面加载时**的填充，但挂在
@@ -360,20 +342,20 @@ export function unlockAutofillGuards() {
  * 说明：日期格子等**动态重画**的元素用事件委托，不逐个绑定；resize 只在时间轴正显示时重算 ——
  *      隐藏时容器宽度为 0，重算只会得到错误列宽（切过去时 `setBoardPane` 会重算），
  *      重算本身还经过 `resizeTimer` 做 120ms 的 debounce。
- *      ⭐ **模块入口只有一次委托**（0.5.0）：那些按钮由 `shell.js` 按清单生成、每次重画都是新节点，
+ *      ⭐ **模块入口只有一次委托**：那些按钮由 `shell.js` 按清单生成、每次重画都是新节点，
  *      所以绝不要在这里写 `$('#btn-timetable').addEventListener(...)` 那种逐个别绑 ——
  *      节点没了会抛 null（`init()` 整个中止 ⇒ 整页空白），节点换了监听器又跟着丢。
  *
  * @returns {void}
  */
 export function bindEvents() {
-  // ⭐⭐ 0.8.4：**「跳到另一个视图 / 模块」的通用出口**（与手机端逐字同款，见 mobile/app.js）。
+  // **「跳到另一个视图 / 模块」的通用出口**（与手机端逐字同款，见 mobile/app.js）。
   //    模块（记账）只派 `zx:open-module`，宿主查 `OPEN_MODULE` 表切屏 —— 模块之间零 import。
-  //    ⭐ 0.8.4：`detail.slot` **两端同一套规矩**（以前电脑端忽略它，因为电脑端 AI 是独立视图）——
+  //    `detail.slot` **两端同一套规矩**（以前电脑端忽略它，因为电脑端 AI 是独立视图）——
   //    现在记账那颗 AI 圆环要的是「对话里的 AI 助手」⇒ 与手机端一致：先切到对话，
   //    再派 `zx:teamwork-slot-open` 让对话模块去兑现（条目由 ai 片段异步登记，见 teamwork/desktop.js 的
   //    `tryOpenWantSlot()`；宿主不认识插槽、也不 import 任何模块）。
-  // ⭐⭐ 0.8.7 修订：**设置页那颗「默认使用日历视图」药丸刚被翻过** ——
+  // 修订：**设置页那颗「默认使用日历视图」药丸刚被翻过** ——
   //    宿主立刻把内存里的「当前视图」拨过去，别等下一次取数。
   //    ⚠️ 不补这一下的表现就是那条：「药丸开了，进首页看板**从列表视图闪现到日历视图**」
   //    （先按旧值画一遍列表，等 `/api/dashboard` 回来才翻）。
@@ -386,8 +368,8 @@ export function bindEvents() {
   document.addEventListener('zx:open-module', (e) => {
     const d = (e && e.detail) || {};
     const mod = String(d.mod || '');
-    // ⭐ 0.8.7：`mod === 'home'` 是**首页看板自己的**一条 —— 打开看板并切到
-    //    `slot` 那个模块贡献的视图（0.8.7 起是记账那颗「日历」图标要的落地）。
+    // `mod === 'home'` 是**首页看板自己的**一条 —— 打开看板并切到
+    //    `slot` 那个模块贡献的视图。
     //    ⚠️ 判据是「目标屏 = 看板」而**不是**某个模块名（看板不是模块、也不在 `OPEN_MODULE` 里，
     //    那张表的键必须与接线表里带 `nav` 的模块完全一致 —— `module-ui.test.js` 钉着）。
     //    ⛔ 别把它写成 `if (slot === 'calendar')`。
@@ -400,7 +382,7 @@ export function bindEvents() {
       return;
     }
     const open = OPEN_MODULE[mod];
-    // ⭐ 0.8.7：`detail.slot` 交给目标屏自己解释 —— 目前只有「一屏两视图」的
+    // `detail.slot` 交给目标屏自己解释 —— 目前只有「一屏两视图」的
     //    `webpass` 用它（决定这次落哪个视图）。其余条目的函数是**零参**，多余参数天然被忽略。
     if (open) open({ slot: String(d.slot || '') });
     if (d.slot) {
@@ -408,19 +390,19 @@ export function bindEvents() {
     }
   });
   unlockAutofillGuards();
-  // ⭐ 0.7.6：主导航折叠开关（全局偏好，纯界面 —— 见 `paintSideCollapsed` 的说明）
+  // 主导航折叠开关（全局偏好，纯界面 —— 见 `paintSideCollapsed` 的说明）
   $('#side-toggle').addEventListener('click', toggleSideCollapsed);
   $('#nav-home').addEventListener('click', () => openHome());
-  // ⭐ 0.4.5 首页看板的区间切换（静态骨架，只改 state 再重画 `#home-body`）：
+  // 首页看板的区间切换（静态骨架，只改 state 再重画 `#home-body`）：
   //    ① 三档预设按钮；② 两个日期框（手改任一个 → 预设变成「自定义」）。
   //    ⚠️ 这两个输入框**没有** `data-autofill-guard`：它们是 `type="date"` 的原生日期框，
   //    不是文本框、浏览器不会往里面填凭据；给它加 `readonly` 反而会让原生选择器点不开。
-  //    ⭐ 0.5.2 多了一档**单日**（`day`）：看任意一天。⚠️ 它与「今日」是两个档 ——
+  //    多了一档**单日**（`day`）：看任意一天。⚠️ 它与「今日」是两个档 ——
   //    「今日」永远跟着今天走，「单日」停在用户挑的那一天（跨天也不漂）。
   document.querySelectorAll('#dash-presets .seg-btn').forEach((b) => {
     b.addEventListener('click', () => dashSetPreset(b.dataset.dash));
   });
-  // ⭐ 0.5.5 周条（新区间条）—— 与上面那套旧控件**驱动同一个 state**，只是一组更顺手的入口：
+  // 周条（新区间条）—— 与上面那套旧控件**驱动同一个 state**，只是一组更顺手的入口：
   //    `‹` / `›` 整周前后挪、「今天」回到今日、点某一格看那一天。
   //    ⚠️ 它们都走 `views/home.js` 的导出（`dashShiftWeek` / `dashGoToday` / `dashSetDay`），
   //    不在这里自己拼 `dashRange()` —— 那样就成了第二份「哪个档位对应哪段区间」的真值。
@@ -450,7 +432,7 @@ export function bindEvents() {
     });
   });
   $('#nav-projects').addEventListener('click', openProjects);
-  // ⭐ 0.8.5：首页看板那颗悬浮 ＋（「电脑端的首页看板……的悬浮 +，
+  // 首页看板那颗悬浮 ＋（「电脑端的首页看板……的悬浮 +，
   //    点开出现 新建任务、记账、随手记」）。
   //    ⚠️ 菜单节点是**静态骨架**（`index.html` 里，挂在 `#home-view` 上、不在 `#home-body` 里），
   //    这里只切 `.hidden`，⛔ 不重画 —— `#home-body` 每画一次就被换掉，挂菜单在里面等于每次重绑。
@@ -486,7 +468,7 @@ export function bindEvents() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !fabMenu.classList.contains('hidden')) closeFabMenu();
   });
-  // ⭐ 0.5.0 模块化重构：模块入口（课表 / 收藏夹 / 硬件 / 密码库 / 对话）**不在这里逐个绑**了 ——
+  // 模块化重构：模块入口（课表 / 收藏夹 / 硬件 / 密码库 / 对话）**不在这里逐个绑**了 ——
   //    它们的按钮由 `shell.js` 的 `renderNavModules()` 按清单生成，每次重画都是新节点。
   //    ⇒ 这里只挂**一次事件委托**（读按钮上的 `data-mod`），「点它开哪一屏」查下面那张表。
   //    ⚠️ 逐个 `$('#btn-xxx').addEventListener` 的老写法有三个问题：加模块要动这里、
@@ -499,7 +481,7 @@ export function bindEvents() {
     const open = OPEN_MODULE[b.dataset.mod];
     if (open) open();
   });
-  // ⭐ 0.4.5：任务板页头的【项目 ▾】—— 换作用域一律走 `openBoard()`（它负责取数 + 重画，
+  // 任务板页头的【项目 ▾】—— 换作用域一律走 `openBoard()`（它负责取数 + 重画，
   //    并顺带把这一屏的标题 / 按钮 / 下拉都刷新）。⚠️ 最后那一项是「＋ 新建项目…」：
   //    它**不是**作用域，选中后先把下拉拨回当前项，再弹新建表单 —— 否则下拉会停在一个
   //    并不存在的「作用域」上，用户下次看见它就以为当前项目叫「新建项目」。
@@ -509,10 +491,10 @@ export function bindEvents() {
       $('#bd-scope').value = state.scope;
       return openProjectModal();
     }
-    // ⭐ 0.5.2：`all` 是**汇总任务视图**（不是项目 id），别 `Number()` —— 它会变成 NaN
+    // `all` 是**汇总任务视图**（不是项目 id），别 `Number()` —— 它会变成 NaN
     openBoard(v === 'daily' || v === 'all' ? v : Number(v));
   });
-  // ⚠️ 0.4.5：「＋ 新建项目」那颗按钮原来在**已撤掉的卡片屏**上，现在它只存在于任务板页头
+  // 「＋ 新建项目」那颗按钮原来在**已撤掉的卡片屏**上，现在它只存在于任务板页头
   //    【项目 ▾】的最后一项 —— ⛔ 别在这里再绑一个 `#btn-new-project`（节点没了，
   //    绑它会在 `bindEvents()` 里抛 null，整个首屏挂掉，而错误只在一条 toast 里）。
   $('#btn-new-task').addEventListener('click', newTask);
@@ -526,15 +508,15 @@ export function bindEvents() {
     await loadProjects();
     if (state.view === 'home') await loadHome();
     else if (state.view === 'board') await loadBoard();
-    // ⭐ 0.8.13：三块并成一个模块 ⇒ 刷新这一屏走一条：
+    // 三块并成一个模块 ⇒ 刷新这一屏走一条：
     //    `openTime()` 按 `state.timeTab` **重取当前那一格**（番茄钟重取一次状态、行程重取一次
     //    倒计时与列表、课表沿用当前选中的学期 —— 三家的口径原样保留）。
     else if (state.view === 'time') await openTime();
     // ⚠️ 网址/密码夹刷新 = **重开一次那一屏**（`webpass` 会重挂当前视图的片段，
     //    而那一边自己按需重取 —— 与改造前「收藏夹 / 密码库刷新都是重取一次」逐字一致）。
     else if (state.view === 'webpass') await openWebpass();
-    // ⭐ 0.8.10：`hardware` 屏名改 `digital` —— `openHardware` 这个函数名没动。
-    // ⚠️⭐ 0.8.10：`state.view === 'digital'` 那一支**已撤** —— 数码管理不再有自己的屏
+    // `hardware` 屏名改 `digital` —— `openHardware` 这个函数名没动。
+    // `state.view === 'digital'` 那一支**已撤** —— 数码管理不再有自己的屏
     //    （界面挂在「个人资产管理」的药丸里）⇒ 刷新它走下面 `assets` 那一支（重挂当前那一格）。
     // ⚠️ 个人资产管理刷新 = **重取一次**：分组树与条目都可能在别处被改过
     //    （另一个标签页、另一台设备）⇒ 重取才对得上。⚠️ 若当前那一格是「生活记账 / 数码管理」，
@@ -542,26 +524,26 @@ export function bindEvents() {
     else if (state.view === 'assets') await openAssets();
     // ⚠️ 记账刷新 = **重取一次**（不是只重画）：资产 / 负债 / 净值与「今天」都是服务端算的，
     //    期间可能已经在别处被改过（另一个标签页、另一台设备）⇒ 重取才对得上。
-    // ⚠️⭐ 0.8.10：`state.view === 'ledger'` 那一支**已撤** —— 记账不再有自己的屏
+    // `state.view === 'ledger'` 那一支**已撤** —— 记账不再有自己的屏
     //    （界面挂在「个人资产管理」的药丸里）⇒ 刷新它走上面 `assets` 那一支（重挂当前那一格）。
     // ⚠️ 对话刷新 = **重新读一遍好友总览**（不是只重画）：期间可能有人在别处改了关系；
     //    已经打开的那个会话会由 `openTeamwork()` 里的 `loadTeamworkOverview()` 校验还在不在
     //    （被删好友 / 拉黑之后它会自己关掉）。实时通道**不重连**（start() 对已开的通道是空操作）。
     else if (state.view === 'teamwork') await openTeamwork();
-    // ⭐ 0.8.9：`state.view === 'ai'` 那一支**已撤**（AI 不再有自己的屏）。
+    // `state.view === 'ai'` 那一支**已撤**（AI 不再有自己的屏）。
     else if (state.view === 'settings') renderSettings();
     toast('已从数据库重新读取');
   });
-  // ⭐ 0.9.1：「关于我们 / 联系与反馈」—— 侧栏底部、刷新与设置**上面**那两颗。
+  // 「关于我们 / 联系与反馈」—— 侧栏底部、刷新与设置**上面**那两颗。
   //    两者都是**只读弹窗**（没有保存语义）⇒ `setModalSave('关闭')` 收掉「取消」那颗，
   //    再把主按钮接到 `closeModal`（与 `views/settings.js` 里那些只读弹层的做法一致）。
   //    ⚠️ 内容一行请求都不发（`core/about.js` 全是静态文本与本地图片）——
   //      许可协议承诺除版本检查外不主动联网，这里⛔ 别顺手加「最新公告」之类。
   $('#btn-about').addEventListener('click', () => openAbout());
   $('#btn-contact').addEventListener('click', () => openContact());
-  // ⭐ 设置（0.2.1）：账号 / 成员 / 导出备份 三个入口收进设置页，侧栏只留「⚙ 设置」一扇门
+  // ⭐ 设置：账号 / 成员 / 导出备份 三个入口收进设置页，侧栏只留「⚙ 设置」一扇门
   //    （导出备份自己也搬进了设置页，见 views/settings.js 的 exportBackup）
-  //    ⚠️ 0.4.1 第二轮起「成员管理」也并进了设置页（左菜单的一栏），所以这里不再有
+  //    第二轮起「成员管理」也并进了设置页（左菜单的一栏），所以这里不再有
   //       `#btn-admin-back` / `#btn-add-member` —— 「添加成员」的按钮由 views/admin.js 自己画自己绑。
   $('#btn-settings').addEventListener('click', openSettings);
 
@@ -596,7 +578,7 @@ export function bindEvents() {
     state.ttShowWeekend = e.target.checked;
     renderTtGrid();
   });
-  // ⭐ 0.4.4 第二版：课表页头四颗平级按钮（导入课表 / ＋课程 /
+  // 第二版：课表页头四颗平级按钮（导入课表 / ＋课程 /
   //    ⚙作息设置 / ＋学期）合并成**两个下拉**：【＋ 新建】与【⚙ 设置】。
   //    ⚠️ 开合**只切 `.hidden`**，工具栏一个字节都不重画 —— 重画会连带换掉 `#tt-term`
   //    那个正在被操作的 `<select>`；菜单条目只把 `data-tt-new` / `data-tt-set` 交给
@@ -619,17 +601,17 @@ export function bindEvents() {
     if (e.key === 'Escape') closeTtMenus();
   });
 
-  // ⭐ 0.8.7：收藏夹那三处（`#btn-new-bookmark` 与 `bindBmEvents()`）**不在这里**了 ——
+  // 收藏夹那三处（`#btn-new-bookmark` 与 `bindBmEvents()`）**不在这里**了 ——
   //    那颗按钮与整屏的委托都随骨架搬进了 `modules/bookmarks/desktop-webpass-pane.js`
   //    （片段的根节点上挂一次）。⛔ 别加回来：`#btn-new-bookmark` 是**片段里才有的节点**，
   //    这里 `$()` 回 null ⇒ `.addEventListener` 当场 TypeError ⇒ 整页空白 ＋ 一条 toast。
 
-  // ⭐ 0.8.7：随手记那两处绑定（`bindIdeaEvents()`）**不在这里**了 ——
+  // 随手记那两处绑定（`bindIdeaEvents()`）**不在这里**了 ——
   //    它随骨架搬进了 `modules/idea/desktop-board-pane.js`，挂在**片段自己造的根节点**上
   //    （`bindIdeaEvents(root)`）。⛔ 别加回来：那段代码要在片段自己的子树里找 `#idea-q` /
   //    `#btn-new-idea` / `#idea-body`，而这三个节点只在片段挂载之后才存在。
 
-  // ⭐ 0.8.10：`$('#btn-new-hardware')` 那一颗**不在这里**了 —— 它随数码管理的骨架
+  // `$('#btn-new-hardware')` 那一颗**不在这里**了 —— 它随数码管理的骨架
   //    搬进了 `modules/digital/desktop-assets-pane.js`，由 `bindHwEvents()` 在**每次挂载**时
   //    就地绑一次。⛔ 别加回来：那一颗节点现在**只在片段挂载之后**才存在，
   //    这里 `$()` 回 null ⇒ `.addEventListener` 当场 TypeError ⇒ 整个首屏挂掉。
@@ -638,25 +620,25 @@ export function bindEvents() {
   bindHwEvents();
 
 
-  // 记账（0.8.0）：屏内交互走 `#ledger-view` 上的委托，弹窗正文走 `#modal-body` 上的委托 ——
+  // 记账：屏内交互走 `#ledger-view` 上的委托，弹窗正文走 `#modal-body` 上的委托 ——
   // 两者是**两棵子树**，在 bindLedgerEvents() 里各挂一次（挂在同一处必然漏一边）
   bindLedgerEvents();
-  // ⭐ 0.8.55：AI 确认卡上的「修改」—— 把那一笔预填进记账自己的「记一笔」弹窗
+  // AI 确认卡上的「修改」—— 把那一笔预填进记账自己的「记一笔」弹窗
   bindLedgerAiEdit();
 
-  // ⭐ 0.8.13：三块并成一个模块 ⇒ 屏内交互统一在 `home-desktop.js` 的
+  // 三块并成一个模块 ⇒ 屏内交互统一在 `home-desktop.js` 的
   //    `bindTimeEvents()` 里挂一次（它转手把番茄钟 / 行程两层委托叫上，并给三个子屏
   //    填「‹ 日程表」返回行）。⚠️ 委托都挂在**静态节点**上（`#time-view` / 各 pane 的 body）。
   bindTimeEvents();
 
-  // ⭐ 0.8.7：密码库那三处（锁定 / 新增 / `bindVaultEvents()`）同理搬进了
+  // 密码库那三处（锁定 / 新增 / `bindVaultEvents()`）同理搬进了
   //    `modules/vault/desktop-webpass-pane.js`。搬走它们的收益不只是「省几行」：
   //    宿主**不再静态认识密码库的实现** ⇒ 删掉 `public/modules/vault/` 时宿主页照旧。
 
-  // 对话（0.3.5）：屏内交互（左栏三区 + 发送 + 加好友）在 bindTeamworkEvents() 里用委托挂一次
+  // 对话：屏内交互（左栏三区 + 发送 + 加好友）在 bindTeamworkEvents() 里用委托挂一次
   bindTeamworkEvents();
 
-  // 任务联动（0.6.4）：对话里那张**任务卡片**上的「收进我的任务板」—— 同样挂一次（留白事件）。
+  // 任务联动：对话里那张**任务卡片**上的「收进我的任务板」—— 同样挂一次（留白事件）。
   // ⚠️ 它挂在 document 上、与对话模块无关：对话模块被删掉时这个监听器就永远收不到事件，没有任何副作用。
   bindTaskCardActions();
 
@@ -782,7 +764,7 @@ export function bindEvents() {
   });
 }
 
-// ---------- 主导航折叠（0.7.6，纯界面偏好） ----------
+// ---------- 主导航折叠 ----------
 /**
  * 「主导航是否收起」偏好所在的 localStorage 键名（值 `'1'` / `'0'`，缺省＝**展开**）。
  *
@@ -867,18 +849,17 @@ function toggleSideCollapsed() {
  * @returns {Promise.<void>}
  */
 export async function init() {
-  // ⭐ 0.7.6：先把侧栏折叠态贴上（在任何渲染之前 —— 否则会先画一帧展开的侧栏再跳回收起）
+  // 先把侧栏折叠态贴上（在任何渲染之前 —— 否则会先画一帧展开的侧栏再跳回收起）
   applySideCollapsed();
   bindEvents();
   bindQuickAddDefaults();
-  // ⭐ 0.9.8 第 7 轮：起全局锁库计时（幂等；各屏只当听众，⛔ 别再各写一个 setInterval）
   startVaultWatch();
   state.view = 'home'; // 落点就是首页看板：先别渲染任务板，避免闪一下空板子
   state.weekStart = mondayOf(todayStr());
   state.selectedDate = todayStr();
   $('#home-body').innerHTML = skeletonHtml(3); // 首次加载先给骨架屏，别让用户面对一片空白
   await loadBootstrap(); // 一次拿到 health / me / projects / summary / 今日待办数
-  // ⭐ 0.8.7：首屏也要按偏好落「默认视图」—— 用的是**刚到手**的那份看板载荷
+  // 首屏也要按偏好落「默认视图」—— 用的是**刚到手**的那份看板载荷
   //    （`loadBootstrap()` 带 `dash=1` ⇒ `state.dash.data` 已经是新的了），与 `openHome()` 同一条口径。
   snapDashView();
   renderSidebar();
@@ -927,45 +908,26 @@ function applyGotoParam() {
 export let resizeTimer;
 
 setNotifier(toast); // ⭐ 把本端的 toast 注册给 core/api.js（两端的提示是两套 DOM，不能合并）
-// ⭐ 0.2.15 离线只读：挂一次常驻横幅（断网时出现），并接管 online / offline 事件
+// ⭐ 自动草稿：恢复成功那一句同样走本端 toast（core/draft.js 不认识任何一端的 DOM）
+setDraftNotice(toast);
+// 离线只读：挂一次常驻横幅（断网时出现），并接管 online / offline 事件
 mountOfflineBanner();
 
 /**
- * 把外壳高度**钉成像素**写进 `--app-vh`（0.9.6）。
+ * 把外壳高度钉成像素写进 `--app-vh`，并同步 `--vh` / `--vw` 两个比例尺。
  *
- * 为什么非做不可：真机平板（Android 16 WebView）实测 `html` 的 clientHeight 是 680，
- * 而 `body` 是 **0**、`.app` 的 computed height 是 **0px** —— 页面内容挤在顶上两百多像素，下面全空。
- * `100vh` 与 `100%` 在这类内嵌 WebView 里都可能落空（视口在页面加载时还没定下来），
- * 而**像素值不会**。手机端一直用这套办法（`mobile/app.css` 的 `--app-vh`），桌面版漏了。
- *
- * ⚠️ 只在读到正数时写：`innerHeight` 为 0 的那一瞬写进去等于把页面钉成 0 高。
- * ⚠️ 2px 以内的抖动不跟 —— 飞牛桌面 iframe / 宿主外壳换屏时常见，跟了会让整页跟着跳。
+ * ⚠️ 只在读到正数时写；2px 以内的抖动不跟。
  */
 function pinShellHeight() {
   let h = 0;
   const apply = () => {
-    /* ⭐⭐ 0.9.7 修订（老大 2026-11-04 平板：弹窗塌了 / 团队协作下半屏空着）：
-       **只用 `innerHeight`，不再与 `documentElement.clientHeight` 取小。**
-       上一版加「取小」是为了治「整页跟手指上下滑」，但那个毛病另有责任方 ——
-       `html, body` 上的 `overflow: hidden` 已经把它按住了（见 `desktop/app.css` 开头）。
-       取小反而带来一个新问题，而且很难查：
-         `html { height: var(--app-vh) }` ⇒ 第一次量到偏小值写进去之后，
-         `clientHeight` 读到的就是**它自己写下去的那个高度**，于是下一秒再取小还是同一个数，
-         **永远回不去**。表现就是「页面底部恒定差一截、内容没到底」，重启也不自愈。
-       ⇒ 高度只认窗口自己报的值。
-     ⚠️ 只在读到正数时写：`innerHeight` 为 0 的那一瞬写进去等于把页面钉成 0 高。
-     ⚠️ 2px 以内的抖动不跟 —— 飞牛桌面 iframe / 宿主外壳换屏时常见，跟了会让整页跟着跳。 */
+    /* 只用 `innerHeight`，不与 `documentElement.clientHeight` 取小。 */
     const next = window.innerHeight || 0;
     if (!(next > 0)) return;
     if (Math.abs(next - h) < 2) return;
     h = next;
     document.documentElement.style.setProperty('--app-vh', next + 'px');
-    /* ⭐⭐ 0.9.7 新增：把 `1vh` / `1vw` 也钉成**真像素**（变量定义见 `desktop/app.css` 的 `:root`）。
-       为什么非做不可：这个 WebView 里 `100vh` 会被解析成 **0**（已实测），
-       而这份 CSS 里有十几处拿 `vh` 限高 —— 弹窗卡片的 `88vh` 算成 0 ⇒ **所有弹窗白底不可见**；
-       团队协作屏的 `calc(100vh - 40px)` 算成 -40px（无效）⇒ 回落到 `min-height: 460px`、下半屏空着。
-       把比例尺换成 px 之后，`calc(var(--vh) * 88)` 就是「窗口高的 88%」，与正常浏览器逐像素一致。
-       ⛔ 别只设 `--app-vh` 就以为够了：那个只喂给 `.app`，喂不到 `calc()` 里的比例。 */
+    /* 把 `1vh` / `1vw` 也钉成真像素（变量定义见 `desktop/app.css` 的 `:root`）。 */
     document.documentElement.style.setProperty('--vh', next / 100 + 'px');
     document.documentElement.style.setProperty('--vw', (window.innerWidth || next) / 100 + 'px');
   };
@@ -976,10 +938,13 @@ function pinShellHeight() {
 pinShellHeight();
 
 // 保留一个可控的失败兜底：初始化挂了也要让用户看到原因
-init().catch((e) => toast('初始化失败：' + e.message, true));
+init()
+  // ⭐ 重载恢复：上一趟开着的表单连同草稿再打开一次（首屏数据到位之后才重开，表单里的候选值才齐）
+  .then(() => runResume())
+  .catch((e) => toast('初始化失败：' + e.message, true));
 
 /**
- * 外壳高度自检（0.9.6）。
+ * 外壳高度自检。
  *
  * 只为一件事：平板上出现过「整页内容挤在顶上两百多像素、下面全空」的白屏。
  * 隔着屏幕判断不了是 `.app` 的行高塌了、`body` 的百分比断了，还是 `100vh` 算成了 0 ——
@@ -1012,7 +977,7 @@ function auditShellHeight() {
   );
 }
 /**
- * 视口单位自检（0.9.7）。
+ * 视口单位自检。
  *
  * 只为一件事：真机平板里 `100vh` 被解析成 **0**，而 `window.innerHeight` 是正常的。
  * 这类偏差**不报错、不白屏**，只是让一切拿 `vh` 限高的浮层静默塌掉 ——

@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：WebViewProxy.kt
- * 职责：把本机代理挂到 WebView 上，并在不需要时拆掉
  */
 
 package com.zxdesk.app.net
@@ -25,17 +23,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 /**
  * WebView 的代理覆盖。
  *
- * 为什么要动 WebView：Chromium 只认系统解析，系统解析被拦时页面根本发不出请求；
- * `shouldInterceptRequest` 又拿不到 POST body，接管不了请求层。唯一可行的是**传输层** ——
- * 页面把所有请求交给一个只监听 `127.0.0.1` 的代理，由代理自己解析目标。
- *
- * 三条纪律：
- * - **只在需要时开**：解析被绕过，或 WebView 报了 `ERROR_HOST_LOOKUP`。正常网络下⛔ 不开，
- *   否则等于给所有请求多绕一跳，首屏白白变慢；
- * - **必须能拆干净**：断开 / 退出 / 换地址 / 页面销毁都要 [disable]，否则下次进页面还挂着一个死代理；
- * - **不重试成死循环**：调用方一次性闸（参照 `cacheRetryUsed`），这里只管「开与关」。
- *
- * ⚠️ 依赖只开了这一道口子：只碰 `ProxyController` 与 `WebViewFeature`，别拿它做别的事。
  */
 object WebViewProxy {
     private const val TAG = "Proxy"
@@ -77,14 +64,6 @@ object WebViewProxy {
     /**
      * 起代理并让 WebView 走它。
      *
-     * ⚠️ 返回 true 之后**才**能 `loadUrl` —— 覆盖是异步生效的，抢跑那一页还是走系统解析。
-     *
-     * 四种失败**各记一行**，⛔ 别再合成一句「没能起来」：内核不支持 / 监听起不来 /
-     * 覆盖被拒 / 覆盖超时，处置完全不同，混在一句里下次还得再猜一遍。
-     *
-     * @param host 打不开的那个域名。给了就先确认应用自己解不解析得动 ——
-     *   离线时系统与公共解析都不通，这时挂代理只会把「离线」变成「502」。
-     * @return 是否已生效；false 时调用方按普通失败路径处理，⛔ 别在这里重试
      */
     suspend fun enable(context: Context, host: String? = null): Boolean {
         if (!isSupported()) {
@@ -145,8 +124,6 @@ object WebViewProxy {
     /**
      * 应用自己的解析能不能拿到地址。
      *
-     * 用 [DohDns] 而不是系统解析：系统解析正是被拦的那条路。离线时它会抛，这里返回 false，
-     * 调用方转去走「磁盘缓存」那条老路 —— 那才是离线该有的样子。
      */
     private suspend fun canResolve(host: String): Boolean = withContext(Dispatchers.IO) {
         runCatching { DohDns.lookup(host) }.getOrNull()?.isNotEmpty() == true

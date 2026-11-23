@@ -1,20 +1,12 @@
 /**
  * ZXDesk工作台 飞牛原生应用
- * 文件：core/dir-tree.js
- * 职责：把「已授权目录树」画成**可逐级展开的树**（＋新建文件夹）—— 数据位置与加密信息附件位置共用
  *
  * 功能：`mountDirTree()` 挂一棵有状态的树：点名字＝选中并展开、点箭头＝展开/收起、
- *      「＋ 新建文件夹」＝在当前选中目录下建一个空文件夹。
- *
- * ⭐ 形态参考飞牛的文件列表（2026-11-10 老大给的截图）：单列、左侧 ▾/▸ 箭头、按层缩进。
- *      上一版是左右两栏、再上一版是「进一层 / ↑ 上一级」——都不如一棵能一眼看全的树。
- *
- * ⚠️ 判据全在服务端（`core/grant-tree.js`）：这里只负责画与状态，
- *      ⛔ 不拼路径、不判授权 —— 展开时才问一次服务端，回来什么就画什么。
+ * 「＋ 新建文件夹」＝在当前选中目录下建一个空文件夹。
  *
  * @author zx
  * @date   2026-11-10
- * @since 0.9.8
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md、29-加密信息.md
  */
 import { esc } from './dom.js';
@@ -34,23 +26,17 @@ export const DIR_TEXT = {
   TRUNCATED: '这一层的文件夹太多，只显示了前 300 个 —— 请展开更具体的目录。',
   GOTO: '没有对应的目录：【点击跳转授权】',
   PICKED: '当前选择：',
+  // 直连端（安卓客户端 / 局域网直连 / Windows）：没有飞牛网关身份 ⇒ 读不到授权清单，
+  LOCAL_ONLY:
+    '直连模式：这台设备读不到飞牛的授权目录清单，下面只列出你在工作台里登记过的目录。要新增授权，请用飞牛 App 或飞牛桌面打开本应用。',
 };
 
 /**
  * 功能：把树挂到容器上。
  *
  * 说明：⚠️ 状态（展开过哪些、各自的子目录、当前选中）都留在**这个函数的闭包里**，
- *      不写回 DOM —— 整棵树每次重画，从 DOM 读状态一定会丢。
- *      ⚠️ 事件用 `onclick` / `oninput` / `onkeydown` 赋值（不是 `addEventListener`）：
- *      弹窗与抽屉的容器都是**复用的同一个节点**，叠加监听会一次点出多个请求。
- * @param {HTMLElement} rootEl - 容器
- * @param {{
- *   fetchDirs: (dir: string) => Promise.<{dirs: Array.<{name: string, path: string, purpose?: string}>, truncated?: boolean}>,
- *   mkdir?: (parent: string, name: string) => Promise.<{path: string, name: string}>,
- *   onSelect?: Function,
- *   onGoto?: Function,
- * }} opts - 取数 / 新建 / 回调
- * @returns {{selected: Function, select: Function, reload: Function, expandTo: Function}} 控制器
+ * 不写回 DOM —— 整棵树每次重画，从 DOM 读状态一定会丢。
+ * 事件用 `onclick` / `oninput` / `onkeydown` 赋值（不是 `addEventListener`）：
  */
 export function mountDirTree(rootEl, opts) {
   const o = opts || {};
@@ -66,6 +52,8 @@ export function mountDirTree(rootEl, opts) {
   const roots = [];
   let rootsLoaded = false;
   let rootError = '';
+  /** 授权根的来源（`gateway` 飞牛清单 / `local` 只有本机登记）—— 只影响要不要多说一句话 */
+  let rootSource = '';
   /** 当前选中的目录（空串 ＝ 还没选） */
   let selected = '';
   /** 是否在「新建文件夹」的输入态 */
@@ -144,6 +132,10 @@ export function mountDirTree(rootEl, opts) {
     else if (!roots.length) rows.push(`<div class="dt-hint">${esc(DIR_TEXT.EMPTY_ROOTS)}</div>`);
     else for (const r of roots) walk(r, 0, rows);
 
+    // 直连端（没有飞牛网关身份）只列「工作台里登记过」的目录 —— 不说这一句，
+    // 用户会以为飞牛里的授权丢了。
+    const srcNote = rootSource === 'local' ? `<div class="dt-hint">${esc(DIR_TEXT.LOCAL_ONLY)}</div>` : '';
+
     const toolbar = newMode
       ? '<div class="dt-new">' +
         `<input class="dt-newinput" type="text" maxlength="100" placeholder="${esc(DIR_TEXT.NEW_PLACEHOLDER)}" value="${esc(
@@ -159,7 +151,7 @@ export function mountDirTree(rootEl, opts) {
 
     const tipHtml = tip ? `<div class="dt-tip">${esc(tip)}</div>` : '';
     const goto = `<button class="dt-goto" type="button" data-dt="goto">${esc(DIR_TEXT.GOTO)}</button>`;
-    rootEl.innerHTML = toolbar + tipHtml + `<div class="dt-tree">${rows.join('')}</div>` + goto;
+    rootEl.innerHTML = srcNote + toolbar + tipHtml + `<div class="dt-tree">${rows.join('')}</div>` + goto;
 
     // 输入态：把光标放回去（整棵树重建过，DOM 是新的）
     if (newMode) {
@@ -252,7 +244,7 @@ export function mountDirTree(rootEl, opts) {
    * 功能：提交「新建文件夹」—— 建成后刷新父层、选中并展开新建的那个。
    *
    * 说明：⚠️ 新建出来的目录**天然是空的**（数据位置要求空目录），所以直接把它记成「无子目录」，
-   *      省一次「点开才发现是空的」的往返。
+   * 省一次「点开才发现是空的」的往返。
    * @returns {Promise.<void>} 完成
    */
   async function create() {
@@ -350,10 +342,12 @@ export function mountDirTree(rootEl, opts) {
   async function reload() {
     rootsLoaded = false;
     rootError = '';
+    rootSource = '';
     roots.length = 0;
     paint();
     try {
       const r = await o.fetchDirs('');
+      rootSource = String((r && r.rootSource) || '');
       for (const d of (r && Array.isArray(r.dirs) ? r.dirs : []) || []) {
         if (d && d.path) roots.push({ name: d.name || d.path, path: d.path, purpose: d.purpose || '' });
       }

@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：Target.kt
- * 职责：输入判定的结果类型
  */
 
 package com.zxdesk.core.connection
@@ -12,8 +10,6 @@ enum class TargetKind { IP, DOMAIN, FNID, UNKNOWN }
 /**
  * 用户输入解析后的目标。
  *
- * [Host.scheme] 只记「用户自己写了的」scheme；没写就是 null，由
- * [ConnectionPlanner] 按「IP/域名 + 是否勾选 HTTPS」决定，⛔ 别在解析阶段替用户补。
  */
 sealed interface Target {
     data class FnId(val id: String) : Target

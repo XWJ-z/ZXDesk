@@ -1,10 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：notice.js
- * 职责：公告历史窗口（独立 BrowserWindow）
- *
- * 只是把主进程给的公告列表画出来：一条不落到本地，也不发网络请求。
- * 数据走 preload 暴露的 `getState()` / `action()`，与主壳同一套白名单。
  */
 
 const api = window.zxdesk;

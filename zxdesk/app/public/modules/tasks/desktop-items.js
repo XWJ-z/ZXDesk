@@ -2,19 +2,13 @@
  * modules/tasks/desktop-items.js —— 任务条目（四象限卡片 / 就地改标题 / 详情弹窗）
  *
  * 功能：任务条目的渲染与交互。
- *      `taskItemHtml()` 生成一条任务的 HTML；`bindTaskItems()` 给它绑上勾选 / 编辑 / 删除 / 打开详情；
- *      `itemKey()` / `taskMapOf()` / `taskOfItem()` / `findTask()` 维护「DOM 条目 → 任务数据」的映射；
- *      `renderQuadrant()` 画四象限（⭐ 0.5.2 起逾期未完成的并入并标红，不再有顶部逾期条）；
- *      `openTaskDetail()` / `closeDetail()` 开关任务详情弹窗。
- *
- * ⭐ 0.5.0：本文件从 `public/desktop/views/items.js` **原样搬进任务板模块目录**。
- *    一个模块一个文件夹 —— 这一屏只服务任务板这一个模块，所以它的家是 `modules/tasks/`，
- *    不该留在跨端共用的 `views/` 里。⚠️ 只改了 import 路径与本节注释，渲染逻辑一个字没动。
- *    命名约定（一个模块不止一屏时用 `<端>-<屏名>.js`）见 `modules/tasks/README.md` 与 `07-前端`。
+ * `taskItemHtml()` 生成一条任务的 HTML；`bindTaskItems()` 给它绑上勾选 / 编辑 / 删除 / 打开详情；
+ * `itemKey()` / `taskMapOf()` / `taskOfItem()` / `findTask()` 维护「DOM 条目 → 任务数据」的映射；
+ * `renderQuadrant()` 画四象限（起逾期未完成的并入并标红，不再有顶部逾期条）…
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.15
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/05-任务板.md
  */
 

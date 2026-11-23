@@ -1,10 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：diagnose.js
- * 职责：`--diagnose`：无窗口自检
- *
- * Windows 上打不开程序时，第一件事就是跑这个：版本、数据目录、目录可写、单实例锁，
- * 全部打出来，退出码 0/1。**它不建窗口、不联网、不读凭据** —— 所以一定能跑出来。
  */
 
 import fs from 'node:fs';
@@ -14,11 +9,6 @@ import path from 'node:path';
  * @param {object} input
  * @param {object} input.app - Electron `app`
  * @param {object} input.paths - `{dir, mode, warning}`
- * @param {object} input.logger
- * @param {boolean} input.singleInstanceOk
- * @param {boolean} input.safeStorageOk
- * @param {(line:string)=>void} [input.print]
- * @returns {number} 退出码
  */
 export function runDiagnose(input) {
   const print = input.print || ((line) => console.log(line));

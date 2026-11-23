@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：EulaScreens.kt
- * 职责：首次启动的许可协议闸门与正文阅读页
  */
 
 package com.zxdesk.app.ui
@@ -41,8 +39,6 @@ import androidx.compose.ui.window.DialogProperties
 /**
  * 首次启动的许可协议弹窗：**不勾选就进不去**。
  *
- * 与安装向导里的许可页同一套口径：没有「稍后再说」，只有「同意并继续」或「不同意并退出」。
- * 返回键与点击外部都不关闭 —— 否则等于提供了一个不表态的出口。
  */
 @Composable
 internal fun EulaGate(text: String, onAccept: () -> Unit, onDecline: () -> Unit) {
@@ -125,7 +121,6 @@ internal fun EulaViewer(text: String, onClose: () -> Unit) {
 /**
  * 协议正文。正文是纯文本（唯一来源 `assets/eula.txt`）：
  * 首行是标题、第二行是版本与生效日期，其后按空行分段；
- * 「一、」「二、」这类章节行加粗，其余按正文排。
  */
 @Composable
 private fun EulaBody(text: String, modifier: Modifier = Modifier) {

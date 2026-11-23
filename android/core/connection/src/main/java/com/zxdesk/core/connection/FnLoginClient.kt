@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：FnLoginClient.kt
- * 职责：飞牛（fnOS）WS 登录客户端，握手、加密、两步验证、会话收尾
  */
 
 package com.zxdesk.core.connection
@@ -53,11 +51,6 @@ class FnLoginException(
 /**
  * 网关在 **WS 握手**阶段就回了 401 / 403 —— 十有八九是这台 NAS 开了「访问码」。
  *
- * 访问码是飞牛网关自己的闸门：在浏览器里输过一次，网关才种下凭据；
- * 原生 WS 请求不在那个浏览器里，带不上凭据就只能被挡在 101 之前。
- *
- * ⚠️ 它**不是**账号密码错，也**不是**网络问题 ⇒ 上层要把人送到第 ④ 步（访问码），
- *    ⛔ 不许当成登录失败记进 `ConnectGuard` 的冷却里（那会让用户越试越久、最后彻底进不去）。
  */
 class AccessCodeRequiredException(message: String) : Exception(message)
 
@@ -80,8 +73,6 @@ sealed interface FnLoginOutcome {
 /**
  * WS 登录拿到的会话；[note] 放不影响主流程的告警（如 entry-token 没换到）。
  *
- * ⚠️ [note] 是**排障文本**：里面有 `(result=fail, errno=65534, reqid=13)` 这类内部错误码，
- *    ⛔ 不许直接当界面文案（Toast 也不行）—— 只进 logcat。用户看得懂的结论由调用方另写。
  */
 data class FnSession(
     val token: String,
@@ -96,7 +87,6 @@ data class FnSession(
     /**
      * 写给 CookieManager 的完整 cookie 串（每次 `setCookie(url, 一条)`）。
      * cookie 名按网关约定：会话 `fnos-token`（SameSite=Strict）、app 入口 `entry-token`（写到 `.<host>` 域）。
-     * ⛔ 不用 `Trim-MC-token`，网关不认这个名字。
      */
     fun cookies(relayHost: String?): List<String> = buildList {
         // 先放自己拼的兜底项，再放服务端 Set-Cookie（同名时后者覆盖前者，见下）
@@ -133,14 +123,6 @@ const val LONG_TOKEN_MAX_AGE: Int = 30 * 24 * 60 * 60
 /**
  * 一次完整的登录流程（**同一个 WebSocket 跨步骤复用**）。
  *
- * 协议要点（按飞牛登录协议实现，设备上逐项验证）：
- * `getRSAPub` → 加密 `user.login` →（若开了两步验证）`sendEmailCode` / **加密** `user.2fa.loginVerify`
- * → `POST /app/ticket` 换会话 Cookie。开了 2FA 时 `user.login` **不返回 token，只给 accessToken**；
- * 勾了「信任此设备」时 `loginVerify` 额外返回 `longToken`（30 天免 2FA，走 `user.tokenLogin`）。
- *
- * ⚠️ **服务端会在空闲时关掉 WS**（设备上表现为：输验证码那几十秒后 `send()` 返回 false，
- * 报「WebSocket 发送失败」）。所以每条 2FA 请求都带恢复策略：
- * 断了 → 重连再发；报「凭证过期」(102570109) → 重新登录换 accessToken 再发。
  */
 class FnLoginFlow(
     private val baseUrl: String,
@@ -156,9 +138,6 @@ class FnLoginFlow(
     /**
      * 每次 WS 握手前**现取**一次网关 Cookie（返回 `name=value; name2=value2` 形式，没有就返回 null）。
      *
-     * 为什么要有它：NAS 开了「访问码」后，网关在握手阶段就 401，除非请求带上过访问码时种下的 cookie。
-     * 原生 WS 不在 WebView 里，只能由调用方把 `CookieManager` 的 cookie 递进来。
-     * ⚠️ 必须是「现取」：用户可能先被挡回去过访问码、再重连，构造时取的那份会是旧的。
      */
     private val gatewayCookie: (() -> String?)? = null,
 ) {
@@ -191,10 +170,6 @@ class FnLoginFlow(
     /**
      * 建连前做一次解析诊断（**不阻断**）。
      *
-     * 为什么不在这里拦人：真正的解析交给 [DohDns] —— 系统解析不通时它会改走公共解析，
-     * 建连照常进行。这里再抛异常，只会把一条本来能走通的路提前掐断。
-     *
-     * 唯一会失败的情况是**两条路都不通**：这时如实报错，文案按没网 / 中继无此设备分流。
      */
     private suspend fun preflightHost() {
         val name = hostName
@@ -228,9 +203,6 @@ class FnLoginFlow(
     /**
      * 用「信任此设备」拿到的 `longToken` 免密登录（对应 `user.tokenLogin`）。
      *
-     * 字段照 fnOS 前端 `kWe` 名单的规则：**明文 + 顶层 `si` + HMAC 签名**（签名用登录时下发的 `secret`）。
-     * 实测：不带签名直接发 ⇒ `errno 65534`（验签失败）；带随机 secret 签名 ⇒ 服务端不回包。
-     * 所以这条只能拿真 `longToken` + 真 `secret` 验；失败就如实回登录页，⛔ 不装作已登录。
      */
     suspend fun startWithLongToken(
         longToken: String,
@@ -291,10 +263,6 @@ class FnLoginFlow(
     /**
      * 心跳保活。
      *
-     * ⚠️ 实测（Node 探针）：飞牛中继**会关掉空闲的 WS**（静置 60~65 秒即 `[peer closed]`），
-     * 但服务端**不回 RFC6455 的 pong** ⇒ 不能用 OkHttp 的 `pingInterval`（拿不到 pong 会把连接判死）。
-     * 改成每 20 秒发一个最轻的业务请求，实测 100 秒不掉线。
-     * 这样用户慢慢输验证码时连接一直在，「accessToken / 邮箱验证码」也就不会失效。
      */
     private fun startKeepalive() {
         if (keepaliveJob?.isActive == true) return
@@ -360,7 +328,7 @@ class FnLoginFlow(
         val pem = pubResponse["pub"] as? String
             ?: throw FnLoginException(FnLoginStep.RSA_KEY, "服务器没有返回 RSA 公钥", pubResponse.toString())
         publicKeyPem = pem
-        // ⚠️ si 是 18 位整数，必须走 Long 解析，Double 会丢精度
+        // si 是 18 位整数，必须走 Long 解析，Double 会丢精度
         val siValue = MiniJson.anyToLong(pubResponse["si"])?.toString()
             ?: throw FnLoginException(FnLoginStep.RSA_KEY, "服务器没有返回 si", pubResponse.toString())
         si = siValue
@@ -423,7 +391,6 @@ class FnLoginFlow(
     /**
      * 2FA 请求的统一出口，带恢复：
      * ① 连接断了 → 重连再发一次；
-     * ② [reloginOnExpiry] 且服务端说「凭证过期」→ 重新登录换 accessToken 再发一次。
      */
     private suspend fun call2fa(
         reloginOnExpiry: Boolean,
@@ -463,12 +430,6 @@ class FnLoginFlow(
     /**
      * 两步验证的最后一步：`user.2fa.loginVerify`。
      *
-     * ⚠️⚠️ **必须走 encrypted 信封**。fnOS 前端的请求出口 `bX()` 里有一张名单 `wHe`，
-     * 含 `CK.loginVerify`（= `user.2fa.loginVerify`），命中就用 `CUe({...req, si})` 整包 AES+RSA 加密。
-     * 0.2.5 用明文/HMAC 发这个请求：验证器那边服务端不处理（表现「验证中…」一直转），
-     * 邮箱那边直接被判码错（表现「验证码不正确」，重发多少次都没用）。
-     *
-     * 两路差别只在有没有 `code`（验证器）或 `email`+`emailCode`（邮箱），其余字段完全一样。
      */
     private suspend fun completeLogin(
         totpCode: String? = null,
@@ -508,10 +469,6 @@ class FnLoginFlow(
     /**
      * 收尾：把会话变成「WebView 能用的 Cookie」。
      *
-     * 两步：
-     * ① `POST /app/ticket {ticket}` —— fnOS 新版登录（ticket-cookie 模式）的真实会话就靠这一步种下来。
-     *    实测这个端点存在：假 ticket 直接回 `401 invalid ticket`（text/plain）。**拿不到它的 Cookie，WebView 就是 `invalid token`。**
-     * ② `appcgi.sac.entry.v1.exchangeEntryToken` —— 老的 app 入口 token，失败不致命。
      */
     private suspend fun finishSession(
         token: String,
@@ -556,7 +513,6 @@ class FnLoginFlow(
 
     /**
      * `POST {base}/app/ticket`，把响应里的 `Set-Cookie` 原样带回去给 CookieManager。
-     * 这一步是 0.2.5 之后「登录成功但仍 invalid token」的最后一块拼图。
      */
     private fun claimTicket(ticket: String, token: String): List<String> {
         val client = OkHttpClient.Builder()
@@ -593,7 +549,7 @@ class FnLoginFlow(
 
     /**
      * 造一条请求：返回「JSON + reqid」。
-     * ⚠️ 这两个**必须一起用** —— 只取 JSON 另编一个 reqid 会永远等不到响应（超时才报错）。
+     * 这两个**必须一起用** —— 只取 JSON 另编一个 reqid 会永远等不到响应（超时才报错）。
      */
     private fun payload(req: String, extra: String? = null): Pair<String, String> {
         val id = newReqId()
@@ -627,16 +583,6 @@ class FnLoginFlow(
 /**
  * 域名解析失败时给用户看的那句话。
  *
- * 两态由公共解析判出来（见 [DohResult]），处置完全不同：中继侧没有这台设备只能等，
- * 连公共解析都到不了则是手机没网。
- *
- * ⚠️ `DohResult.Found` 不在这里：那条路**根本不算失败** —— 解析器拿到地址就照常建连了，
- *    走不到失败卡片。⛔ 别为它留一个永远不执行的分支。
- *
- * ⚠️ 这句话会进失败卡片，也会被「复制诊断」带走 —— ⛔ 不要塞内部异常类名与堆栈，
- *    也⛔ 不要出现破折号与括号。`detail` 那一路另有原始异常，排障时够用。
- *
- * @param doh 公共解析的结果；`null` = 没查（例如 OkHttp 在握手回调里抛的，不能在那里阻塞）
  */
 internal fun dnsFailureMessage(host: String, doh: DohResult? = null): String = when {
     doh is DohResult.NoRecord ->
@@ -681,9 +627,6 @@ fun fnErrnoMessage(response: Map<*, *>): String {
 /**
  * `user.2fa.loginVerify` 的请求体（明文 JSON，之后要套 [FnCrypto.envelope] 加密）。
  *
- * 字段照 fnOS 前端的 `useTfaLogin`：验证器那路带 `code`，邮箱那路带 `email` + `emailCode`，
- * 其余（accessToken / isTrustedDevice / stay / deviceName / deviceType / did / si）两路完全相同。
- * 单独抽出来是为了能单测字段——这个包一旦发错，服务端只会「不回」或「判码错」，非常难查。
  */
 internal object FnLoginVerify {
     fun inner(
@@ -723,7 +666,7 @@ internal class WsRpc(
     private val url: String,
     /**
      * 每次握手现取一次 Cookie 头；返回 null 就不带这一行。
-     * ⚠️ 是**取值的函数**而不是取值 —— 过访问码之后重连要拿到新 cookie（见 [AccessCodeRequiredException]）。
+     * 是**取值的函数**而不是取值 —— 过访问码之后重连要拿到新 cookie（见 [AccessCodeRequiredException]）。
      */
     private val cookieProvider: () -> String?,
     private val timeoutMs: Long,
@@ -747,8 +690,8 @@ internal class WsRpc(
         .dns(DohDns)
         .connectTimeout(timeoutMs, TimeUnit.MILLISECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
-        // ⛔ 不开 pingInterval：飞牛中继不一定回 pong，OkHttp 到时会把连接判死；
-        //    空闲后连接被服务端关掉属于正常，靠 call2fa 的重连兜住。
+        // 不开 pingInterval：飞牛中继不一定回 pong，OkHttp 到时会把连接判死；
+        // 空闲后连接被服务端关掉属于正常，靠 call2fa 的重连兜住。
         .retryOnConnectionFailure(true)
         .build()
 
@@ -788,10 +731,6 @@ internal class WsRpc(
     /**
      * 建连失败时，若是中继域名且属于「连不上 / 超时」，强制重查一次解析再试一遍。
      *
-     * 为什么要单独兜这一手：`fnos.net` 是 GeoDNS，系统解析**成功**也可能给出一个不可达的
-     * 海外节点 —— 这种情况上层不会报解析失败，60 秒缓存里还是那批坏地址，只能在这里主动绕过。
-     *
-     * ⛔ 只兜一次（[dnsRetried]）：连不通的节点不该把登录拖成无限重连。
      */
     private suspend fun openWithFreshDns() {
         try {
@@ -829,18 +768,17 @@ internal class WsRpc(
 
                     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                         connected = false
-                        // ⭐ 0.2.18：握手被网关挡下（401 / 403）不是「账号密码错」，多半是 NAS 开了访问码。
+                        // 握手被网关挡下（401 / 403）不是「账号密码错」，多半是 NAS 开了访问码。
                         // 抛专门的异常让上层送去第 ④ 步；⛔ 别把 OkHttp 那句
                         // 「Expected HTTP 101 response but was '401 Unauthorized'」当登录失败甩给用户。
                         val code = response?.code
                         val err: Throwable = when {
-                            // ⚠️ 带上 HTTP 码与响应短语：访问码过了却仍 401 时，日志里能一眼分出
-                            //    「网关还要码」与「码过了但凭据没带上（UA / Referer / 域不对）」
+                            // 带上 HTTP 码与响应短语：访问码过了却仍 401 时，日志里能一眼分出
+                            // 「网关还要码」与「码过了但凭据没带上（UA / Referer / 域不对）」
                             code == 401 || code == 403 -> AccessCodeRequiredException(
                                 "网关要求先输入访问码（HTTP $code " + (response?.message ?: "") + "）",
                             )
                             // 预检之后到真正建连之间，域名仍可能解析不了（缓存过期 / 网络刚切）：
-                            // 这一层也必须翻成人话，否则用户看到的还是那句英文
                             t is java.net.UnknownHostException ->
                                 FnLoginException(FnLoginStep.WS_CONNECT, dnsFailureMessage(hostOf(url)), t.toString(), t)
                             else -> t
@@ -863,8 +801,8 @@ internal class WsRpc(
                 },
             )
             socket = created
-            // ⚠️ 取消时只能关**这一次建的那条**。写成 `socket?.cancel()` 是读当时的字段值 ——
-            //    若这中间又建了一条新连接，取消旧协程会把新连接掐掉，报出来就是「Socket closed」。
+            // 取消时只能关**这一次建的那条**。写成 `socket?.cancel()` 是读当时的字段值 ——
+            // 若这中间又建了一条新连接，取消旧协程会把新连接掐掉，报出来就是「Socket closed」。
             cont.invokeOnCancellation { created.cancel() }
         }
     }

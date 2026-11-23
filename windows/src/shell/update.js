@@ -1,11 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：update.js
- * 职责：检查更新窗口（独立 BrowserWindow）
- *
- * 只负责画：版本号、徽章、更新说明、下载进度、按钮。
- * 一次网络请求都不发 —— 检查 / 下载 / 打开安装包全部走主进程的 `UpdateService`，
- * 这里通过 preload 的 `action()` 转发，状态由 `onState()` 推回来。
  */
 
 const api = window.zxdesk;

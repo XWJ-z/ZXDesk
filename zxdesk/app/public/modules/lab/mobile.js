@@ -1,28 +1,10 @@
 /**
- * modules/lab/mobile.js —— 「zx 实验室」那一屏（手机版，0.9.8）
+ * modules/lab/mobile.js —— 「zx 实验室」那一屏
  *
  * 功能：与电脑版**同形同义** —— 这一屏分两层：
- *      ① **卡片首页**：每个实验功能一张卡（图标 / 名字 / 一句说明 / 「实验中」角标），点卡片进入；
- *      ② **实验视图**：`#lab-body` 里只有一块 `#lab-host`，把**那个模块自己的片段**挂进去
- *         （`core/slots.js` 的 `mountModuleSlot()`）；「返回 ＋ 实验名 ＋ 设计说明」那一条
- *         住第一行的静态槽 `#lab-bar`，与三入口**二选一**（进实验藏三入口）。
- *
- * ⭐⭐ **为什么是卡片、不是一进来就直达**（老大 2026-11-07：「实验室不是只有一个功能，后面还有其他的。
- *    每个实验室模块都要有一个卡片进入」）：实验会越加越多，「只有一个时自动直达」在第二个实验落地那天
- *    就变成「用户不知道这里还有别的东西」。卡片是**可增长的入口形态**。
- *    ⚠️ 所以 `cur === ''` 是**首页**（不是「还没定」），⛔ 别再改回「只有一个就直达」。
- *
- * ⚠️⭐ **药丸只在实验视图里出现，且只在 ≥2 个实验时才画**。它住 `#lab-body` **外面**的静态槽
- *    （`#lab-tabs`，`mobile/index.html` 里的第一行）—— 手机端的标题在全局固定顶栏里，塞不进药丸。
- *    ⛔ 不许把它放进 `#lab-body`：后者每挂一次就被整块清掉，药丸会跟着一起没。
- *
- * ⚠️⭐ **项一个都不许写死**：名字 / 图标 / 顺序 / 说明 / 「关没关」全从
- *    `slotDefs(state.modules, uiOf, state.me)` 来（说明在接线表的 `lab.desc`）。
- *
- * ⚠️⭐ **0 个实验时必须给一句空状态**（「这里将来放实验功能」），⛔ 不许空白屏。
- *
- * ⚠️⭐ **本文件刻意不 import `mobile/app.js`**（那会绕成环）：宿主用**动态** `import()` 调
- *    `openLab()`（静态 import 会让「删掉本目录」把宿主页一起打挂，与「删目录验收」冲突）。
+ * ① **卡片首页**：每个实验功能一张卡（图标 / 名字 / 一句说明 / 「实验中」角标），点卡片进入；
+ * ② **实验视图**：`#lab-body` 里只有一块 `#lab-host`，把**那个模块自己的片段**挂进去
+ * （`core/slots.js` 的 `mountModuleSlot()`）；「返回 ＋ 实验名 ＋ 设计说明」那一条
  *
  * @author zx
  * @date   2026-11-07
@@ -39,7 +21,7 @@ import { state } from '../../mobile/state.js';
 import { closeSheet, openSheet, toast, unlockSheet } from '../../mobile/ui.js';
 import { LAB_DOC_TITLE, agreementHtml } from './agreement.js';
 
-/** 药丸 / 卡片要认清的槽名（与两端接线表里各实验功能声明的那个**逐字一致**） */
+/** 卡片 / 视图片段要认清的槽名（与两端接线表里各实验功能声明的那个**逐字一致**） */
 const SLOT = 'lab-pane';
 
 /** 当前视图：`''` = **卡片首页**；否则 = 某个实验的模块名 */
@@ -57,33 +39,17 @@ function itemsOf() {
 }
 
 /**
- * 功能：一份能判断「卡片内容变没变」的指纹（名字 ＋ 标题 ＋ 说明 ＋ 图标）。
+ * 功能：一份能判断「卡片内容变没变」的指纹（名字 ＋ 标题 ＋ 屏头标题 ＋ 说明 ＋ 图标）。
+ * 说明：⚠️ `lab.title` 也要进指纹：它只改屏头，光看 `it.title` 会漏掉「卡片没变、屏头变了」那一次。
  * @returns {string} 指纹
  */
 const fingerprintOf = () =>
   itemsOf()
-    .map((it) => `${it.name}|${it.title}|${it.icon || ''}|${(it.lab && it.lab.desc) || ''}`)
-    .join(',');
-
-/**
- * 功能：画药丸（**只在实验视图里、且 ≥2 个实验时**）—— 屏内快速切换。
- * @param {Array.<Object>} items - `itemsOf()` 的产物
- * @param {string} on - 当前实验的模块名
- * @returns {string} 药丸的 HTML（只有一项时返回空串 —— 整条不画）
- */
-function pillHtml(items, on) {
-  if (items.length < 2) return '';
-  // ⚠️ 类名与网址/密码夹那颗**逐字一致**（`.dash-tabs` / `.dash-tab`，手机端与电脑端共用同一套版式）
-  //    —— ⛔ 别用 `.pill`：那是任务卡的标签角标，语义与版式都不是这一档。
-  return `<div class="dash-tabs" role="tablist">${items
     .map(
       (it) =>
-        `<button class="dash-tab${it.name === on ? ' on' : ''}" type="button" role="tab" ` +
-        `aria-selected="${it.name === on}" data-lab-view="${esc(it.name)}">` +
-        `${esc(it.title)}</button>`,
+        `${it.name}|${it.title}|${it.icon || ''}|${(it.lab && it.lab.title) || ''}|${(it.lab && it.lab.desc) || ''}`,
     )
-    .join('')}</div>`;
-}
+    .join(',');
 
 /**
  * 功能：**0 个实验**时的空状态文案（⛔ 不许空白屏）。
@@ -130,8 +96,6 @@ function paneHtml() {
 
 /**
  * 功能：**第一行那一条** —— `‹ 返回` ＋ 实验名 ＋ （可选）`设计说明`。
- *
- * 说明：⭐⭐ 老大提的是「进入每一个实验室模块过后顶部都固定显示：返回、【加密信息】设计说明」。
  *      手机端屏幕窄，这一条与三入口**不同时出现**（进实验只留这条，见 `paint()`）：
  *      四条控件挤两行，返回键会离拇指更远。
  *      ⚠️ 名字过长省略（`text-overflow`）而不换行：换行会把整条顶到第二行、按钮跑位。
@@ -144,11 +108,13 @@ function barHtml(it) {
     it && it.lab && it.lab.design === true
       ? `<button class="lab-doc-btn lab-cat-doc" type="button" data-lab-doc="${esc(name)}">设计说明</button>`
       : '';
+  // ⚠️ 与电脑端同一条口径：屏头优先 `lab.title`（进来之后说的是「你正在用的那一个」），
+  //    没写就回落到 `it.title`。
+  const head = it ? (it.lab && it.lab.title) || it.title : '';
   return (
-    // ⭐ 0.9.8 第 7 轮：返回＝蓝（导航）。原来它是品牌色纯文字，与三入口那排灰药丸
     // 属于「两套实现碰巧不一样」，不是按类别分色 —— 换个屏颜色又变了，用户学不到含义。
     `<button class="lab-back lab-cat-nav" type="button" data-lab-back="1">‹ 返回</button>` +
-    `<span class="lab-bar-title">${esc(it ? it.title : '')}</span>` +
+    `<span class="lab-bar-title">${esc(head)}</span>` +
     design
   );
 }
@@ -170,16 +136,10 @@ function paintBar(it) {
 
 /**
  * 功能：**首次进入**实验室的那道门 —— 弹出知情协议，勾选之后「同意」才可点。
- *
- * 说明：⭐⭐ 老大 2026-11-08：「首次进入实验室应该弹出知情协议，勾选过后才能点同意」
  *      ＋ 两条拍板：**不可关**（点遮罩 / 关闭键 / 安卓返回键都不生效）与
  *      **按账号记在服务端**（`users.lab_agreed`，换设备不再问）。
  *      ⇒ `openSheet(..., { locked: true })`：那三条关闭通路在 `ui.js` 里被挡住
  *      （`closeSheet()` 直接返回；`app.js` 的返回键那一段见到锁会补回历史），
- *      唯一出口是「同意」那一支（先 `unlockSheet()` 再关）。
- *
- * ⚠️ 与顶部那颗「知情协议」按钮**不是一回事**：那一颗是随时重看（「我已知晓」、可关），
- *    这一道是首次准入（锁着、必须勾选）。两份正文同一个源（`./agreement.js`）。
  * @returns {void}
  */
 function openAgreementGate() {
@@ -194,7 +154,6 @@ function openAgreementGate() {
   );
   const box = document.getElementById('lab-agree-ack');
   const go = document.getElementById('lab-agree-go');
-  // ⚠️ 没勾之前「同意」不可点（`disabled`）—— 这就是老大要的那条判据，不是装饰。
   if (box && go)
     box.addEventListener('change', () => {
       go.disabled = !box.checked;
@@ -240,18 +199,10 @@ let bodyBound = false;
 let barBound = false;
 
 /**
- * 顶部三入口 —— ⭐⭐ 0.9.8 第 3 轮（方案 §8.3，与电脑版**同形同义**，R-114 两端同改）。
- *
- * 说明：三颗**纯文字**按钮（⛔ 不加图标、⛔ 不加 emoji —— 老大 2026-11-08 拍板「只留文字」），
  *      各开一个宿主底部弹层。文案与电脑端**逐字一致**。
- *
  * ⚠️⭐ 工具条住 `#lab-tools`（`mobile/index.html` 里、`#lab-body` **外面**）—— 后者每挂一次
- *    就被整块清掉，放里面会跟着没。所以：内容由 `openLab()` 画**一次**（⛔ 别放进 `paint()`），
- *    委托也只挂一次。
- * ⚠️ 二维码与群号**不在这里写第二遍**：`core/about.js` 的 `qrBlockHtml()` / `GROUP_NO` 是唯一来源。
  */
 const TOOLS = [
-  // ⭐⭐ 0.9.8 第 7 轮：改名「实验室设计说明」＋ 按类别着色（与电脑端逐字一致 —— R-114）。
   //    绿＝说明与钥匙、黄＝反馈与联系；蓝（导航）用在屏头的返回键。
   { act: 'agreement', label: '实验室设计说明', cls: 'lab-cat-doc' },
   { act: 'form', label: '反馈调研', cls: 'lab-cat-help' },
@@ -304,11 +255,9 @@ function openTool(act) {
 
 /**
  * 功能：开「设计说明」弹层 —— 正文按约定从 `modules/<实验名>/design.js` **动态**取。
- *
  * 说明：⭐⭐ 宿主不认识任何具体实验（与卡片说明走 `lab.desc` 同一条路子）：正文住模块自己的
  *      `design.js`，路径是算出来的，所以静态扫描看不见 —— 由两条测试钉住（存在性 ＋ 导出）。
  *      ⚠️ 必须动态 import：静态 import 会让「删掉某个实验目录」把这一屏整个打挂。
- *      ⚠️ 取不到就**明说**（控制台 ＋ toast），⛔ 不静默空白。
  * @param {string} name - 实验的模块名
  * @returns {Promise.<void>}
  */
@@ -337,20 +286,18 @@ function pick(name) {
 }
 
 /**
- * 功能：把药丸 / 卡片 / 当前实验画出来。
+ * 功能：把卡片 / 当前实验画出来。
  * @param {boolean} [enter] - 是不是「进屏」那一趟（是则槽内不播淡入）
  * @returns {Promise.<void>}
  */
 function paint(enter) {
-  const tabs = document.getElementById('lab-tabs');
   const body = document.getElementById('lab-body');
-  if (!tabs || !body) return Promise.resolve();
+  if (!body) return Promise.resolve();
   const items = itemsOf();
   const names = items.map((it) => it.name);
   painted = fingerprintOf();
   // ⚠️ 当前实验不在清单里了 ⇒ 回首页（⛔ 不许停在一个不存在的实验上）
   if (cur && !names.includes(cur)) cur = '';
-  tabs.innerHTML = cur ? pillHtml(items, cur) : '';
   // ⭐ 0 个实验：给一句空状态（⛔ 不许空白屏），第一行交回三入口
   if (!items.length) {
     paintBar(null);
@@ -380,10 +327,8 @@ function paint(enter) {
 
 /**
  * 功能：进「zx 实验室」这一屏 —— 画**卡片首页**（或 `opts.slot` 指定的那个实验）。
- *
  * 说明：⚠️ **不换屏**（`switchTab` 由宿主做，见 `mobile/app.js` 的 `render()` 那一支）——
  *      本文件不 import 入口文件，否则成环。
- *
  * @param {{slot?: string}} [opts] - `slot` = 这一次要直接进哪个实验（模块名）；不带就落卡片首页
  * @returns {Promise.<void>}
  */
@@ -393,7 +338,7 @@ export async function openLab(opts) {
   painted = fingerprintOf();
   if (!bodyBound) {
     bodyBound = true;
-    // 卡片 / 药丸两种点击走**一个**委托，挂在静态的 `#lab-body` 上
+    // 卡片点击走**一个**委托，挂在静态的 `#lab-body` 上
     // （⭐ 返回与设计说明在 `#lab-bar` 里，委托也挂在那边 —— 见下面那一段）
     const body = document.getElementById('lab-body');
     if (body)
@@ -402,8 +347,6 @@ export async function openLab(opts) {
         if (!t) return;
         const card = t.closest('[data-lab-open]');
         if (card) return pick(card.getAttribute('data-lab-open'));
-        const pill = t.closest('[data-lab-view]');
-        if (pill) return pick(pill.getAttribute('data-lab-view'));
       });
   }
   // ⭐⭐ 第一行那条的委托：`#lab-bar` 是**静态节点**（内容每次都换、节点不动）⇒ 挂一次就够
@@ -419,7 +362,6 @@ export async function openLab(opts) {
         if (doc) void openDesign(doc.getAttribute('data-lab-doc'));
       });
   }
-  // ⭐⭐ 0.9.8 第 3 轮：顶部三入口（画一次 ＋ 委托只挂一次）—— 它们住 `#lab-body` 外面，
   //    所以**不跟着 `paint()` 走**（每次切实验都重画的话，用户正在看的弹层状态会被搅）。
   paintTools();
   if (!toolsBound) {
@@ -433,7 +375,6 @@ export async function openLab(opts) {
       });
   }
   await paint(true);
-  // ⭐⭐ 0.9.8 第 3 轮：**首次进入**先把知情协议摆出来（勾选才能点同意，关不掉）。
   //    判据是账号上的 `lab_agreed`（服务端记的）—— 同意过就再也不弹。
   //    ⚠️ 放在 `paint()` 之后：弹层盖住的是已经画好的实验室，而不是一块空白。
   if (!state.me || !state.me.lab_agreed) openAgreementGate();

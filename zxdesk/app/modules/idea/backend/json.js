@@ -2,26 +2,17 @@
 
 /**
  * modules/idea/backend/json.js —— 灵感库的**JSON 版原语**
- *
  * 功能：本模块自己的存储原语（JSON 回退），与另一个后端**同名同参** ——
- *      「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，
- *      少一个 / 打错名 / 形参个数不一致 = 启动即抛。
- *
- * 说明：⭐ 检索与筛选**不在这一层做**（见 `modules/idea/store.js`）—— 两个后端必须给出
- *      逐字一致的结果，语义只能有一份实现。
- *
- * ⚠️ ops 里的 `this` 是 **Store 实例**（门面用 `.apply(store, …)` 调用）。
- *
+ * 「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，
  * @author zx
  * @date   2026-09-17
- * @since 0.8.15
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/19-灵感库.md、docs/公共/架构文档/02-存储层与数据模型.md
  */
 
 const { nowStamp, uidOf } = require('../../../core/store/helpers.js');
 
 const ops = {
-  // ---- 灵感库（0.7.1）----
   /**
    * 功能：列出该账号的全部灵感（新的在前）。
    * @param {(number|string)} uid - 用户 id
@@ -64,7 +55,7 @@ const ops = {
     const before = (this.data.idea_items || []).length;
     this.data.idea_items = (this.data.idea_items || []).filter((r) => !(r.id === Number(id) && uidOf(r) === u));
     if (this.data.idea_items.length < before) {
-      // ⚠️ JSON 后端没有外键，级联必须自己写 —— 漏了它就会在列表里留下指向已删随手记的孤儿关联行
+      // JSON 后端没有外键，级联必须自己写 —— 漏了它就会在列表里留下指向已删随手记的孤儿关联行
       this.data.idea_tag_links = (this.data.idea_tag_links || []).filter(
         (l) => !(l.idea_id === Number(id) && uidOf(l) === u),
       );
@@ -73,7 +64,6 @@ const ops = {
     return this.data.idea_items.length < before;
   },
 
-  // ---- 随手记的标签（0.8.15）：与 sqlite 版同名同参 ----
   /**
    * 功能：列出该账号的全部标签，并带上**每个标签下有几条随手记**（按 sort_order、id 升序）。
    * @param {(number|string)} uid - 用户 id
@@ -123,7 +113,7 @@ const ops = {
 
   /**
    * 功能：删除一个标签，并连带清掉它的关联行（对应 SQLite 的 ON DELETE CASCADE）——
-   *      **随手记本身保留**（只解除归类）。
+   * **随手记本身保留**（只解除归类）。
    * @param {(number|string)} uid - 用户 id
    * @param {(number|string)} id - 标签 id
    * @returns {boolean} 标签行是否真的被删掉
@@ -174,7 +164,6 @@ const ops = {
    * @param {(number|string)} uid - 用户 id
    * @param {(number|string)} ideaId - 随手记 id
    * @param {Array.<string>} names - 目标标签名数组
-   * @returns {boolean} 恒为 true
    */
   setIdeaTags(uid, ideaId, names) {
     const u = Number(uid);
@@ -208,7 +197,6 @@ const ops = {
   },
 
   /**
-   * 功能：取本模块进**个人备份**的那一份数据（含 0.8.15 新增的两张标签表）。
    * @param {(number|string)} uid - 用户 id
    * @returns {{idea: Array.<Object>, idea_tags: Array.<Object>, idea_tag_links: Array.<Object>}} 备份里那三个键
    */

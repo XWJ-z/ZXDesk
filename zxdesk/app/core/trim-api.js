@@ -1,26 +1,8 @@
 'use strict';
 /**
  * trim-api.js —— 调飞牛开放平台后端能力的**唯一出口**（Unix Socket）
- *
  * 功能：把「应用服务端怎么调 `trim.*`」收在一个文件里 —— 认证（`TRIM_API_TOKEN`）、
- *      Unix Socket 地址、请求 / 响应形状、超时、错误收口，以及一个**可注入的假实现**（测试用）。
- *
- * ⭐ 为什么必须走后端：
- *   · `trim.file.getUserAccessibleFolders` / `delUserAccessibleFolder` **只能**由应用服务端
- *     经 Unix Socket `/var/run/trim_open_gateway_apiscope.socket` 调（官方口径）；
- *   · token 由系统启动应用脚本时注入环境变量，**⛔ 不能落库、不能进日志、不能回前端** ——
- *     所以它只能待在服务端进程里。
- *
- * ⚠️⚠️ **两条安全口径（官方文档原话，抄进来免得被忘）**：
- *   ① 「拿到授权路径不代表可以绕过当前使用用户的系统权限」—— 授权列表只是「用户同意过」，
- *      不是「我们有权读写任何东西」，写盘前仍要按应用账号自己的权限试；
- *   ② 「不要信任客户端传入的用户 ID，请使用网关鉴权 Header」—— 授权与查询用的 uid
- *      只从 `X-Trim-Userid`（见 `gateway.js` 的 `gatewayUser()`）来，⛔ 不接受请求体里的 uid。
- *
- * ⚠️ token 每次调用现读 `process.env`：官方明说它会在重新注册 / 重装后变化。
- * ⚠️ 失败一律抛**带 code 的错误**，由路由层收口成 409（⛔ 不降级成「随便用」）：
- *    查不到授权就等于「不能碰这个目录」，不是「先试试看」。
- *
+ * Unix Socket 地址、请求 / 响应形状、超时、错误收口，以及一个**可注入的假实现**（测试用）。
  * @author zx
  * @date   2026-11-08
  * @since 0.9.7
@@ -46,11 +28,6 @@ const CACHE_MS = Number(process.env.TRIM_CACHE_MS == null ? 30000 : process.env.
 
 /**
  * 语义化路径的缓存时长：5 分钟。
- *
- * 说明：⭐ 与授权列表的 30 秒**刻意不同**：授权状态是用户在飞牛里随时会改的东西，
- *      而「`/vol1/1000/photo` 在文件管理器里叫什么」只在**存储改名 / 改挂载点**时才变 ——
- *      这种变化由面板的「刷新」按钮显式触发（它会 `invalidate()`），不需要靠短 TTL 兜。
- *      给长一点是为了让「打开附件位置面板」永远不再等一次网关往返。
  * @type {number}
  */
 const PATH_CACHE_MS = Number(process.env.TRIM_PATH_CACHE_MS == null ? 300000 : process.env.TRIM_PATH_CACHE_MS) || 0;
@@ -72,21 +49,12 @@ let sharedCache = { at: 0, paths: [] };
 
 /**
  * 语义化路径缓存：`路径 → { at, semantic }`。
- *
- * ⚠️ 键是**路径字符串**、不是 uid：同一个路径换个账号看，文件管理器里的位置是一样的。
- * ⚠️ 值里带用户名（「admin 的文件」）—— 只用于本账号自己的界面，⛔ 不进日志、不进错误话术。
  * @type {Map.<string, {at: number, semantic: string}>}
  */
 const pathCache = new Map();
 
 /**
  * 最近一次 `convertPath` 的**结论**（只给诊断用，⛔ 不参与任何判断）。
- *
- * 说明：⭐⭐ 这个能力有四种「拿不到」的原因（没 token / 网关不可达 /
- *      系统低于 1.2.0401 未开这个接口 / 应用没声明 `trim.file.path`），而四种在页面上
- *      **表现完全一样** —— 都退成 `…/末两段`。用户只会说「没实现」，维护者只能猜。
- *      这里把原因留一份，由 `settings` 回应给前端，面板底部照着说一句人话。
- *      ⚠️ 只是**结论与一句话**，不含路径、不含 token、不进日志。
  * @type {{ok: boolean, code: string, reason: string, status: ?string, msg: string, resultKind: string, at: number}}
  */
 let convertDiag = { ok: false, code: '', reason: '', status: null, msg: '', resultKind: '', at: 0 };
@@ -224,7 +192,6 @@ async function call(req, data) {
 
 /**
  * 功能：查某个飞牛用户**授权给本应用**的目录列表。
- *
  * 说明：⚠️ 只含**目录**授权，不含文件授权（官方口径）。30 秒内存缓存：
  *      面板连点刷新、每次上传前的校验都走它，不缓存就会把网关打满。
  * @param {number} uid - 飞牛用户 uid（**只从网关 Header 来**）
@@ -243,11 +210,9 @@ async function getUserAccessibleFolders(uid) {
 
 /**
  * 功能：查**管理员授权给本应用**的目录（飞牛「应用设置 → 访问权限」里配的那些）。
- *
  * 说明：⭐⭐ 这是最省事的一条路：管理员在飞牛里给过 ZXDesk 一个目录之后，应用直接用，
  *      **不需要**再让用户在自己的页面里选一次。所以附件目录的取值顺序是
  *      「共享授权目录 → 用户个人授权目录」，两者都没有才提示去授权。
- *      ⚠️ 这个接口**不带 uid**（授权对象是应用，不是某个用户）。
  * @returns {Promise<Array.<string>>} 目录绝对路径（可能为空）
  * @throws {Error} 网关不可达 / 无 token / 业务码非 0
  */
@@ -275,22 +240,7 @@ async function delUserAccessibleFolder(uid, path) {
 /**
  * 功能：把内部路径（`/vol1/1000/photo`）转成**文件管理器里的语义化路径**
  *      （`存储空间1/admin 的文件/photo`）—— 飞牛后端能力 `trim.file.convertPath`。
- *
  * 说明：⭐⭐ 页面上**不再出现** `/vol1/...`（内部路径对用户没有意义）。
- *      几条刻意的设计：
- *      · **一次一批**（去重、最多 50 条）：面板一屏就要转「当前目录 + N 条历史根 + M 条已授权」，
- *        一条一次会把网关打成一串串行往返；
- *      · **失败不抛**：网关不可达 / 系统太老（< 1.2.0401）/ 业务码非 0，一律回**已经拿到的那部分**
- *        （空 Map 也算正常返回），由展示层走「`…/末两段`」兜底 —— 路径只是提示，
- *        ⛔ 不该因为它把整块「附件位置」面板打成错误；
- *      · **整批被拒就逐条重试**（见 `fillConverted()`）：一条已失效的历史目录不该让整屏都退兜底；
- *      · **失败原因留一份**（见 `convertStatus()`）：四种「拿不到」在页面上一模一样，
- *        不记原因就只能猜「是不是没做」；
- *      · **`language` 写死 `zh-CN`**：本应用只有中文界面，平台配置也写明 `systemLanguage` 固定 `zh-CN`；
- *        读 `Accept-Language` 反而会造出「同一台机器两种路径写法」；
- *      · **缓存键是路径字符串**：同一个路径换账号看语义一样；`invalidate()` 会一起清掉
- *        （存储改名 / 点「刷新」后必须立刻看到新名字）。
- *
  * @param {Array.<string>|string} paths - 一个或多个绝对路径
  * @param {string} [language] - 语言（本应用只传 `zh-CN`）
  * @returns {Promise.<Map.<string, string>>} `路径 → 语义化路径`（转不到的不在 Map 里）
@@ -355,11 +305,9 @@ function absorbConverted(rows, out) {
 
 /**
  * 功能：从一次响应里挑出「结果行」与状态 —— 兼容两种包裹。
- *
  * 说明：⭐⭐ 文档写的形状是 `data.result`，但网关某些版本
  *      会把整份 `{status, result}` 再包一层成 `data.data`。原实现只认前者 ⇒ 拿到
  *      `undefined` 就当「转不了」，页面上只能退兜底，看起来与「没实现」一模一样。
- *      ⚠️ 只读、不猜：两种都不像就回 `null`（由调用方按失败处理）。
  * @param {*} data - `rawCall` resolve 出来的 `data`
  * @returns {?{rows: Array.<Object>, status: *, kind: string}} 结果行与来源标记；认不出为 `null`
  */
@@ -382,9 +330,7 @@ let loggedFail = '';
 
 /**
  * 功能：记一次「拿不到语义路径」的结论，并按指纹**只记一行**日志。
- *
  * 说明：⚠️ 日志里⛔ 不含任何路径（`semanticPath` 带用户名，`path` 是设备目录结构）——
- *      只留 status / msg / resultKind 三个排查用的形状标记。
  * @param {string} code - 机器可读原因码（进 `settings.pathConvert.code`）
  * @param {string} reason - 给用户的一句人话
  * @param {{status?: *, msg?: string, resultKind?: string}} [extra] - 诊断用的原始形状
@@ -419,17 +365,7 @@ function diagFail(code, reason, extra) {
 
 /**
  * 功能：真调一次 `trim.file.convertPath`；整批没结果时**逐条重试**（单条用字符串）。
- *
  * 说明：⭐⭐ 为什么要拆单条：飞牛对「其中一条路径不成立」（文件夹刚被删掉 / 不在任何存储里）
- *      的行为是**整批 `status` 非 0**，而不是逐条给空。原实现一遇到非 0 就整批作废，
- *      结果是「历史目录里有一个已经不在了 ⇒ 整个面板一条语义路径都出不来」——
- *      页面上看起来就是**这个功能没做**。逐条重试只在异常路径上跑（正常一次就成），
- *      代价可以忽略；但⛔ 网关层失败（没 token / 连不上 / 超时）不重试 —— 拆成单条也一样死，
- *      白打 50 次只会把网关拖慢。
- *      ⭐ 再放宽两条：
- *      · **单条也用字符串**试一次（有的网关版本不接受数组，`path` 必须是 string）；
- *      · **只要收到能用的 `semanticPath` 就收**，不再要求 `status === 0`
- *        （`status` 缺失 / 用非 0 表示「部分成功」的版本同样能出结果）。
  * @param {Array.<string>} list - 需要转换的路径（已去重）
  * @param {string} language - 展示语言
  * @param {Map.<string, string>} out - 收集器

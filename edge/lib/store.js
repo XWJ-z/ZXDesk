@@ -1,20 +1,13 @@
 /**
  * store.js —— `chrome.storage.local` 的唯一读写口
- *
  * 功能：连接记录、列表缓存、版本检测结果、许可协议记录、SW 续跑结果的读写都从这里走。
  *
  * 数据模型：
  * - `edge:conn`      连接信息 —— ⛔ 只存地址与缓存，**不存任何凭据**（Cookie 每次用前现读）；
  * - `edge:cache`     侧边栏首屏缓存（TTL 60 s）；
- * - `edge:update`    版本检测结果（启动时写一次，气泡与角标都从这里读）；
- * - `edge:last-conn` SW 自动续跑的结果（带 `at`，读取方只认 2 分钟内的）；
- * - `pref:eula`      许可协议接受记录（`{version, at}`；未同意前不发起版本检测）。
- * 迁移位：`v` —— 读到不认识的 `v` ⇒ 当没连过（清空重来），⛔ 不猜。
- *
- * ⛔ 其它模块只传值，不直接碰 storage（分层纪律）。
- *
+ * - `edge:update`    版本检测结果（启动时写一次，气泡与角标都从这里读）…
  * @author zx
- * @since 0.1.0
+ * @since
  * 相关：Project/Edge/README.md
  */
 
@@ -110,7 +103,6 @@ export async function getUpdate() {
 
 /**
  * 功能：写检测结果。与现有记录合并 —— `dismissed` 不能被新一轮检测抹掉，
- * 否则每次启动都会把用户关过的提示重新弹出来。
  * @param {object} patch
  */
 export async function setUpdate(patch) {
@@ -124,7 +116,6 @@ export async function setUpdate(patch) {
 
 /**
  * 偏好键（`pref:` 前缀与主题、打开方式同一套；不走 `v:1` 迁移位）。
- * ⚠️ 放这里而不是 UI 直读，是因为 **SW 也要读它** —— 未同意协议就不许发起版本检测。
  */
 const KEY_EULA = 'pref:eula';
 

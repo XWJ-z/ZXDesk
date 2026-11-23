@@ -1,17 +1,8 @@
 'use strict';
 /**
- * setup.js —— 首次登录的强制设置页（新用户名 + 新密码）
- *
- * 功能：查 `/api/auth/state` 确认「当前账号仍在使用公开初始凭据」，收新用户名与新密码，
- *      先调 `POST /api/auth/password` 再调 `PUT /api/auth/username`，两者都成功后回 `/`。
- *
- * 为什么是这个顺序：改完密码，账号就不再是「仍在使用初始凭据」，服务端那条例外（可以不填当前密码）
- * 随之失效；改用户名本身不需要口令。反过来先改名再改密，就会在中间状态卡住。
- *
- * ⚠️ 本页只在 `mustSetup` 为真时有意义：已设置过的账号进来会被送回 `/`；
- *    未登录会被送回登录页（`/setup.html` 不在免登录白名单里，静态闸门也会先拦一道）。
- * ⚠️ `BASE` 的算法与 `login.js` 逐字一致（按当前页面所在目录算），两个挂载点下都要成立。
- *
+ * setup.js —— 首次登录的强制设置页（改密码，用户名可选）
+ * 功能：查 `/api/auth/state` 确认「当前账号仍在使用公开初始口令」，收到新密码（用户名可改可不改），
+ * 先调 `POST /api/auth/password`，名字真的改了再调 `PUT /api/auth/username`，然后回 `/`。
  * @author zx
  * @date   2026-10-27
  * @since 0.9.7
@@ -41,6 +32,9 @@
 
   /** 服务端给的口令下限；`state` 取不到时按 8 位兜底 */
   let minLen = 8;
+
+  /** 当前登录名（默认填进输入框；提交时用它判断「名字到底改没改」） */
+  let currentUsername = '';
 
   /**
    * 功能：在表单下方显示一行错误提示。
@@ -77,7 +71,6 @@
   }
 
   /**
-   * 功能：进页先确认状态 —— 未登录去登录页，已设置过直接回首页，否则显示本表单。
    * @returns {Promise.<void>} 无返回值
    */
   async function boot() {
@@ -93,9 +86,14 @@
         return;
       }
       minLen = Number(s.minPasswordLength) || 8;
+      // 用户名框**默认填当前用户名**（出厂就是 admin）：不改就直接提交，改了才发改名请求。
+      currentUsername = String((s.user && s.user.username) || '');
+      const nameInp = document.getElementById('username');
+      if (currentUsername) nameInp.value = currentUsername;
       document.getElementById('pwHint').textContent =
         `密码至少 ${minLen} 位；用户名可用中文、字母、数字、下划线、点、@ 或减号`;
-      document.getElementById('username').focus();
+      // 名字已经填好，光标落在密码上 —— 这一页真正要填的就是它
+      document.getElementById('password').focus();
     } catch (_e) {
       showError('网络异常，请刷新重试');
     }
@@ -108,8 +106,7 @@
     const p1 = String(document.getElementById('password').value || '');
     const p2 = String(document.getElementById('confirm').value || '');
 
-    if (!username) return showError('请输入新用户名');
-    if (username === 'admin') return showError('新用户名不能还是 admin');
+    if (!username) return showError('请输入用户名');
     if (p1.length < minLen) return showError(`新密码至少 ${minLen} 位`);
     if (p1 !== p2) return showError('两次输入的密码不一致');
 
@@ -119,17 +116,25 @@
       // ① 先改密码：此时账号仍在用初始口令，服务端允许不填「当前密码」
       const r1 = await api('POST', '/api/auth/password', { next: p1 });
       if (!r1.ok) {
-        showError((r1.data && r1.data.error) || `修改密码失败（${r1.status}）`);
+        const msg = (r1.data && r1.data.error) || `修改密码失败（${r1.status}）`;
+        // 走到这里通常说明「口令其实早就改过了」—— 本页只该拦住仍用初始口令的账号，
+        // 但万一有残余状态，必须给一条出路；⛔ 不能只丢一句「当前密码不正确」让人在这里反复重试。
+        const extra = /当前密码/.test(msg)
+          ? ' 如果密码已经改过，请回登录页用新密码登录；也可以在「设置 → 账号设置」里改密码。'
+          : '';
+        showError(msg + extra);
         return;
       }
-      // ② 再改用户名（服务端不要求口令）
-      const r2 = await api('PUT', '/api/auth/username', { username });
-      if (!r2.ok) {
-        showError(
-          ((r2.data && r2.data.error) || `修改用户名失败（${r2.status}）`) +
-            ' —— 密码已经改好了，可以在「设置 → 账号设置」里再改用户名',
-        );
-        return;
+      // ② 再改用户名 —— **只有真的改了才发**：名字保持 admin 是允许的，闸门只看口令
+      if (username !== currentUsername) {
+        const r2 = await api('PUT', '/api/auth/username', { username });
+        if (!r2.ok) {
+          showError(
+            ((r2.data && r2.data.error) || `修改用户名失败（${r2.status}）`) +
+              ' —— 密码已经改好了，可以在「设置 → 账号设置」里再改用户名',
+          );
+          return;
+        }
       }
       location.replace(BASE + '/' + carrySearch());
     } catch (_e) {

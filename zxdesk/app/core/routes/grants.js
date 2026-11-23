@@ -2,21 +2,8 @@
 
 /**
  * routes/grants.js —— **个人授权目录**的 HTTP 入口
- *
  * 功能：`GET /api/grants` 取清单（含每行的授权状态）、`POST /api/grants` 登记 / 刷新一条、
- *      `PUT /api/grants` 改用途备注、`DELETE /api/grants?path=…` 从清单里移除。
- *
- * ⭐⭐ 为什么这条前缀挂在**核心**（`LEGACY_API_ROUTES`）而不是某个模块：
- *      它是「我这台机器上授权过哪些目录」的**汇总**，服务的是**所有**要目录的功能
- *      （本轮是加密信息附件，将来还有别的）。挂进 `modules/secrets/` 的话，
- *      加密信息一关，设置里那份清单就没来源了。
- *
- * ⚠️⚠️ 身份只从网关 Header 来（`gatewayUser(req)`）：⛔ 不接受请求体里的任何 uid/fuid。
- *      这条与 `modules/secrets/routes.js` 那段**逐字同一口径** —— 授权是「飞牛用户对应用」
- *      的许可，用哪个飞牛身份去问，只由宿主自己注入的 Header 决定。
- * ⚠️ 本文件**只做参数整形与状态码**：判据（什么算授权、怎么算状态）全在
- *    `store/methods/grants.js`，这儿再写一遍必然漂移。
- *
+ * `PUT /api/grants` 改用途备注、`DELETE /api/grants?path=…` 从清单里移除。
  * @author zx
  * @date   2026-11-09
  * @since 0.9.7
@@ -42,7 +29,6 @@ function fail(res, e) {
 
 /**
  * 功能：`/api/grants` 的唯一入口 —— 按方法分派四个动作。
- *
  * 说明：⚠️ `parts[2]` 目前**不允许**任何子路径（多一个片段就是 404）：
  *      路径本身走请求体 / 查询串里的 `path`，⛔ 不塞进 URL 路径段 ——
  *      目录名里可能有斜杠、空格与中文，编码一次就多一个坑。

@@ -2,44 +2,12 @@
  * modules/tasks/routes.js —— 任务板与首屏聚合相关的业务路由
  *
  * 功能：`handleTasks`（本人全部任务）、`handleDaily`、`handleProjects`（项目与其任务）、
- *      `handleSummary`（首页汇总看板）、`handleTodayCount`（今日待办数）、
- *      `handleSearch`（全局搜索）、`handleExport`（导出完整 JSON 备份）。
- *
- * ⚠️ 拆自 `server.js`（002 报告 §5.1 ①），**只搬家不改逻辑**；运行期单例从 `../../core/context.js` 取。
- * ⚠️ `handleTasks` 与 `handleSummary` 是 0.2.0 的首屏聚合接口（**纯增量**，老接口一个没删）；
- *    聚合接口最容易出的问题是「悄悄少算一项或过滤条件写宽」，而前端根本察觉不到。
- *
- * ⭐ 0.5.0 模块化重构：本文件从 `core/routes/tasks.js` **原样搬进模块目录**
- *    （方案 `09-模块化重构` §七，纯搬运不改逻辑）。只改了三处：① 相对路径；
- *    ② 导出键从七个 `handleXxx` 改成 **`module.json` 声明的七个 `apiPrefix`**
- *    （`tasks` / `projects` / `daily` / `export` / `search` / `summary` / `today-count`）——
- *    `server.js` 的 `routeTable()` 据此自动挂到 `/api/<键>` 上，模块自己不用认识路由表；
- *    ③ 本段说明。处理函数体一个字没动。
- *    ⚠️ `handleSummary` / `handleSearch` 调的是 `store.summary()` / `store.search()` ——
- *    那是**核心**（`store/methods/stats.js`）的方法（跨模块汇总），所以本模块搬走时它们**不跟着走**。
- *
- * ⭐ 0.8.12：原先挂在本文件的 `handleCollab()`（`/api/collab/*`）
- *    与它的 `collab` 导出键、`checkTaskReport` / `readBodyToFile` / `rfc5987` / `FILE_MAX_BYTES` / `fs`
- *    依赖，**整份搬去了 `modules/teamwork/routes.js`** —— ⚠️ 接口路径一个字节没改
- *    （`teamwork/module.json` 的 `apiPrefix` 里加回了 `collab`）。
- *
- * ⭐⭐ 0.8.14：本文件新增**第八个键** `occurrences` —— 周期任务的打卡接口
- *    （`GET / POST / DELETE /api/occurrences`，见 `handleOccurrences()`），
- *    并让三个列表接口顺手带上每条周期任务的打卡期。
- *    ⭐ 0.8.17：那个「挂打卡期」的原语**搬去 store 了** ——
- *    它从本文件的局部函数 `attachTicks()` 变成 `store.attachTicks(uid, rows, source)`
- *    （实现住 `modules/tasks/lib/occurrences.js`，与 `listOccurrencesOfUser` 同屋）。
- *    为什么搬：协作看板也要给**周期任务**挂同一份打卡期（它的卡片走另一条取数路径），
- *    而跨模块只许走 store 的公开业务方法⇒ 它必须住在 store 上。⚠️ 只搬不重写。
- *
- * ⭐⭐ 0.8.14 修订（第四轮「**任务的归属要可以修改**」）：`handleTasks` 不再是
- *    「只读」的那一个 —— 多了 `POST /api/tasks/move`（body `{ from, id, to }`，把一条任务搬到
- *    另一个归属；真身是 `store.moveTask()`）。⚠️ 它是本模块**唯一**一个挂在 `tasks` 这个键上的
- *    写接口，⛔ 别把别的写操作也塞进来（改任务走 `/api/daily/:id` 与 `/api/projects/:pid/tasks/:id`）。
+ * `handleSummary`（首页汇总看板）、`handleTodayCount`（今日待办数）、
+ * `handleSearch`（全局搜索）、`handleExport`（导出完整 JSON 备份）。
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.8.17
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/05-任务板.md
  */
 'use strict';
@@ -65,13 +33,8 @@ function isSource(s) {
  * 功能：按「来源 + 任务 id」确认这条任务**归当前账号**（不存在 / 是别人的一律 404）。
  *
  * 说明：⚠️ 打卡接口必须先过这一关：不过就会变成「往别人的任务上写记录」——
- *      而 `task_occurrences.task_id` 不是外键，数据库拦不住（越权与「不存在」统一 404，
- *      ⛔ 不区分 403 —— 那是一条探测通道）。
- *
- * @param {number} uid - 账号 id
- * @param {string} source - `'daily'` / `'project'`
- * @param {(number|string)} taskId - 任务 id
- * @returns {?Object} 命中的任务行；不归本人 / 不存在时为 null
+ * 而 `task_occurrences.task_id` 不是外键，数据库拦不住（越权与「不存在」统一 404，
+ * 不区分 403 —— 那是一条探测通道）。
  */
 function findOwnTask(uid, source, taskId) {
   const id = Number(taskId);
@@ -85,21 +48,11 @@ function findOwnTask(uid, source, taskId) {
  * 说明：⭐ `GET /api/tasks` —— 一次拿齐「我的全部任务」，按 scope 分组（手机版首屏用）。
  *
  * 为什么不是「每个项目发一次」：那是 N+1 —— 10 个项目就是 10 个请求，
- * 每个都要过一次会话校验、一次同步 SQL 查询、一次 JSON 序列化。
- *
- * ⚠️ 权限口径与单项目接口**逐条一致**：项目来自 `listProjects(uid)`，任务是
- *    `listProjectTasks(uid, pid)` —— 批量**不是**放松过滤的理由。
- *
- * @param {Object} ctx - 分派上下文
- * @param {Object} ctx.res - HTTP 响应对象
- * @param {string} ctx.method - HTTP 方法，非 GET 一律 404
- * @param {number} ctx.uid - 当前账号 id
- * @returns {void}
  */
 function handleTasks({ req, res, parts, method, uid }) {
-  // ⭐⭐ 0.8.14 修订（第四轮）：`POST /api/tasks/move` —— 把一条任务搬到另一个归属
-  //    （日常任务 ⇄ 某个项目）。⚠️ 判据是 `parts[2] === 'move'`（`/api/tasks` 是两段，`parts`
-  //    含 `api` ⇒ 本接口是**三段**），与 `/api/occurrences` 那处同一条读法。
+  // 修订（第四轮）：`POST /api/tasks/move` —— 把一条任务搬到另一个归属
+  // （日常任务 ⇄ 某个项目）。⚠️ 判据是 `parts[2] === 'move'`（`/api/tasks` 是两段，`parts`
+  // 含 `api` ⇒ 本接口是**三段**），与 `/api/occurrences` 那处同一条读法。
   if (method === 'POST' && parts.length === 3 && parts[2] === 'move') {
     return readBody(req, res, (b) => {
       if (!b) throw httpError(400, 'bad body');
@@ -110,8 +63,8 @@ function handleTasks({ req, res, parts, method, uid }) {
     });
   }
   if (method !== 'GET') return notFound(res);
-  // ⭐ 0.5.2：两条出口都过一遍 `attachBookmarkLinks()` —— 任务上绑的网址要给成
-  //    「标题 + 网址」，而不是让前端再拿 `bookmark_id` 去猜（见 `stats.js` 里那个方法的说明）。
+  // 两条出口都过一遍 `attachBookmarkLinks()` —— 任务上绑的网址要给成
+  // 「标题 + 网址」，而不是让前端再拿 `bookmark_id` 去猜（见 `stats.js` 里那个方法的说明）。
   const daily = store.attachTicks(uid, store.attachBookmarkLinks(uid, store.listDailyTasks(uid)), 'daily');
   const byProject = {};
   for (const p of store.listProjects(uid)) {
@@ -126,7 +79,6 @@ function handleTasks({ req, res, parts, method, uid }) {
  * @param {Object} ctx.res - HTTP 响应对象
  * @param {string} ctx.method - HTTP 方法，非 GET 一律 404
  * @param {number} ctx.uid - 当前账号 id
- * @returns {void}
  */
 function handleExport({ res, method, uid }) {
   if (method !== 'GET') return notFound(res);
@@ -135,9 +87,8 @@ function handleExport({ res, method, uid }) {
   res.writeHead(200, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Disposition': `attachment; filename="${name}"`,
-    // ⭐ 009 报告 S4：整份个人数据（任务 / 课表 / 密码库**密文** / AI 记忆明文）的 GET 响应
-    //    必须禁缓存 —— 与整体备份 `core/routes/backup.js` 的响应头同一个口径（那里早就有这条）。
-    //    ⚠️ 共享机器上「登出后磁盘里还留着上一次的导出」正是这条要挡的。
+    // 009 报告 S4：整份个人数据（任务 / 课表 / 密码库**密文** / AI 记忆明文）的 GET 响应
+    // 必须禁缓存 —— 与整体备份 `core/routes/backup.js` 的响应头同一个口径（那里早就有这条）。
     'Cache-Control': 'no-store',
   });
   return res.end(JSON.stringify(dump, null, 2));
@@ -149,8 +100,6 @@ function handleExport({ res, method, uid }) {
  * @param {Object} ctx.res - HTTP 响应对象
  * @param {string} ctx.method - HTTP 方法，非 GET 一律 404
  * @param {URL} ctx.url - 解析好的 URL，查询参数 `q` 为关键词
- * @param {number} ctx.uid - 当前账号 id
- * @returns {void}
  */
 function handleSearch({ res, method, url, uid }) {
   if (method !== 'GET') return notFound(res);
@@ -164,12 +113,10 @@ function handleSearch({ res, method, url, uid }) {
  * @param {Object} ctx.res - HTTP 响应对象
  * @param {string} ctx.method - HTTP 方法，非 GET 一律 404
  * @param {URL} ctx.url - 解析好的 URL，查询参数 `date` 为 `YYYY-MM-DD`（缺省用服务端的今天）
- * @param {number} ctx.uid - 当前账号 id
- * @returns {void}
  */
 function handleTodayCount({ res, method, url, uid }) {
   if (method !== 'GET') return notFound(res);
-  // ⚠️ 默认值走服务端统一的 `todayStr()`（本体在 storage.js），**不再在这里重算一遍本地时间**
+  // 默认值走服务端统一的 `todayStr()`（本体在 storage.js），**不再在这里重算一遍本地时间**
   const date = (url.searchParams.get('date') || todayStr()).trim();
   return json(res, 200, store.todayCounts(uid, date));
 }
@@ -180,7 +127,6 @@ function handleTodayCount({ res, method, url, uid }) {
  * @param {Object} ctx.res - HTTP 响应对象
  * @param {string} ctx.method - HTTP 方法，非 GET 一律 404
  * @param {number} ctx.uid - 当前账号 id
- * @returns {void}
  */
 function handleSummary({ res, method, uid }) {
   if (method !== 'GET') return notFound(res);
@@ -193,9 +139,6 @@ function handleSummary({ res, method, uid }) {
  * @param {Object} ctx.req - HTTP 请求对象
  * @param {Object} ctx.res - HTTP 响应对象
  * @param {Array.<string>} ctx.parts - URL 路径按 `/` 切开后的片段
- * @param {string} ctx.method - HTTP 方法
- * @param {number} ctx.uid - 当前账号 id
- * @returns {void}
  */
 function handleProjects({ req, res, parts, method, uid }) {
   if (method === 'GET' && parts.length === 2) return json(res, 200, store.listProjects(uid));
@@ -216,8 +159,7 @@ function handleProjects({ req, res, parts, method, uid }) {
 
   // project tasks
   if (parts[3] === 'tasks') {
-    // ⚠️ 只读也要校验父项目归属：否则「项目不存在 / 是别人的 / 空项目」都是 200 []，
-    //    越权看起来跟正常一样（§六 #6）。三种情况统一 404，响应逐字一致。
+    // 越权看起来跟正常一样（§六 #6）。三种情况统一 404，响应逐字一致。
     if (method === 'GET' && parts.length === 4) {
       if (!store.ownsProject(uid, pid)) return notFound(res);
       return json(res, 200, store.attachTicks(uid, store.attachBookmarkLinks(uid, store.listProjectTasks(uid, pid)), 'project'));
@@ -252,9 +194,6 @@ function handleProjects({ req, res, parts, method, uid }) {
  * @param {Object} ctx.req - HTTP 请求对象
  * @param {Object} ctx.res - HTTP 响应对象
  * @param {Array.<string>} ctx.parts - URL 路径按 `/` 切开后的片段
- * @param {string} ctx.method - HTTP 方法
- * @param {number} ctx.uid - 当前账号 id
- * @returns {void}
  */
 function handleDaily({ req, res, parts, method, uid }) {
   if (method === 'GET' && parts.length === 2) {
@@ -278,22 +217,8 @@ function handleDaily({ req, res, parts, method, uid }) {
 }
 
 /**
- * 功能：处理 `/api/occurrences` —— ⭐ 0.8.14周期任务的**打卡**接口。
  *
  * 说明：三种动作各一条路，都**先确认这条任务归当前账号**（不存在 / 是别人的统一 404）：
- *      · `GET    /api/occurrences?source=&taskId=` ⇒ 这条任务已打卡的期；
- *      · `POST   /api/occurrences` body `{source, taskId, periodKey}` ⇒ 打卡（**幂等**）；
- *      · `DELETE /api/occurrences?source=&taskId=&periodKey=` ⇒ 取消这一期的打卡。
- *      ⚠️ 打卡走**写闸门**（数据层只读时由 `tickTask` 抛 503），⛔ 不做成「静默成功」。
- *
- * @param {Object} ctx - 分派上下文
- * @param {Object} ctx.req - HTTP 请求对象
- * @param {Object} ctx.res - HTTP 响应对象
- * @param {Object} ctx.url - 解析好的 URL（`GET` / `DELETE` 从查询串取参）
- * @param {Array.<string>} ctx.parts - URL 路径按 `/` 切开后的片段
- * @param {string} ctx.method - HTTP 方法
- * @param {number} ctx.uid - 当前账号 id
- * @returns {void}
  */
 function handleOccurrences({ req, res, url, parts, method, uid }) {
   if (parts.length !== 2) return notFound(res);
@@ -308,7 +233,7 @@ function handleOccurrences({ req, res, url, parts, method, uid }) {
       if (!b) throw httpError(400, 'bad body');
       if (!findOwnTask(uid, b.source, b.taskId)) return notFound(res);
       const n = store.tickTask(uid, b.source, Number(b.taskId), b.periodKey);
-      // ⚠️ 回的是「这次真新增了几行」——重复打卡回 0 但**仍是 200**（幂等：用户点两下不该看到失败）。
+      // 回的是「这次真新增了几行」——重复打卡回 0 但**仍是 200**（幂等：用户点两下不该看到失败）。
       return json(res, 200, { ok: true, added: n });
     });
   }
@@ -323,8 +248,8 @@ function handleOccurrences({ req, res, url, parts, method, uid }) {
 }
 
 module.exports = {
-  // ⭐ 导出键**正好**是 `modules/tasks/module.json` 的 `apiPrefix` 那七个
-  //    （`registry.routesFor()` 会核对：暴露了没声明的键一律启动即抛）
+  // 导出键**正好**是 `modules/tasks/module.json` 的 `apiPrefix` 那七个
+  // （`registry.routesFor()` 会核对：暴露了没声明的键一律启动即抛）
   tasks: handleTasks,
   export: handleExport,
   search: handleSearch,
@@ -332,6 +257,6 @@ module.exports = {
   summary: handleSummary,
   projects: handleProjects,
   daily: handleDaily,
-  // ⭐ 0.8.14：周期任务的打卡（导出键必须与 module.json 的 apiPrefix 逐字一致）
+  // 周期任务的打卡（导出键必须与 module.json 的 apiPrefix 逐字一致）
   occurrences: handleOccurrences,
 };

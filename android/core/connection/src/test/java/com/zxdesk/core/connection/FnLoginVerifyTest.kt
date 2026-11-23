@@ -10,8 +10,6 @@ import java.util.Base64
 /**
  * `user.2fa.loginVerify` 的请求体与信封。
  *
- * 这组用例是 0.2.6 的核心回归：0.2.5 用明文/HMAC 发这个包，服务端要么不处理（验证器一直转），
- * 要么判码错（邮箱码重发多少次都没用）。所以「是不是 encrypted 信封」必须是断言，不是注释。
  */
 class FnLoginVerifyTest {
 

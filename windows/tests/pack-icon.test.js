@@ -1,9 +1,5 @@
 /**
- * 图标流水线护栏（0.1.6 现场：脚本打印了「已写入」，但发出去的包里 exe 还是 Electron 默认图标）。
- *
- * 真因有二，都得用断言钉住：
- * 1. 图标写完之后又跑了一次 pack，exe 被覆盖回默认 —— 所以**顺序**必须是 pack → apply-icon；
- * 2. `resedit` 会「不报错但没写进去」—— 所以 apply-icon 必须**解析产物复核**，失败非零退出。
+ * 图标流水线护栏。
  */
 
 import assert from 'node:assert/strict';

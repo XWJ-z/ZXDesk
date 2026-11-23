@@ -1,12 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：ipc.js
- * 职责：IPC 通道白名单
- *
- * 两条规矩：
- * 1. **只认白名单**里的通道名 —— 壳不能凭字符串调任意主进程能力；
- * 2. **校验来源**：`event.senderFrame.url` 必须是本地壳页面（`file://…/src/shell/index.html`），
- *    远程视图没有 preload，理论上发不出 IPC，但校验不能省（防将来有人手滑加 preload）。
  */
 
 export const CHANNEL = Object.freeze({
@@ -25,8 +18,6 @@ export const MENU_ALLOWLIST = Object.freeze(['file', 'view', 'tools', 'help']);
 /**
  * 信息窗口允许取的两份随包文档。
  *
- * ⛔ 不做「传路径读文件」的通用通道：kind 是枚举，路径由主进程自己拼，
- * 壳里即使被注入脚本也只能取这两份。
  */
 export const DOC_ALLOWLIST = Object.freeze(['eula', 'releases']);
 
@@ -81,10 +72,6 @@ export const ACTION_ALLOWLIST = Object.freeze([
  * @param {object} ipcMain
  * @param {object} deps
  * @param {object} deps.controller
- * @param {(event:object)=>boolean} deps.isTrustedSender
- * @param {(text:string)=>Promise<boolean>} [deps.copyText]
- * @param {object} [deps.window]
- * @param {object} [deps.logger]
  */
 export function registerIpc(ipcMain, deps) {
   const logger = deps.logger || (() => {});

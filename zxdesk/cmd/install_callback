@@ -1,5 +1,83 @@
 #!/bin/bash
 
 ### Called after install.
-# Data and config are auto-initialized by server.js on first startup (SQLite + seed data).
+# 数据与配置由 server.js 首次启动时自动初始化（SQLite + 示例数据）。
+#
+# 向导值只保证作为环境变量提供给**生命周期脚本**（cmd/*）。常驻的 node 进程由 `cmd/main`
+set -u
+
+MODE="${wizard_data_dir_mode:-default}"
+DIR="${wizard_data_dir:-}"
+
+if [ -z "${TRIM_PKGVAR:-}" ]; then
+  echo "install_callback: TRIM_PKGVAR 为空，无法记录数据位置；应用将使用默认位置" >&2
+  exit 0
+fi
+
+FILE="${TRIM_PKGVAR}/install-data-dir"
+
+# 选默认位置（或没选）⇒ 不留文件，`cmd/main` 就用 data-share 那个目录
+if [ "$MODE" != "custom" ]; then
+  rm -f "$FILE" 2>/dev/null
+  exit 0
+fi
+
+# 选了「自定义目录」却什么都没填：这不是错，只是没想好 —— 用默认位置，别让安装卡住
+if [ -z "$DIR" ]; then
+  echo "install_callback: 选了「自定义目录」但没有填路径，改用默认位置" >&2
+  rm -f "$FILE" 2>/dev/null
+  exit 0
+fi
+
+# 收敛：去首尾空白、去掉结尾的斜杠（带不带结尾斜杠是同一个位置）
+DIR="$(printf '%s' "$DIR" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's:/*$::')"
+
+# 单独一个 `/`（或 `///`）会被上面那刀削成空串 —— 补回来，好让它落到下面「系统目录」那条里去说人话
+[ -n "$DIR" ] || DIR="/"
+
+case "$DIR" in
+  /*) : ;;
+  *)
+    echo "install_callback: 自定义数据目录不是绝对路径（\"$DIR\"），改用默认位置" >&2
+    rm -f "$FILE" 2>/dev/null
+    exit 0
+    ;;
+esac
+
+# 拒绝把系统目录当数据目录（真填了这些，装完会把库文件铺在系统盘上，而且卸载也带不走）
+case "$DIR" in
+  / | /bin | /boot | /dev | /etc | /lib | /lib64 | /proc | /root | /run | /sbin | /sys | /usr | /var | /tmp | /lost+found | /vol[0-9] | /vol[0-9][0-9])
+    echo "install_callback: 拒绝把 $DIR 当数据目录（这是系统目录或整个存储卷的根），改用默认位置" >&2
+    rm -f "$FILE" 2>/dev/null
+    exit 0
+    ;;
+esac
+
+# 建目录。失败不阻塞安装 —— 装不上顶多是「用了默认位置」，让安装失败才是真的麻烦。
+if ! mkdir -p "$DIR" 2>/dev/null; then
+  echo "install_callback: 无法创建自定义数据目录 $DIR，改用默认位置" >&2
+  rm -f "$FILE" 2>/dev/null
+  exit 0
+fi
+
+# 交给应用用户。⚠️ 用户可能还没建出来（取决于平台建号时机）⇒ 查了再改，查不到就只留一句日志，
+# 启动时 `cmd/main` 还会再实测一次可写性。
+if id -u zxdesk >/dev/null 2>&1; then
+  if [ "$(stat -c %U "$DIR" 2>/dev/null)" != "zxdesk" ]; then
+    chown zxdesk:zxdesk "$DIR" 2>/dev/null ||
+      echo "install_callback: 无法把 $DIR 的属主改成 zxdesk —— 启动时可能回退到默认位置" >&2
+  fi
+  chmod 750 "$DIR" 2>/dev/null || true
+else
+  echo "install_callback: 系统里还没有 zxdesk 这个用户，跳过属主设置（$DIR）" >&2
+fi
+
+printf '%s\n' "$DIR" >"$FILE" 2>/dev/null || {
+  echo "install_callback: 无法写入 $FILE，改用默认位置" >&2
+  exit 0
+}
+chown zxdesk:zxdesk "$FILE" 2>/dev/null || true
+chmod 644 "$FILE" 2>/dev/null || true
+
+echo "install_callback: 数据位置已记录为 $DIR（$FILE）" >&2
 exit 0

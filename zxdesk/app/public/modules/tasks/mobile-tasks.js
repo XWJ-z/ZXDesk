@@ -2,18 +2,13 @@
  * modules/tasks/mobile-tasks.js —— 任务详情 / 表单 / 写操作
  *
  * 功能：手机版任务的「看」与「改」全部收在这里 ——
- *      `openTask()` 打开任务详情底部弹层；`dailyForm()` / `projectTaskForm()` 分别渲染
- *      日常任务与项目任务的表单并把保存逻辑挂到 `state.sheetSave`；`bindDateMin()` 约束两个日期输入框的先后；
- *      `toggleTask()` / `delTask()` 是完成状态切换与删除这两个写操作。
- *
- * ⭐ 0.5.0：本文件从 `public/mobile/views/tasks.js` **原样搬进任务板模块目录**。
- *    一个模块一个文件夹 —— 这一屏只服务任务板这一个模块，所以它的家是 `modules/tasks/`，
- *    不该留在跨端共用的 `views/` 里。⚠️ 只改了 import 路径与本节注释，渲染逻辑一个字没动。
- *    命名约定（一个模块不止一屏时用 `<端>-<屏名>.js`）见 `modules/tasks/README.md` 与 `07-前端`。
+ * `openTask()` 打开任务详情底部弹层；`dailyForm()` / `projectTaskForm()` 分别渲染
+ * 日常任务与项目任务的表单并把保存逻辑挂到 `state.sheetSave`；`bindDateMin()` 约束两个日期输入框的先后；
+ * `toggleTask()` / `delTask()` 是完成状态切换与删除这两个写操作。
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.15
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/05-任务板.md
  */
 
@@ -25,6 +20,8 @@ import { clock } from '../../core/clock.js';
 import { STATUS } from '../../core/constants.js';
 import { addDays, fmtLong, fmtShort, todayStr } from '../../core/date.js';
 import { $, esc } from '../../core/dom.js';
+// ⭐ 自动草稿：表单键按「新建 / 编辑哪一条」区分，重载后靠登记表把同一张表单再打开
+import { registerResume } from '../../core/draft.js';
 import { missedPeriods, periodsBetween, ruleText, tickProgress } from '../../core/recur.js';
 import { doneInfo, overdueDays, windowState } from '../../core/task.js';
 import { refresh, tasksOf, writable } from '../../mobile/data.js';
@@ -231,7 +228,7 @@ function scopePickHtmlM(id, cur) {
   return `<div class="field"><label>归属</label><select id="${id}">${opts.join('')}</select></div>`;
 }
 
-export function dailyForm(task) {
+export function dailyForm(task, draftKey) {
   const t = task || {};
   openSheet(
     task ? '编辑日常任务' : '新建日常任务',
@@ -252,6 +249,11 @@ export function dailyForm(task) {
      </div></div>`,
     `<button class="btn" type="button" data-act="sheet-close">取消</button>
      <button class="btn primary" type="button" data-act="sheet-save">保存</button>`,
+    {
+      // 日常任务表只有一张表单，新建与编辑分开存（草稿不串到另一条记录上）
+      draft: draftKey || (task && t.id ? `daily-edit:${t.id}` : 'daily-new'),
+      resume: { kind: 'daily-form', payload: { task: task || null } },
+    },
   );
   bindDateMin();
   bindKindM();
@@ -336,7 +338,7 @@ export function dailyForm(task) {
  * @param {(string|number)} [scope] - 这条任务所属的项目 id；缺省回落到 `state.scope`
  * @returns {void}
  */
-export function projectTaskForm(task, scope) {
+export function projectTaskForm(task, scope, draftKey) {
   const t = task || {};
   // ⭐ 0.6.4（任务联动）：`task.draft === true` = **草稿**（从对话里的任务卡片「收进我的任务板」来的）——
   //    不是「编辑一条已有任务」，而是「预填好的新建」：没有 id，保存走 POST。
@@ -375,6 +377,13 @@ export function projectTaskForm(task, scope) {
      </div></div>`,
     `<button class="btn" type="button" data-act="sheet-close">取消</button>
      <button class="btn primary" type="button" data-act="sheet-save">保存</button>`,
+    {
+      // ⚠️ 编辑任务 A 与编辑任务 B 是同一张表单的两次调用 —— 键里必须带 id，
+      //    否则两份草稿会互相覆盖（打开 B 会看到 A 没保存的标题）。
+      // 恢复槽里记着原草稿键时用它（切屏后 `target` 可能已经算成别的值，重算就对不上了）
+      draft: draftKey || (isEdit ? `task-edit:${t.id}` : `task-new:${target}`),
+      resume: { kind: 'task-form', payload: { task: task || null, scope: target } },
+    },
   );
   bindDateMin();
   bindKindM();
@@ -566,6 +575,10 @@ export function bindTaskCardActions() {
   //    （`mobile/data.js` 读 `/api/bootstrap`）一次性装好的，会话期内一直都在。
   bindTaskDraft((d) => projectTaskForm(d));
 }
+
+// 重载恢复：两张任务表单各自登记「用同样的参数再打开一次」（草稿由 `openSheet()` 自动回填）
+registerResume('task-form', (p, key) => projectTaskForm((p && p.task) || undefined, p && p.scope, key));
+registerResume('daily-form', (p, key) => dailyForm((p && p.task) || undefined, key));
 
 /**
  * 功能：约束表单里两个日期输入框的先后 —— 打开时把「截止日期」的下限设为「任务日」，

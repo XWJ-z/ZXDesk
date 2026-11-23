@@ -1,11 +1,5 @@
 /**
  * 下载：真实 socket 跑完整链路。
- *
- * 为什么不用假传输层：断点续传、重定向、流中断这些行为在「真实 socket + 真实字节流」上才成立，
- * 假实现只能验到分支有没有被走到，验不到最后落盘的字节对不对。
- *
- * ⚠️ 不用 `node:http`：本机 Node 22 一 import 它，测试进程收尾就抛 WASM OOM（与用例无关）。
- * 这里走 `tests/helpers/raw-http.js` 的裸 net 实现。
  */
 
 import assert from 'node:assert/strict';

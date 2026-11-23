@@ -2,42 +2,22 @@
 
 /**
  * modules/teamwork/backend/json.js —— 对话四张表的存储原语（好友 / 会话 / 成员 / 消息）的**JSON 版原语**
- *
  * 功能：本模块自己的存储原语（JSON 回退），与另一个后端**同名同参** ——
- *      「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，少一个 / 打错名 / 形参个数不一致 = 启动即抛。
- *
- * ⭐ 0.5.0 模块化重构（方案 `09-模块化重构` §四 第 2 行）：比对的粒度从「两个大文件」下移到**每个模块自己的一对**。
- *    ⚠️ **纯搬运**：方法体是从 `store/backend/json.js` 按片段**逐字节切出来**的，一个字都没重写
- *    （切块前后 sha256 见 0.5.0的提交说明）。
- *
- * ⚠️ ops 里的 `this` 是 **Store 实例**（门面用 `.apply(store, …)` 调用），所以照常访问
- *    `this.db` / `this.data` / `this._saveJson()` / `this._listSql()`。
- *
+ * 「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，少一个 / 打错名 / 形参个数不一致 = 启动即抛。
  * @author zx
  * @date   2026-09-14
- * @since 0.8.13
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md、docs/公共/开发方案/09-模块化重构.md
  */
 
 const { uidOf, nowStamp } = require('../../../core/store/helpers.js');
-// ⭐⭐ 0.8.12：协作五张表搬进本模块后，删项目 / 删任务的**磁盘连带**
-//    要用附件路径助手（与业务层单一出处）。
+// 协作五张表搬进本模块后，删项目 / 删任务的**磁盘连带**
+// 要用附件路径助手（与业务层单一出处）。
 const { removeFileDisk, removeProjectDir } = require('../lib/collab.js');
 
 /**
- * ⭐⭐ **「我清掉的那一段消息」的可见性判据** —— 与 SQLite 同名函数**逐字同一语义**
- *     （形状不同：那边是 SQL 片段，这边是内存里的谓词）。
- *
- * 说明：⚠️ 三个调用者**必须都用这一份**（`listMessages` 的两个游标 / 未读数 / 左栏预览）——
- *      各写一份的后果是「清空后往回翻又能翻出来」这类静默漏洞。
- *      ⚠️⭐ `expires_at` **不参与判定**（它只决定回收站里还显不显示）：
- *      让它参与 ⇒ 30 天后被清掉的消息全部复活。
- *
- * @param {Array.<Object>} cleared - `teamwork_cleared` 的全表行（调用方一次取出，别每条消息扫一遍库）
- * @param {(number|string)} uid - 「我」
- * @param {(number|string)} cid - 会话 id
- * @param {number} msgId - 消息 id
- * @returns {boolean} 这条消息被我清掉了（= 不该出现）返回 true
+ * **「我清掉的那一段消息」的可见性判据** —— 与 SQLite 同名函数**逐字同一语义**
+ * （形状不同：那边是 SQL 片段，这边是内存里的谓词）。
  */
 function isCleared(cleared, uid, cid, msgId) {
   const u = Number(uid);
@@ -53,7 +33,6 @@ function isCleared(cleared, uid, cid, msgId) {
 }
 
 const ops = {
-  // ---- 对话（0.3.5）----
   /**
    * 功能：列出该账号**自己这一侧**的全部好友关系行（含 `pending` / `accepted` / `blocked`）。
    * @param {(number|string)} uid - 用户 id
@@ -81,16 +60,8 @@ const ops = {
    * 功能：把一对账号的好友关系**两行一起**写成同一个状态（不存在则建），返回是否成功。
    *
    * 说明：⭐ SQLite 那边一条 `INSERT … ON CONFLICT` 就够，JSON 这边**必须自己写「查了再改/插」**：
-   *      没有唯一约束兜底，重复插入会让「我的好友列表」里出现两条同一个人。
-   *      两行写在同一份内存数据里、最后只落盘一次，所以不会出现「只写了一半」的裂脑
-   *      （与 SQLite 的事务等价，这是 JSON 后端唯一还能提供的原子性）。
-   *
-   * @param {(number|string)} uid - 一方账号 id
-   * @param {(number|string)} friendId - 另一方账号 id
-   * @param {string} status - 目标状态（`pending` / `accepted` / `blocked`）
-   * @param {number} requestedBy - 发起人账号 id（只在新插入时写入，改状态时**不动它**）
-   * @param {string} stamp - 时间戳
-   * @returns {boolean} 恒为 true
+   * 两行写在同一份内存数据里、最后只落盘一次，所以不会出现「只写了一半」的裂脑
+   * （与 SQLite 的事务等价，这是 JSON 后端唯一还能提供的原子性）。
    */
   setFriendshipPair(uid, friendId, status, requestedBy, stamp) {
     const a = Number(uid);
@@ -145,8 +116,8 @@ const ops = {
    */
   listConversations(uid) {
     const u = Number(uid);
-    // ⭐ 0.7.7：可见性判据（与 SQLite 那条 SQL 逐字同一语义）—— **先取出清理记录**，
-    //    再让「未读数」与「左栏预览」都从**滤掉之后**的那一份里算（不这么做 = 清空后预览还显示旧正文）。
+    // 可见性判据（与 SQLite 那条 SQL 逐字同一语义）—— **先取出清理记录**，
+    // 再让「未读数」与「左栏预览」都从**滤掉之后**的那一份里算（不这么做 = 清空后预览还显示旧正文）。
     const cleared = this.data.teamwork_cleared || [];
     const msgs = (this.data.teamwork_messages || []).filter(
       (x) => !isCleared(cleared, u, x.conversation_id, x.id),
@@ -161,9 +132,8 @@ const ops = {
         const mine = msgs.filter((x) => Number(x.conversation_id) === c.id);
         const last = mine.length ? mine.reduce((a, b) => (b.id > a.id ? b : a)) : null;
         const lastRead = Number(m.last_read_id) || 0;
-        // ⚠️ 与 SQLite 那条子查询**逐字同口径**：自己发的不算未读，**但内置角色（提醒助手）发的算**
-        //    —— 它的 `user_id` 也是会话归属者（见 `insertMessage`），漏掉后半句的表现是
-        //    「提醒到了但红点永远不亮」，而且不报任何错。
+        // 与 SQLite 那条子查询**逐字同口径**：自己发的不算未读，**但内置角色（提醒助手）发的算**
+        // 「提醒到了但红点永远不亮」，而且不报任何错。
         const unread = mine.filter((x) => x.id > lastRead && (uidOf(x) !== u || x.sender_builtin)).length;
         out.push(
           Object.assign({}, c, {
@@ -171,8 +141,7 @@ const ops = {
             unread,
             last_body: last ? last.body : null,
             last_sender_id: last ? uidOf(last) : null,
-            // ⭐ 0.6.x：与 SQLite 那条子查询逐字同一口径 —— 最后一条是不是**内置角色**发的。
-            //    前端据此决定「我：」前缀与「算不算我自己发的」，少它会让提醒预览写成「我：【上课提醒】…」。
+            // 0.6.x：与 SQLite 那条子查询逐字同一口径 —— 最后一条是不是**内置角色**发的。
             last_sender_builtin: last ? last.sender_builtin || null : null,
             last_created_at: last ? last.created_at : null,
           }),
@@ -292,9 +261,9 @@ const ops = {
    * @returns {boolean} 更新到行则为 true
    */
   updateMemberRead(uid, cid, lastReadId) {
-    // ⚠️ 这里**不能**写 `this.getMember(...)`：op 里的 `this` 是 Store 实例，而 `getMember`
-    //    挂在 `ops` 上、只能通过 `this._bk.getMember(...)` 取到 —— 直接写是
-    //    `this.getMember is not a function`（原语层内部一律内联，见 sqlite.js 同名 op 的注释）。
+    // 这里**不能**写 `this.getMember(...)`：op 里的 `this` 是 Store 实例，而 `getMember`
+    // 挂在 `ops` 上、只能通过 `this._bk.getMember(...)` 取到 —— 直接写是
+    // `this.getMember is not a function`（原语层内部一律内联，见 sqlite.js 同名 op 的注释）。
     const m = (this.data.teamwork_members || []).find(
       (x) => uidOf(x) === Number(uid) && Number(x.conversation_id) === Number(cid),
     );
@@ -306,18 +275,15 @@ const ops = {
   },
 
   /**
-   * 功能：按游标取一个会话的消息 —— `afterId` 给增量补齐（升序），否则取 `beforeId` 之前的历史（倒序）。
    * @param {(number|string)} cid - 会话 id
    * @param {?number} beforeId - 取比它更早的消息
    * @param {?number} afterId - 取比它更新的消息
-   * @param {number} limit - 条数上限
-   * @returns {Array.<Object>} 消息行数组
    */
   listMessages(cid, beforeId, afterId, limit, uid) {
     const c = Number(cid);
     const n = Number(limit) || 50;
-    // ⭐ 0.8.12：与 SQLite 同名 op **同列同序** —— ⛔ 永不把 `image`
-    //    （整串 data URL）带出去，只回 `has_image`。JSON 这边没有列清单，靠这道投影实现。
+    // 与 SQLite 同名 op **同列同序** —— ⛔ 永不把 `image`
+    // （整串 data URL）带出去，只回 `has_image`。JSON 这边没有列清单，靠这道投影实现。
     const shape = (m) => ({
       id: m.id,
       user_id: m.user_id,
@@ -330,7 +296,6 @@ const ops = {
       has_image: m.image == null || m.image === '' ? 0 : 1,
       created_at: m.created_at,
     });
-    // ⭐ 0.7.7：两个游标都服从可见性判据（否则「清空后往回翻又能翻出来」）
     const cleared = this.data.teamwork_cleared || [];
     const all = (this.data.teamwork_messages || []).filter(
       (m) => Number(m.conversation_id) === c && !isCleared(cleared, uid, m.conversation_id, m.id),
@@ -354,12 +319,6 @@ const ops = {
    * @param {(number|string)} cid - 会话 id
    * @param {string} body - 消息正文
    * @param {string} createdAt - 发送时间戳
-   * @param {?string} [senderBuiltin] - 有值 = 这条是**内置角色**发的（0.6.x）；普通消息传 null / 不传。
-   *      ⚠️ `user_id` 照样写会话归属者 —— 与 SQLite 同名 op 逐字同一口径。
-   * @param {?string} [kind] - 消息种类（0.6.4，任务联动）：`'task_card'` = 任务卡片；普通消息传 null。
-   * @param {?string} [meta] - 卡片载荷（**已序列化好的 JSON 文本**）；`kind` 为空时必须为空。
-   *      ⚠️ 这里不解析它 —— 与 SQLite 同名 op 逐字同一口径。
-   * @returns {Object} 新消息行（带 `id`）
    */
   insertMessage(uid, cid, body, createdAt, senderBuiltin, kind, meta) {
     const from = senderBuiltin === undefined || senderBuiltin === null ? null : String(senderBuiltin);
@@ -429,7 +388,6 @@ const ops = {
   },
 
   /**
-   * 功能：列出该账号**自己发出的**全部消息 —— ⚠️ 对方的消息一条都不许进导出。
    * @param {(number|string)} uid - 用户 id
    * @returns {Array.<Object>} 消息行数组（按 id 升序）
    */
@@ -440,17 +398,9 @@ const ops = {
   /**
    * 功能：取本模块进**个人备份**的那一份数据（只带我这一侧的四张表）。
    *
-   * 说明：⭐ 这是 0.5.0唯一新增的**新代码**：深拷贝 + 归属过滤 + 排序**逐字照抄**
-   *      改造前 `exportAll()` 里那几行（连 `cp()` / `mine()` 两个局部小工具都照搬），一个字没重写。
-   *      ⚠️ **「只带我这一侧」是 的硬规矩**：好友关系（我发的与我收的都算我的关系行）、
-   *      我参与的会话、我在各会话里的已读游标、以及**我发出的消息** ——
-   *      **对方的消息一条都不许进来**。
-   *      ⚠️ `teamworkConvs` 依赖 `teamworkMembers` 算出来的 `myConvIds`，**顺序不能换**
-   *      （SQLite 版靠 JOIN 一步做到，见那边同名 op 的说明）。
-   *
-   * @param {(number|string)} uid - 用户 id
-   * @returns {{teamworkFriends: Array.<Object>, teamworkConvs: Array.<Object>,
-   *      teamworkMembers: Array.<Object>, teamworkMsgs: Array.<Object>}} 备份里的那四个键
+   * 改造前 `exportAll()` 里那几行（连 `cp()` / `mine()` 两个局部小工具都照搬），一个字没重写。
+   * **「只带我这一侧」是 的硬规矩**：好友关系（我发的与我收的都算我的关系行）、
+   * 我参与的会话、我在各会话里的已读游标、以及**我发出的消息** ——
    */
   exportTeamwork(uid) {
     const d = this.data || {};
@@ -465,7 +415,7 @@ const ops = {
       .filter((c) => myConvIds.includes(c.id))
       .sort((a, b) => a.id - b.id);
     const teamworkMsgs = mine(d.teamwork_messages).sort((a, b) => a.id - b.id);
-    // ⭐ 0.7.7：第五个键 —— 我清掉了哪几段（「我这一侧的读取状态」，与已读游标同类）
+    // 第五个键 —— 我清掉了哪几段（「我这一侧的读取状态」，与已读游标同类）
     const teamworkCleared = mine(d.teamwork_cleared).sort((a, b) => a.id - b.id);
     return { teamworkFriends, teamworkConvs, teamworkMembers, teamworkMsgs, teamworkCleared };
   },
@@ -476,7 +426,6 @@ const ops = {
    * 说明：与 SQLite 同名 op 逐字同一口径（懒创建 ⇒「没有」是常态）。按 `user_id` 限定。
    * @param {(number|string)} uid - 用户 id
    * @param {string} key - 内置角色标识（`'reminder'`）
-   * @returns {?Object} 会话行；未命中为 null
    */
   findBuiltinConversation(uid, key) {
     const u = Number(uid);
@@ -490,17 +439,8 @@ const ops = {
    * 功能：往提醒流水里写一行（**幂等记账**），已存在同键行时返回 null 表示「这个时刻已经发过」。
    *
    * 说明：⭐ SQLite 那边靠 `UNIQUE(...)` + `INSERT OR IGNORE` 一步做到；JSON 这边**没有唯一约束**，
-   *      必须自己「查了再插」。两边的对外语义完全一致：**返回 null 就是跳过**。
-   *      ⚠️ 判据必须与建表时的 `UNIQUE(user_id, kind, ref_key, fire_at)` 四列逐字一致 ——
-   *      少比一列就是「同一分钟重复发」，多比一列就是「该发的不发」，而且两种都不报错。
-   *
-   * @param {(number|string)} uid - 收件账号 id
-   * @param {string} kind - 提醒类别
-   * @param {string} refKey - 这件事的稳定标识
-   * @param {string} fireAt - **分钟级**触发时刻 `YYYY-MM-DD HH:MM`
-   * @param {string} firedAt - 实际发出的时刻
-   * @param {string} createdAt - 记账行创建时刻
-   * @returns {?Object} 新插入的行（带 `id`）；已存在时返回 null
+   * 必须自己「查了再插」。两边的对外语义完全一致：**返回 null 就是跳过**。
+   * 判据必须与建表时的 `UNIQUE(user_id, kind, ref_key, fire_at)` 四列逐字一致 ——
    */
   insertReminder(uid, kind, refKey, fireAt, firedAt, createdAt) {
     const u = Number(uid);
@@ -556,18 +496,12 @@ const ops = {
    * 功能：把该账号的提醒偏好**整份写入**（一人一行，不存在则建），返回写入后的行。
    *
    * 说明：⭐ 与 SQLite 那条 `ON CONFLICT(user_id) DO UPDATE` 逐字同一语义：**一人一行**。
-   *      JSON 这边没有唯一约束，所以「先找、找到就改、找不到就插」必须自己写全 ——
-   *      少了「找到就改」会让同一个账号攒出多行，而 `getReminderPrefs()` 只认第一行，
-   *      表现是「改了设置不生效」且不报错。
-   *
-   * @param {(number|string)} uid - 用户 id
-   * @param {Object} values - 恰好五个键：`enabled` / `course_lead_minutes` / `task_at` / `overdue_at` / `due_lead_minutes`
-   * @param {string} stamp - 更新时间戳
-   * @returns {Object} 写入后的偏好行（含 `id` / `user_id`）
+   * JSON 这边没有唯一约束，所以「先找、找到就改、找不到就插」必须自己写全 ——
+   * 表现是「改了设置不生效」且不报错。
    */
   upsertReminderPrefs(uid, values, stamp) {
     const u = Number(uid);
-    // ⚠️ 与 SQLite 同名 op 逐字同一份清单（含 `care_enabled`）—— 两个后端必须同名同参地成对。
+    // 与 SQLite 同名 op 逐字同一份清单（含 `care_enabled`）—— 两个后端必须同名同参地成对。
     const cols = [
       'enabled',
       'course_lead_minutes',
@@ -590,7 +524,6 @@ const ops = {
     return row;
   },
 
-  // ---- 好友设置（0.7.7）----
   /**
    * 功能：取该账号的好友设置行；没有则为 null（缺省值由**业务层**给）。
    * 说明：与 SQLite 同名 op 逐字同一口径（**不兜默认值**）。
@@ -605,14 +538,8 @@ const ops = {
    * 功能：把该账号的好友设置**整份写入**（一人一行，不存在则建），返回写入后的行。
    *
    * 说明：⭐ JSON 这边没有唯一约束 ⇒ 必须自己写全「先找、找到就改、找不到就插」
-   *      （与 `upsertReminderPrefs()` 同一条理由：少了「找到就改」会让同一个账号攒出多行，
-   *      而 `getFriendPrefs()` 只认第一行 ⇒ 表现是「改了设置不生效」且不报错）。
-   *      ⚠️ 列名清单与 SQLite 同名 op 逐字同一份。
-   *
-   * @param {(number|string)} uid - 用户 id
-   * @param {Object} values - 好友设置的键（目前只有 `auto_accept_friend`）
-   * @param {string} stamp - 更新时间戳
-   * @returns {Object} 写入后的设置行（含 `id` / `user_id`）
+   * 而 `getFriendPrefs()` 只认第一行 ⇒ 表现是「改了设置不生效」且不报错）。
+   * 列名清单与 SQLite 同名 op 逐字同一份。
    */
   upsertFriendPrefs(uid, values, stamp) {
     const u = Number(uid);
@@ -630,7 +557,6 @@ const ops = {
     return row;
   },
 
-  // ---- 聊天记录清理（0.7.7）----
   /**
    * 功能：列出该账号**全部**清理记录（按 id 升序）。
    * 说明：⚠️ 与 SQLite 同名 op 一样**不做过期过滤**（`expires_at` 不参与可见性，见 `isCleared()`）。
@@ -667,11 +593,8 @@ const ops = {
    * 功能：删掉一条清理记录（= **恢复**那一段消息），返回是否真的删到了行。
    *
    * 说明：⭐⭐ 与 SQLite 同名 op 逐字同一语义：**删行的唯一合法理由是「用户点了恢复」**
-   *      （删行 = 取消隐藏 = 消息复活），⛔ 绝不为「过期清理」去删它。
+   * （删行 = 取消隐藏 = 消息复活），⛔ 绝不为「过期清理」去删它。
    *
-   * @param {(number|string)} uid - 用户 id
-   * @param {(number|string)} id - 清理记录 id
-   * @returns {boolean} 删到行则为 true
    */
   deleteCleared(uid, id) {
     const all = this.data.teamwork_cleared || [];
@@ -686,12 +609,8 @@ const ops = {
    * 功能：取一个会话里**落在某个时刻区间内**的消息 id 区间与条数。
    *
    * 说明：⭐ 与 SQLite 同名 op 逐字同一口径：**用真实命中的 id 区间**，时刻按字典序比，
-   *      `fromAt` / `toAt` 为 null 表示这一端不限。
+   * `fromAt` / `toAt` 为 null 表示这一端不限。
    *
-   * @param {(number|string)} cid - 会话 id
-   * @param {?string} fromAt - 起始时刻（含）；null = 不限
-   * @param {?string} toAt - 结束时刻（含）；null = 不限
-   * @returns {{min: ?number, max: ?number, count: number}} 最小 / 最大消息 id 与条数
    */
   msgIdRange(cid, fromAt, toAt) {
     const c = Number(cid);
@@ -721,12 +640,8 @@ const ops = {
    * 功能：删账号第一步：**会话先过户**给还留在会话里的那个人（含语义与理由见 SQLite 版，两者逐字对齐）。
    *
    * 说明：⚠️ JSON 这一侧与 SQLite **同语义、不同写法**（两后端成对）——
-   *      直接改内存里那一行的 `user_id`，没有 SQL。⚠️ 仍然必须发生在**通用清空之前**。
+   * 直接改内存里那一行的 `user_id`，没有 SQL。⚠️ 仍然必须发生在**通用清空之前**。
    *
-   * ⭐ 0.8.12：与 `teamworkPurgeOnDelete` 一起从核心的 `deleteUser` 搬进本模块。
-   *
-   * @param {number} uid - 即将注销的账号 id
-   * @returns {void}
    */
   teamworkTransferOnDelete(uid) {
     const u = Number(uid);
@@ -742,7 +657,6 @@ const ops = {
   /**
    * 功能：删账号第二步：好友补刀 ＋ 收拾悬空引用（含理由与顺序约束见 SQLite 版，两者逐字对齐）。
    *
-   * ⚠️ 三句的顺序就是 SQLite 版三句的顺序，⛔ 不许换（换了的后果见那边的方法说明）。
    *
    * @param {number} uid - 即将注销的账号 id
    * @returns {void}
@@ -761,8 +675,7 @@ const ops = {
     this.data.teamwork_conversations = (this.data.teamwork_conversations || []).filter((c) => liveConvs.has(c.id));
   },
 
-  // ==== ⭐⭐ 0.8.12：协作原语（从 `modules/tasks/backend/json.js` 整批搬来）====
-  //    ⚠️ 判权逻辑一条都不在这一层（见 sqlite.js 同段的说明）。
+  // 判权逻辑一条都不在这一层（见 sqlite.js 同段的说明）。
 
   /**
    * 功能：列出「我是成员」的那些**共享项目**（不含我自己拥有的）。
@@ -933,7 +846,6 @@ const ops = {
    * @param {(number|string)} newOwnerId - 新所有者账号 id
    * @returns {boolean} 项目存在且过户成功则为 true
    * 说明：⚠️ 为什么任务行的 `user_id` 也要改、为什么负责人（`assignee_id`）与成员名单一个字不动 ——
-   *      见 sqlite.js 同名 op 的说明（两后端必须同语义）。
    */
   transferProject(projectId, newOwnerId) {
     const pid = Number(projectId);
@@ -974,12 +886,10 @@ const ops = {
 
   /**
    * 功能：删除**我自己**的一条评论（并**连带删掉这条评论的附件**：文件行 ＋ 磁盘文件）；
-   *      返回是否真的删掉了一行。
+   * 返回是否真的删掉了一行。
    * @param {(number|string)} id - 评论 id
    * @param {(number|string)} userId - 必须是作者
    * @returns {boolean} 行是否真的被删掉
-   * 说明：⚠️ 带作者过滤是判权的第二道保险（第一道在业务层）。⭐ 0.8.12 · 2g 连带删附件 ——
-   *      与 SQLite 版同一条口径（只删 `comment_id` 等于这条评论的，同任务的其他附件不动）。
    */
   deleteComment(id, userId) {
     const before = (this.data.project_comments || []).length;
@@ -988,7 +898,7 @@ const ops = {
     );
     const removed = this.data.project_comments.length < before;
     if (removed) {
-      // ⚠️ 先挡 null / ''（`Number(null) === 0` 是有限数，会误伤没挂评论的附件）。
+      // 先挡 null / ''（`Number(null) === 0` 是有限数，会误伤没挂评论的附件）。
       const gone = (this.data.project_files || []).filter(
         (f) => f.comment_id != null && f.comment_id !== '' && Number(f.comment_id) === Number(id),
       );
@@ -1063,7 +973,7 @@ const ops = {
    * 功能：给 `task_reports` 的老行补 `project_id`（按 `task_id` 反查 `project_tasks.project_id`）。
    * @returns {number} 受影响的行数
    * 说明：⚠️ 幂等（补过的行不再处理）、找不到对应任务的行保持 NULL（不猜、不硬塞）；
-   *      只处理 `task_source='project_tasks'`。见 sqlite.js 同名 op 的说明。
+   * 只处理 `task_source='project_tasks'`。见 sqlite.js 同名 op 的说明。
    */
   backfillReportProjects() {
     let n = 0;
@@ -1085,7 +995,7 @@ const ops = {
    * @param {(number|string)} projectId - 项目 id
    * @returns {number} 受影响的行数
    * 说明：⚠️ **匹配不上不改写**（`assignee_id` 留 NULL）；幂等判据钉在 `assignee_id == null` 上。
-   *      见 sqlite.js 同名 op 的说明。
+   * 见 sqlite.js 同名 op 的说明。
    */
   backfillProjectAssignees(projectId) {
     let n = 0;
@@ -1106,7 +1016,7 @@ const ops = {
 
   /**
    * 功能：与 SQLite 版同名同参 —— JSON 回退后端**没有表结构约束**（NOT NULL / CHECK 都不存在），
-   *      所以这里恒为无操作。保留这个 op 只为满足「两后端同名同参」（`assertOpsContract()`）。
+   * 所以这里恒为无操作。保留这个 op 只为满足「两后端同名同参」（`assertOpsContract()`）。
    * @returns {boolean} 恒为 false
    */
   ensureReportFlowSchema() {
@@ -1117,8 +1027,7 @@ const ops = {
    * 功能：删项目时**连带清协作那张公共数据**（状态配置 / 评论 / 附件行 ＋ 磁盘目录）—— 删项目连带的一处出口。
    * @param {(number|string)} projectId - 项目 id
    * @returns {void}
-   * 说明：⭐⭐ 0.8.12：与 SQLite 版同名同参、同语义 —— 表名与磁盘布局只在本模块一处，
-   *      `tasks` 的 `deleteProject()` 只负责在项目行真被删掉时经 `_bk` 调它。
+   * `tasks` 的 `deleteProject()` 只负责在项目行真被删掉时经 `_bk` 调它。
    */
   deleteProjectCollabData(projectId) {
     const id = Number(projectId);
@@ -1133,8 +1042,7 @@ const ops = {
    * 功能：删项目任务时**连带清它的任务级协作数据**（评论行 / 附件行 ＋ 磁盘文件）—— 删任务连带的一处出口。
    * @param {(number|string)} taskId - 项目任务 id
    * @returns {void}
-   * 说明：⭐⭐ 0.8.12：与 SQLite 版同名同参、同语义 —— 项目级评论（`task_id` 为 NULL）与
-   *      同任务其他附件（`comment_id` 指别处）一个字不动。
+   * 同任务其他附件（`comment_id` 指别处）一个字不动。
    */
   deleteTaskCollabData(taskId) {
     const id = Number(taskId);
@@ -1149,13 +1057,12 @@ const ops = {
     this._saveJson();
   },
 
-  // ==== 0.8.12：AI 助手会话并进对话两张表 —— 与 SQLite 同名同参同语义 ====
 
   /**
    * 功能：存量 AI 会话的**一次性搬迁**（JSON 后端）—— 先体检、整份提交、幂等、老表保留。
    * 说明：⚠️ JSON 回退后端**没有真事务**，所以「整份回滚」用「先把全部校验做完、再整体赋值、
-   *      赋值失败就把旧数组原样换回去」近似 —— 与 SQLite 的 `BEGIN / COMMIT / ROLLBACK` 等价。
-   *      ⛔ 老表 `ai_chats` / `ai_messages` 一个字都不删、不改（退路）。
+   * 赋值失败就把旧数组原样换回去」近似 —— 与 SQLite 的 `BEGIN / COMMIT / ROLLBACK` 等价。
+   * 老表 `ai_chats` / `ai_messages` 一个字都不删、不改（退路）。
    * @returns {{status: string, migrated: number, conversations: number, reason: string}} 见 SQLite 版
    */
   migrateAiChatSessions() {
@@ -1244,12 +1151,6 @@ const ops = {
    * @param {(number|string)} cid - 会话 id
    * @param {string} body - 正文
    * @param {string} createdAt - 时间戳
-   * @param {?string} senderBuiltin - `'ai'` / null
-   * @param {?string} kind - 消息种类
-   * @param {?string} meta - 卡片快照 JSON 文本
-   * @param {?string} image - 整串 data URL
-   * @param {?number} segment - 段号
-   * @returns {{id: number}} 新消息 id
    */
   insertBuiltinChatMessage(uid, cid, body, createdAt, senderBuiltin, kind, meta, image, segment) {
     const row = {
@@ -1280,15 +1181,13 @@ const ops = {
    * @param {(number|string)} cid - 会话 id
    * @param {?number} beforeId - 游标
    * @param {number} limit - 条数上限
-   * @param {?number} segment - 只取这一段；null = 全部
-   * @returns {Array.<Object>} 消息行（id 降序）
    */
   listBuiltinChatMessages(uid, cid, beforeId, limit, segment) {
     const u = Number(uid);
     const c = Number(cid);
     const seg = segment ? Number(segment) : null;
-    // ⭐ 0.8.12：AI 会话的读口也要过「我清掉的那一段」这道闸
-    //    —— 与 SQLite 的 `clearedVisible()` 同一判据（这里按 id 区间过滤）。
+    // AI 会话的读口也要过「我清掉的那一段」这道闸
+    // —— 与 SQLite 的 `clearedVisible()` 同一判据（这里按 id 区间过滤）。
     const cleared = (this.data.teamwork_cleared || []).filter(
       (r) => Number(r.user_id) === u && Number(r.conversation_id) === c,
     );
@@ -1342,13 +1241,12 @@ const ops = {
    * @param {(number|string)} cid - 会话 id
    * @param {number} segment - 段号
    * @param {number} limit - 条数上限
-   * @returns {Array.<Object>} 消息行（id 降序）
    */
   listBuiltinChatContext(uid, cid, segment, limit) {
     const u = Number(uid);
     const c = Number(cid);
     const seg = Number(segment);
-    // ⭐ 0.8.12：喂模型的上下文同样不该带「我已经清掉的那一段」。
+    // 喂模型的上下文同样不该带「我已经清掉的那一段」。
     const cleared = (this.data.teamwork_cleared || []).filter(
       (r) => Number(r.user_id) === u && Number(r.conversation_id) === c,
     );
@@ -1405,7 +1303,6 @@ const ops = {
    * @param {(number|string)} cid - 会话 id
    * @param {number} id - 消息 id
    * @param {string} meta - 新的快照 JSON 文本
-   * @returns {number} 影响行数
    */
   setBuiltinChatMessageMeta(uid, cid, id, meta) {
     const u = Number(uid);

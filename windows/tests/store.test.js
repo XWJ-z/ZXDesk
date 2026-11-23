@@ -32,7 +32,7 @@ test('打包态：不可写 ⇒ 回落 LOCALAPPDATA 并给提示（别放 Progra
     canWrite: CANNOT,
   });
   assert.equal(result.mode, 'fallback');
-  // 0.2.2 起兜底口径统一成 …\ZXDesk\data（与安装程序默认值一致；以前是上一级，install.ini
+  // 起兜底口径统一成 …\ZXDesk\data（与安装程序默认值一致；以前是上一级，install.ini
   // 一丢就会换到另一个空目录，用户看着像「数据没了」）
   assert.equal(result.dir, path.join('C:\\Users\\x\\AppData\\Local', 'ZXDesk', 'data'));
   assert.match(result.warning, /LOCALAPPDATA/);

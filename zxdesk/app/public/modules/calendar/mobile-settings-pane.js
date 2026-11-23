@@ -1,22 +1,13 @@
 /**
- * modules/calendar/mobile-settings-pane.js —— 手机版：设置页「日历」块里的**那颗药丸**（0.8.7）
+ * modules/calendar/mobile-settings-pane.js —— 手机版：设置页「日历」块里的**那颗药丸**
  *
  * 功能：这是 `core/slots.js` 的**插槽片段**（槽名 `settings-pane`）—— 由手机版设置页通过
- *      `slotPaneDefs()` + `mountModuleSlot(box, 'mobile', 'calendar', 'settings-pane', ctx)` 动态挂载。
- *      内容只有**一行**：`默认使用日历视图` ＋ 右侧一颗药丸开关。
- *
- * ⭐ 与电脑端那张片段的**语义逐条同构**（一行、点整行翻开关、值走 `./prefs.js`），
- *    只有**版式**各写一份：电脑端用设置页现成的 `.set-switch`，
- *    手机端用本端自己的 `.cal-pref` / `.cal-pref-pill`（`mobile/app.css` 里那一段）。
- *    ⚠️ 两端文案**逐字一致**——「打开之后，进……默认停在日历；关掉就默认停在列表」
- *    这一句在两张片段里必须一字不差（`module-ui.test.js` 会逐字比对 `desc` / `tip`，
- *    而这一处是片段自己写的文案，属于同一条纪律的手工延伸）。
- *
- * ⚠️ 点整行翻开关（与手机端「模块功能」那些行同一手法），⛔ 不给药丸单独挂监听。
+ * `slotPaneDefs()` + `mountModuleSlot(box, 'mobile', 'calendar', 'settings-pane', ctx)` 动态挂载。
+ * 内容只有**一行**：`默认使用日历视图` ＋ 右侧一颗药丸开关。
  *
  * @author zx
  * @date   2026-09-29
- * @since 0.8.7
+ * @since 0.9.7
  * 相关：docs/公共/开发方案/26-看板日历视图.md、docs/公共/架构文档/07-前端-电脑版与手机版.md、13-决策记录.md（决策 77）
  */
 
@@ -66,7 +57,7 @@ export function render() {
       // ⚠️ 画的是**服务端确认之后**的值（不是「点一下先翻过去」）：存失败时不会停在假状态
       cur = await writeDefaultView(cur === VIEW_CAL ? VIEW_LIST : VIEW_CAL);
       paint();
-      // ⭐ 0.8.7 修订（「设置里把日历视图设成默认之后，进首页看板是**从列表视图
+      // 修订（「设置里把日历视图设成默认之后，进首页看板是**从列表视图
       //    闪现到日历视图**」）：改完**立刻**把宿主的「当前视图」也拨过去 ——
       //    否则回「今天」时宿主还按内存里那个旧值先画一遍列表，等看板数据回来才翻到日历，
       //    那一次"翻"正是看到的闪。

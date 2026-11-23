@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：UpdateState.kt
- * 职责：抽屉「版本与更新」读取的状态与主动作
  */
 
 package com.zxdesk.app.update
@@ -9,7 +7,6 @@ package com.zxdesk.app.update
 /**
  * 版本与更新在界面上的阶段。
  *
- * ⛔ 别把「检查中」和「下载中」合成一个布尔量：两者的按钮、进度条与可取消性都不一样。
  */
 enum class UpdatePhase {
     /** 还没查过（或静默检查失败，界面上仍是「检查更新」）。 */
@@ -29,7 +26,6 @@ enum class UpdatePhase {
 /**
  * 抽屉里「版本与更新」要做的事都从这里读。
  *
- * [progress] 为 null = 还不知道总大小（服务端没给 fileSize 时），界面用不定进度条。
  */
 data class UpdateState(
     val phase: UpdatePhase = UpdatePhase.IDLE,

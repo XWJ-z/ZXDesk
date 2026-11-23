@@ -1,13 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：notice.js
- * 职责：公告：拉取 `/api/notices/<platform>`、校验、本地缓存、已读记录
- *
- * 与「版本更新」的区别：公告是纯文本内容，一条坏数据不该让整屏消失 ⇒
- * 逐条校验，坏条目跳过并记日志（更新清单则相反：任何一项不合格都整份拒收）。
- *
- * 已读不落在这里：由调用方（controller）读写偏好，本模块只负责算「还有几条没读」。
- * 这样「已读」跟着用户走，缓存文件被删也不会把老公告再弹一遍。
  */
 
 import fs from 'node:fs';
@@ -27,12 +19,10 @@ const MAX_CONTENT = 20_000;
 /**
  * 顶置公告（菜单栏公告条）的文案上限。
  * 公告条宽度受菜单栏限制（客户端 420px ≈ 30 字），文案再长也只能显示开头，
- * ⇒ 服务端就该写短句；这里截断是兜底，⛔ 不是鼓励写长句。
  */
 const MAX_MARQUEE = 200;
 
 /**
- * 校验并规整公告响应。
  * @param {unknown} payload
  * @returns {{ok:true, items:object[], updated:string, skipped:number}|{ok:false, kind:'invalid', message:string}}
  */
@@ -142,11 +132,6 @@ export class NoticeService {
    * @param {object} input
    * @param {string} input.apiUrl
    * @param {Function} input.fetchImpl
-   * @param {string} input.file - 缓存文件（`data/notices-cache.json`）
-   * @param {string[]} [input.readIds] - 已读的公告 id
-   * @param {(level:'info'|'warn', message:string)=>void} [input.log]
-   * @param {()=>void} [input.onState]
-   * @param {number} [input.timeoutMs]
    */
   constructor(input) {
     this.apiUrl = String(input.apiUrl || '');
@@ -237,12 +222,11 @@ export class NoticeService {
     if (result.skipped > 0) this.log('warn', `公告里有 ${result.skipped} 条字段不合格，已跳过`);
     this.items = result.items;
     // 公告条文案：优先顶置公告；旧服务端（响应里没有 marquee 字段）用最新一条公告标题顶上，
-    // 否则升级客户端后公告条会一直空着，看起来像坏了。新服务端但没配 ⇒ 空（不显示公告条）。
     this.marquee = result.marquee;
     this.marqueeSource = result.marquee ? 'pinned' : result.hasMarquee ? 'none' : 'latest';
     if (this.marqueeSource === 'latest') this.marquee = this.items[0]?.title || '';
-    // ⚠️ 先 applyItems 再写缓存：缓存里的 `updated` 取的是 state 的值，
-    //    顺序反了会把「上一批」的时间戳写进去（下次启动读缓存永远是旧的）。
+    // 先 applyItems 再写缓存：缓存里的 `updated` 取的是 state 的值，
+    // 顺序反了会把「上一批」的时间戳写进去（下次启动读缓存永远是旧的）。
     this.applyItems(result.updated);
     this.writeCache();
     this.log(

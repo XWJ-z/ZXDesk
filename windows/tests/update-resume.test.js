@@ -1,10 +1,5 @@
 /**
- * 收尾体检发现的两条真问题（真机跑之前先在真 socket 上钉住）。
- *
- * 1. 服务端「正常收尾」但字节不够（断流 / 被杀）：以前流 end 得像正常结束，后面的
- *    「大小不符」又被当成确定性问题直接放弃 ⇒ 断一次网就得整包重下，断两次就 give-up。
- *    现在：收的字节少于声明的 ⇒ 传输不完整，保留 .part 续传。
- * 2. 停手（give-up）时 .part 会留在数据目录里，可能有 150 MB。现在停手一律清干净。
+ * 收尾体检发现的两条真问题。
  */
 
 import assert from 'node:assert/strict';
@@ -62,8 +57,7 @@ test('下载中途断流（响应头说满、实际只给一半）：保留 .par
   const server = await startRawServer((req, res) => {
     hits += 1;
     const range = req.headers.range;
-    // ⚠️ 这个桩必须「只有带 Range 才给剩下的」——否则「不带续传、从头重下」也能歪打正着成功，
-    //    测试就验不出「短读被当成致命错误」这个 bug 了。
+    // 测试就验不出「短读被当成致命错误」这个 bug 了。
     if (!range) {
       res.writeHead(200, { 'content-length': String(bytes.length) });
       res.end(bytes.subarray(0, 7));

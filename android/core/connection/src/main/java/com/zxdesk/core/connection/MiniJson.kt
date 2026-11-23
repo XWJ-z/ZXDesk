@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：MiniJson.kt
- * 职责：极简只读 JSON 解析（RFC 8259 子集）
  */
 
 package com.zxdesk.core.connection
@@ -9,9 +7,6 @@ package com.zxdesk.core.connection
 /**
  * 极简只读 JSON（RFC 8259 子集）—— 为此引 Gson/Moshi 不值当。
  *
- * `core/connection` 是纯 Kotlin/JVM 模块，用不了 Android 专有的 `org.json`；
- * 这里只实现 FNID 查询需要的部分：对象 / 数组 / 字符串 / 数字 / 布尔 / null。
- * 返回类型：`Map<String, Any?>` / `List<Any?>` / `String` / `Double` / `Boolean` / `null`。
  */
 object MiniJson {
     /** 写 JSON 字符串用：加引号并按 RFC 8259 转义。 */

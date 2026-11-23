@@ -7,8 +7,6 @@ import org.junit.Test
 /**
  * 「要不要更新」的判据。
  *
- * 最容易错的两处：① 本机已经比清单新时不能提示「更新」（否则等于引导降级）；
- * ② `force` 只在确实有新版时才谈强制，否则最新版用户会被拦住。
  */
 class UpdateRulesTest {
 
@@ -42,7 +40,6 @@ class UpdateRulesTest {
     @Test
     fun `同版本与旧清单都不算有新版`() {
         assertFalse(UpdateRules.isNewerThan(manifest("0.2.13", 15), "0.2.13", 15))
-        // ⛔ 本机比清单新时也不能提示：否则就是引导用户降级
         assertFalse(UpdateRules.isNewerThan(manifest("0.2.11", 13), "0.2.13", 15))
     }
 
@@ -55,7 +52,6 @@ class UpdateRulesTest {
     fun `只有 versionName 时按名字判`() {
         assertTrue(UpdateRules.isNewerThan(manifest("0.2.14"), "0.2.13", 15))
         assertFalse(UpdateRules.isNewerThan(manifest("0.2.13"), "0.2.13", 15))
-        // 0.2.9 的字符串序在 0.2.13 之后，按字符串比会得出「有新版」
         assertFalse(UpdateRules.isNewerThan(manifest("0.2.9"), "0.2.13", 15))
     }
 

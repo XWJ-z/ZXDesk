@@ -1,6 +1,5 @@
 /**
  * 一条命令出包：`npm run dist`。
- *
  * 顺序（每一步失败就停，绝不"带病出包"）：
  *   1. `build/doctor.js`   —— 环境自检（Node / 依赖 / Electron 运行时 / python3 / 图标 / 磁盘）
  *   2. `build/pack.js`     —— 打包（内含：先 rename 旧输出、兼容本机沙箱、打完写图标并复核）
@@ -8,10 +7,8 @@
  *   4. 写 `.sha256`        —— `sha256sum` 同格式：`<hash>  <文件名>`
  *   5. `build/verify-zip.py` + asar/exe 复核 —— CRC、顶层目录、无 node_modules/data、
  *      exe 大小、asar 里的版本号、exe 图标数 = ico 尺寸数
- *
  * 参数：
  *   --skip-doctor   跳过第 1 步（CI 里已经装好时用，本机别跳）
- *   --out <path>    指定输出 zip（默认 `release/zxdesk-windows-<version>-x64.zip`）
  */
 
 import { spawnSync } from 'node:child_process';
@@ -124,7 +121,7 @@ const missing = srcFiles.filter((rel) => {
 if (missing.length) die(`asar 里缺 ${missing.length} 个源码文件：${missing.slice(0, 5).join(', ')}`);
 console.log(`✓ asar：${srcFiles.length} 个源码文件 + package.json，版本 ${packedPkg.version}`);
 
-// 5b. exe 图标数 = ico 尺寸数（0.1.6 丢图标的教训）
+// 5b. exe 图标数 = ico 尺寸数（丢图标的教训）
 // ⚠️ 直接从 ico 的**文件字节**取每张图（resedit 对 BMP 条目给的是 IconItem，不一定有 `.bin`）
 const icoBuf = fs.readFileSync(path.join(root, 'src', 'shell', 'assets', 'icon.ico'));
 const icoCount = icoBuf.readUInt16LE(4);

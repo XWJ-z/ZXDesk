@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：SettingsScreen.kt
- * 职责：设置页 —— 连接信息、账号切换、模式切换
  */
 
 package com.zxdesk.app.ui
@@ -49,13 +47,6 @@ import com.zxdesk.core.datasource.EntryFlow
 /**
  * 设置页（整屏，从抽屉底部「设置」进）。
  *
- * 三块，顺序即使用频率：
- * ① **连接信息** —— 现在连的是哪台设备、用哪个账号、走的哪条路（排障第一眼要看的都在这里）；
- * ② **账号** —— 切换 / 新增，复用既有的账号页，⛔ 不在这里另造一套列表；
- * ③ **模式** —— 当前只有「仅连接 NAS」可用，另两种照登录页的口径标「规划中」。
- *
- * @param entry 当前正在浏览的入口（地址、连接方式都从它读，⛔ 不另存一份）
- * @param currentKey 当前账号的键（地址 ＋ 账号），与账号页一致
  */
 @Composable
 internal fun SettingsScreen(
@@ -209,7 +200,6 @@ private fun SettingDivider() {
 /**
  * 「标签 —— 值」一行：标签固定宽度，值右对齐并允许省略。
  *
- * 固定标签列宽的理由：五行信息的值必须竖向对齐，否则地址一变长整列就歪。
  */
 @Composable
 private fun InfoRow(label: String, value: String) {

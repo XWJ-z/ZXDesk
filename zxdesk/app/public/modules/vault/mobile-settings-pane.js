@@ -1,23 +1,9 @@
 /**
- * modules/vault/mobile-settings-pane.js —— 手机版：设置页「密码库」分栏（0.8.18）
+ * modules/vault/mobile-settings-pane.js —— 手机版：设置页「密码库」分栏
  *
  * 功能：这是 `core/slots.js` 的**插槽片段**（槽名 `settings-pane`）—— 由设置页通过
- *      `slotPaneDefs()` + `mountModuleSlot(box, 'mobile', 'vault', 'settings-pane', ctx)` 动态挂载。
- *      内容只有**一行**：一句说明 ＋「自动锁定 N 分钟」下拉（与电脑端那一栏**同一件事、各写版式**）。
- *
- * ⭐⭐ 为什么它在这儿（截图批注：「倒计时和锁定按键合并、**自动锁定时间设置
- *    移动到全局设置中**」）：这一枚下拉原先长在密码库那一屏的**状态层**里
- *    （`mobile.js` 的 `.vault-status`，跟着列表一起滚），与倒计时挤在一行。
- *    ⚠️ 用的是现成的**模块贡献分栏**机制—— ⛔ 别另写一套「设置页里塞个特例」。
- *    ⚠️ `settingsPane.label` 与电脑端**逐字一致**（`module-ui.test.js` 比对）。
- *
- * ⚠️⭐ **改锁定时长要求「已解锁」**（服务端 `PUT /api/vault/settings` 的 `vaultAssertUnlocked`：
- *    009 报告 S2 修的提权口子）。⇒ ⛔ 不要为了「设置页能改」去松服务端那道闸。
- *    ⭐⭐ 2026-10-19（截图：「就是下拉选项选不了」）：从前未解锁时**把下拉整个禁用**，
- *    旁边写「先去「网址 / 密码」解锁一次，再回来改」—— 那等于让用户为了改一个数字跑两趟。
- *    ⇒ 现在下拉**永远可选**：锁着时选中一个值就弹主密码框，验过顺带解锁并保存
- *    （与收藏夹借密码同一个手法）。⚠️ 只有「从没设过主密码」仍然不给改。
- * ⚠️ 存失败要把选中项**拨回服务端的真值**，界面不许停在假状态。
+ * `slotPaneDefs()` + `mountModuleSlot(box, 'mobile', 'vault', 'settings-pane', ctx)` 动态挂载。
+ * 内容只有**一行**：一句说明 ＋「自动锁定 N 分钟」下拉（与电脑端那一栏**同一件事、各写版式**）。
  *
  * @author zx
  * @date   2026-10-10
@@ -64,7 +50,6 @@ export function render() {
       sel.disabled = true;
       return;
     }
-    // ⭐ 2026-10-19：**锁着也允许选**（选完弹主密码框）—— 只有「没设过主密码」才禁。
     sel.disabled = false;
     note.textContent = v.unlocked ? '闲置超过这段时间就自动锁上。' : '改锁定时长需要主密码，选中后会弹框验证。';
   };

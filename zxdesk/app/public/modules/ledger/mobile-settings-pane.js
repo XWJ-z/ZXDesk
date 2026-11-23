@@ -1,30 +1,14 @@
 /**
- * modules/ledger/mobile-settings-pane.js —— 手机版：设置页「💰 生活记账」分栏（0.8.21）
+ * modules/ledger/mobile-settings-pane.js —— 手机版：设置页「💰 生活记账」分栏
  *
  * 功能：这是 `core/slots.js` 的**插槽片段**（槽名 `settings-pane`）—— 由设置页通过
- *      `slotPaneDefs()` + `mountModuleSlot(box, 'mobile', 'ledger', 'settings-pane', ctx)` 动态挂载。
- *      内容 ＝ 记账设置那**四条**（收支账户 / 收支分类 / 导入三方数据 / 导出数据）；
- *      点一条**就地展开**成那一页的正文，⛔ 不切屏。
- *
- * ⭐⭐ 为什么它在这儿（「生活记账的【设置】在全局设置中也要有一份」）：
- *      记账设置原先只能从「生活记账 → 设置」那一格进去 —— 而它是**全局设置**该管的事。
- *      ⚠️ 用的是现成的**模块贡献分栏**机制——
- *      ⛔ 别另写一套「设置页里塞个特例」。
- *
- * ⚠️⭐ **正文与判据全部复用 `mobile.js` 那一支**（`ledgerSetHtml()` / `handleLedgerSetChange()`）——
- *      下面是这一栏唯一的那点"新东西"，三件：
- *      ① `change` 委托挂在**本栏自己的根**上：这一栏住在设置页里，账本屏那条委托够不着
- *         （「谁的表谁挂」，与弹层/插槽片段同一条纪律）。
- *         而 `data-act`（点条目 `lg-setgo` / 点 ‹ 返回 `lg-setback` / 子页里那些按钮）
- *         **照旧走宿主的 `ACTIONS` 表**（`#app` 全局委托）⇒ 那两下不需要本栏写一行代码。
- *      ② 展开状态**就是 `state.lgSetPage`**（与账本屏设置格共用）⇒ 宿主那两支动作改完它
- *         就会调 `renderLedger()`，而那一趟会回调本栏登记的重画钩子。
- *      ③ 挂载时**自己把设置要用的数据取回来**（`prepareLedgerSettings()`）——
- *         用户完全可能没进过账本屏就直接来设置页。
+ * `slotPaneDefs()` + `mountModuleSlot(box, 'mobile', 'ledger', 'settings-pane', ctx)` 动态挂载。
+ * 内容 ＝ 记账设置那**四条**（收支账户 / 收支分类 / 导入三方数据 / 导出数据）；
+ * 点一条**就地展开**成那一页的正文，⛔ 不切屏。
  *
  * @author zx
  * @date   2026-10-12
- * @since 0.8.21
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/23-记账.md、docs/公共/架构文档/13-决策记录.md（决策 77）、core/slots.js
  */
 
@@ -40,14 +24,11 @@ import {
 
 /**
  * 功能：画出设置页「生活记账」分栏 —— 四条设置条目；点一条就地展开成那一页的正文。
- *
  * ⚠️⚠️ **它必须是同步的**（⛔ 别改成 `async`）：设置页重画时 `mountModuleSlot()` 那两趟挂载
  *      会各自 `await` 片段 —— 片段自己也 `await` 的话两趟就**交错**（第 2 趟清空容器时第 1 趟
  *      还没挂上根，等它回来又 `appendChild` 一次）⇒ 容器里躺着**两份**「生活记账」
- *      （实测踩过：截图上是四条目下面又跟了一条子页头）。数据改成**后台取、回来再画**。
- *
  * @returns {HTMLElement} 这一个分栏的根节点
- * @since 0.8.21
+ * @since 0.9.7
  */
 export function render() {
   const root = document.createElement('div');

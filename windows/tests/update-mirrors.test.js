@@ -1,7 +1,5 @@
 /**
  * 下载镜像：候选生成与「哪个通用哪个」的探测。
- *
- * 探测用真实 socket（裸 net 助手）——「连不上」这件事只有真的连一次才算数。
  */
 
 import assert from 'node:assert/strict';

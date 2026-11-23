@@ -1,31 +1,11 @@
 'use strict';
 /**
  * modules/teamwork/desktop-teamwork-page.js —— 协作项目**登记器 ＋ 添加弹层**（电脑版）
- *
  * 功能：`teamwork-page` 槽的电脑版实现 —— ⭐ 本轮（2h · 排版）起它**不再画整块界面**：
- *      ① **登记器**：把「已加进协作的项目」登记进对话模块左栏的「协作项目」组 ——
- *         宿主每次重画左栏都派一次 `zx:teamwork-collab-entries`（留白事件），本片段往里
- *         `push({ key, name, sub })`（`key` ＝ 项目 id 字符串）；行与分组头由**宿主统一画**
- *         （这样它才与「内置助手」「好友」两组同款）。
- *      ② **添加共享项目弹层**：宿主点「＋ 添加共享项目」那一行时派 `zx:teamwork-collab-add`，
- *         本片段监听并打开弹层 —— 挑一个还没进协作的项目加进来，或就地新建一个直接加进来。
- *
- * ⭐ 谁负责哪一半（与 `desktop-teamwork-board.js` 分工，别搞混）：
- *      · **本文件**只画「项目列表这条线」的登记与添加弹层，⛔ 不画看板；
- *      · 「点开一个共享项目 ⇒ 主区显示看板」由**宿主**接手（`openCollabBoard()` 挂 `teamwork-board` 槽）。
- *
- * ⚠️ 本片段的容器是**左栏里的一个零高度盒子**（宿主动态建、`height:0`）：它本身不占位置，
- *    弹层是 `position: fixed`（不受左栏 `overflow: hidden` 裁剪）。⛔ 别在这里画任何常驻可见内容 ——
- *    那会把左栏往下推，正是本轮要修掉的「上下太丑」。
- *
- * ⚠️ **判权全在服务端**：非成员 / 项目没共享 / 项目不存在，服务端一律 404 —— 前端按「看不到」处理，
- *    ⛔ 不去猜原因。⛔ 界面只做可见性，真动到越界的动作时**照常把服务端那句话弹出来**。
- *
- * ⚠️ 本文件**自包含**（只 import core 与宿主 ui），不依赖任务板别的片段。
- *
+ * ① **登记器**：把「已加进协作的项目」登记进对话模块左栏的「协作项目」组 ——
  * @author zx
  * @date   2026-10-04
- * @since  0.8.51
+ * @since 0.9.7
  * 相关：docs/公共/开发方案/32-团队协作.md §丁 · §丙-2、core/slots.js、modules/teamwork/desktop-teamwork-board.js
  */
 
@@ -37,7 +17,6 @@ import { toast } from '../../desktop/ui.js';
 const HEX_COLOR = /^#[0-9a-fA-F]{3,8}$/;
 
 /**
- * 功能：取一个安全的颜色值 —— 像十六进制就用它，否则回落品牌色（写进 style 用）。
  * @param {*} c - 服务端给的颜色
  * @returns {string} 可直接写进 style 的颜色
  */
@@ -67,10 +46,8 @@ function msgOf(e) {
 // ================================================================ 本片段的私有状态
 
 /**
- * ⭐ 已加进协作的项目（登记用的数据源）。**刻意住在模块级**：宿主每次重画左栏都会派
+ * 已加进协作的项目（登记用的数据源）。**刻意住在模块级**：宿主每次重画左栏都会派
  * `zx:teamwork-collab-entries`，那时必须**同步**把条目填进去 —— 现去 `await` 一个接口来不及。
- * 只在进页面时、以及增删之后重取一次。
- * @type {Array.<Object>}
  */
 let projects = [];
 
@@ -123,7 +100,6 @@ async function loadAddables() {
  * 功能：请宿主重画左栏（`zx:teamwork-collab-changed` 留白事件）。
  *
  * 说明：⭐ 本片段只认「条目数据」，行与分组头由宿主画；数据一变就得让宿主那一拍重跑，
- *      否则左栏会停在旧条目上（宿主不认识本模块，也没法自己知道数据变了）。
  * @returns {void}
  */
 function requestHostRepaint() {
@@ -146,12 +122,9 @@ async function addProject(pid) {
     st.newProjOpen = false;
     st.addables = null;
     toast('已加入协作');
-    // ⚠️⭐ 2026-10-20（本版质检）：**成功后必须自己把弹层重画掉**。
-    //    这里原来只把 `st.addProjOpen` 置假、然后去 `loadProjects()` —— 而那条路只请宿主
-    //    重画**左栏**（`zx:teamwork-collab-changed`），宿主从不碰本片段的根节点（
-    //    它不认识这个弹层）⇒ 弹层**不关**，一直浮在界面上、里面还是加之前那份清单。
-    //    症状：点一个项目 → 弹层纹丝不动（只多了句 toast），再点还报「已在协作里」。
-    //    对照组：失败分支早就调了 `paint()`（那时确实要留着弹层把原因摆出来）。
+    // 这里原来只把 `st.addProjOpen` 置假、然后去 `loadProjects()` —— 而那条路只请宿主
+    // 重画**左栏**（`zx:teamwork-collab-changed`），宿主从不碰本片段的根节点（
+    // 它不认识这个弹层）⇒ 弹层**不关**，一直浮在界面上、里面还是加之前那份清单。
     paint();
     await loadProjects();
   } catch (e) {
@@ -166,9 +139,8 @@ async function addProject(pid) {
  * 功能：在添加弹层里就地新建一个项目，建完**直接**加进协作。
  *
  * 说明：⚠️ 复用任务板既有的 `POST /api/projects`（⛔ 不在协作里另写一份建项目逻辑）；
- *      拿不到新项目编号时按失败处理，不静默。
+ * 拿不到新项目编号时按失败处理，不静默。
  *
- * @returns {Promise.<void>}
  */
 async function createAndShare() {
   if (st.busy) return;
@@ -188,7 +160,6 @@ async function createAndShare() {
     st.newProjOpen = false;
     st.addables = null;
     toast('已加入协作');
-    // ⚠️⭐ 2026-10-20：与 `addProject()` 同一条 —— 成功后**自己**把弹层重画掉（宿主不认识它）。
     paint();
     await loadProjects();
   } catch (e) {
@@ -223,10 +194,8 @@ function newProjHtml() {
  * 功能：添加共享项目弹层 —— 列出「还没进协作的项目」逐个可点，末尾固定一行「新建一个项目」。
  *
  * 说明：⚠️ 复用**电脑版既有的**模态框写法（`.modal` / `.modal-card` 一族，见 `desktop/app.css`），
- *      弹层节点挂在**本片段根节点内** —— 交互由本片段挂在 root 上的委托处理，
- *      ⛔ 不借用宿主的动作表。
- *
- * @returns {string} 弹层 HTML
+ * 弹层节点挂在**本片段根节点内** —— 交互由本片段挂在 root 上的委托处理，
+ * 不借用宿主的动作表。
  */
 function addModalHtml() {
   let list;
@@ -334,9 +303,8 @@ function onClick(e) {
  * 功能：收到宿主的「重画左栏 ⇒ 登记条目」留白事件 —— 从 `projects` 缓存同步填条目。
  *
  * 说明：⭐ 事件是**同步派发**的，所以必须就地填；`key` ＝ 项目 id 字符串，`name` / `sub`
- *      是宿主画行时用的两个字（名字 + 「我发起的 / 我参与的」）。
+ * 是宿主画行时用的两个字（名字 + 「我发起的 / 我参与的」）。
  * @param {Event} e - `zx:teamwork-collab-entries`
- * @returns {void}
  */
 function onEntries(e) {
   const detail = e && e.detail;
@@ -361,8 +329,7 @@ function onAdd() {
 /**
  * 功能：收到别的片段（看板）的「项目数据变了」事件 ⇒ 重取列表并刷新左栏。
  *
- * 说明：转让 / 移出协作会让角色的副标题、甚至这一条是否还在协作里发生变化 ——
- *      看板那边改完就派一次 `zx:teamwork-collab-refresh`，这里重取后请宿主重画。
+ * 看板那边改完就派一次 `zx:teamwork-collab-refresh`，这里重取后请宿主重画。
  * @returns {void}
  */
 function onRefresh() {
@@ -385,14 +352,12 @@ function bind() {
  * 功能：渲染电脑版协作页的插槽片段（`core/slots.js` 的挂载入口）。
  *
  * 说明：⚠️ 本片段**没有常驻可见界面** —— 返回一个空根节点（宿主把容器做成零高度）；
- *      它存在的意义是「把 `document` 级监听挂上」，条目登记与添加弹层都靠那几条监听。
+ * 它存在的意义是「把 `document` 级监听挂上」，条目登记与添加弹层都靠那几条监听。
  *
- * @param {Object} _ctx - 挂载上下文（`{ end, modules, uiOf, me }`；本片段用不到）
- * @returns {HTMLElement} 空根节点
  */
 export function render(_ctx) {
   bind();
-  // ⚠️ 每次挂载都从「弹层全关」开始：上一轮离开这一屏时若还开着弹层，重进不该又自己弹出来
+  // 每次挂载都从「弹层全关」开始：上一轮离开这一屏时若还开着弹层，重进不该又自己弹出来
   closeAll();
   st.addables = null;
   st.addableErr = '';

@@ -2,31 +2,21 @@
 
 /**
  * modules/hardware/backend/json.js —— NAS硬件管理台账（台账与愿望单同一张表）的**JSON 版原语**
- *
  * 功能：本模块自己的存储原语（JSON 回退），与另一个后端**同名同参** ——
- *      「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，少一个 / 打错名 / 形参个数不一致 = 启动即抛。
- *
- * ⭐ 0.5.0 模块化重构（方案 `09-模块化重构` §四 第 2 行）：比对的粒度从「两个大文件」下移到**每个模块自己的一对**。
- *    ⚠️ **纯搬运**：方法体是从 `store/backend/json.js` 按段落**逐字节切出来**的，一个字都没重写
- *    （切块前后 sha256 见 0.5.0的提交说明）。
- *
- * ⚠️ ops 里的 `this` 是 **Store 实例**（门面用 `.apply(store, …)` 调用），所以照常访问
- *    `this.db` / `this.data` / `this._saveJson()` / `this._listSql()`。
- *
+ * 「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，少一个 / 打错名 / 形参个数不一致 = 启动即抛。
  * @author zx
  * @date   2026-09-14
- * @since 0.8.23
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md、docs/公共/开发方案/09-模块化重构.md
  */
 
 const { uidOf } = require('../../../core/store/helpers.js');
 
 const ops = {
-  // ---- NAS硬件管理（0.3.1）----
   /**
    * 功能：列出该账号的全部硬件台账 / 愿望单条目（新的在前）。
    * 说明：⭐ 检索、筛选与寿命推算**不在这一层做**（见 `modules/hardware/store.js`）—— 两个后端
-   *      必须给出逐字一致的结果，语义只能有一份实现。
+   * 必须给出逐字一致的结果，语义只能有一份实现。
    * @param {(number|string)} uid - 用户 id
    * @returns {Array.<Object>} 台账行数组（按 created_at、id 倒序）
    */
@@ -59,10 +49,9 @@ const ops = {
   /**
    * 功能：删除一条台账记录；返回是否真的删掉了一行。
    * 说明：⚠️ 本表没有子表（1 期只有一张表），所以不像 `deleteBookmark` / `deleteTag`
-   *      那样要自己写级联 —— 硬件的事件表与读数表排在 2 期路线里。
+   * 那样要自己写级联 —— 硬件的事件表与读数表排在 2 期路线里。
    * @param {(number|string)} uid - 用户 id
    * @param {(number|string)} id - 台账 id
-   * @returns {boolean} 行是否真的被删掉
    */
   deleteHardware(uid, id) {
     const before = (this.data.hardware_items || []).length;
@@ -76,14 +65,9 @@ const ops = {
   /**
    * 功能：取本模块进**个人备份**的那一份数据（台账与愿望单同一张表）。
    *
-   * 说明：⭐ 这是 0.5.0唯一新增的**新代码**：深拷贝 + 归属过滤 + 排序**逐字照抄**
-   *      改造前 `exportAll()` 里那三行，一个字都没重写。
-   *      搬走之后由 `modules/hardware/export.js` 调它，`stats.js` 不再手写这一行。
-   *      ⚠️ 走的是**本模块自己的原语**，所以删掉本模块目录时这一份自然消失，
-   *      备份里不会剩下一个「指向不存在模块」的键。
-   *
-   * @param {(number|string)} uid - 用户 id
-   * @returns {{hardware: Array.<Object>}} 备份里那一个键
+   * 改造前 `exportAll()` 里那三行，一个字都没重写。
+   * 搬走之后由 `modules/hardware/export.js` 调它，`stats.js` 不再手写这一行。
+   * 走的是**本模块自己的原语**，所以删掉本模块目录时这一份自然消失，
    */
   exportHardware(uid) {
     const hardware = JSON.parse(JSON.stringify(this.data.hardware_items || []))
@@ -92,7 +76,6 @@ const ops = {
     return { hardware };
   },
 
-  // ---- 硬件模板（⭐ 0.8.23，「预制新建硬件的模板菜单」）----
   /**
    * 功能：列出该账号的全部模板（内置的在前、自建的在后）。
    * 说明：⚠️ 排序按 `sort_order, id`（内置 10/20/30…、自建 1000 起）—— 与 SQLite 版逐字同口径。

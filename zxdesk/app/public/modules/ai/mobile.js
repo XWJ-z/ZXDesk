@@ -1,34 +1,13 @@
 /**
- * modules/ai/mobile.js —— AI辅助任务（手机版：**入口行 + 每区一个底部弹层**；0.7.6 起是这个形态）
+ * modules/ai/mobile.js —— AI辅助任务
  *
  * 功能：`mountAiPane(box)` —— 把面板挂进设置页「AI 设置」那一栏：
- *      栏上是一个**常驻块**（安全承诺 + 「让 AI 调用工具」总开关 + 它的说明）＋ **六行入口**，
- *      点哪一行就开哪个区的**底部弹层**（一次只看一区）。
- *
- * ⭐ 0.8.9：它**不再自己占一屏**（原 `renderAi()` 画进 `#view-ai`）——
- *    「撤销独立显示卡，因为全是设置，现在并入全局设置中的 AI 设置里」。
- *    调用方改成设置分栏片段 `./mobile-settings-pane.js`（本文件不再认识任何屏 id）。
- *
- * ⭐ 为什么是这个形态（0.7.6 定的）：手机屏窄 —— 六区配置全铺在屏上要滑很久，
- *    全塞进**同一个**弹层同样要滑很久；而「进这一屏最想知道的」其实只有一件事：
- *    开没开、接着谁、它现在能读什么。所以屏上只留状态，配置按区拆开、点开哪区看哪区。
- *    ⛔ 手机端**不再渲染导航**（`.ai-cfg-nav` 那一套）—— 入口行就是导航，「当前在看哪一区」
- *    由弹层标题表达，没有「滚动高亮」这回事了。
- *
- * ⚠️ `shared.js` 是两端共用的界面引擎，它**不能**调 `openSheet`（那是手机端独有的弹层 API）——
- *    所以「开弹层」这件事只能在本文件里做；`createAiSections()` 交出来的是六个普通节点。
- * ⚠️⭐ **顺序不能反**：`openSheet()` 会 `.innerHTML = ''` 清空 `#sheet-body` ⇒
- *    必须先 `openSheet`、**再** `appendChild`（先 append 会被清掉）。
- *    `modules/teamwork/mobile-settings.js` 是同款先例（那里也有这条注释）。
- * ⚠️⭐ **节点搬运必须确定性**：六个区平时住在各自 hidden 的「宿主」里；开某个区之前，先**把所有区
- *    收回宿主**、再开弹层、再把这一个区挂进 body。这样「第二次打开某个区是空的」永远不会发生，
- *    也**不必**依赖 `closeSheet()` 有没有回调（它没有 —— 你接不到那一刻）。
- * ⚠️⭐ **六个区只建一次**（模块级 `built`）：区里可能有用户正打着的字（接口地址、密钥），
- *    重建 = 抹掉它们。切回这一屏只重画入口行的摘要，⛔ 不重建区、也不重发请求。
+ * 栏上是一个**常驻块**（安全承诺 + 「让 AI 调用工具」总开关 + 它的说明）＋ **六行入口**，
+ * 点哪一行就开哪个区的**底部弹层**（一次只看一区）。
  *
  * @author zx
  * @date   2026-09-15
- * @since 0.8.13
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/18-ai辅助任务.md、docs/公共/开发方案/14-AI辅助任务-2期.md
  */
 
@@ -62,8 +41,7 @@ function paintRows() {
   built.sections.forEach((s, i) => {
     const node = rowSums[i];
     if (!node) return;
-    // ⚠️ 读不到数据时报**原因**，不是报一个「看起来正常」的空状态 ——
-    //    否则用户会以为「本来就没配置」，接着点进弹层把服务端的值改坏。
+    // 读不到数据时报**原因**，不是报一个「看起来正常」的空状态 ——
     node.textContent = failMsg || s.summary();
   });
 }
@@ -97,8 +75,8 @@ async function openSection(i) {
   const body = $('#sheet-body');
   if (!body) return;
   // ③ 弹层里**不重复区标题**（标题就是区名），只放这一区的指引 + 区节点。
-  //    ⚠️ 外面套一层 `.ai-sheet-sec`：它只负责把「指引 + 这一区」捆在一起（不加左右内边距 ——
-  //      `.sheet` 自己给了 20px，加了反而会比弹层标题缩进一截）。
+  // 外面套一层 `.ai-sheet-sec`：它只负责把「指引 + 这一区」捆在一起（不加左右内边距 ——
+  // `.sheet` 自己给了 20px，加了反而会比弹层标题缩进一截）。
   const wrap = document.createElement('div');
   wrap.className = 'ai-sheet-sec';
   const hint = document.createElement('p');
@@ -122,10 +100,9 @@ async function buildHome(box) {
     ask: async (opts, fn) => {
       if (await askConfirm(opts)) await fn();
     },
-    // ⭐ 0.9.8：只读提示（https 连不上那一类）—— 与电脑端 `host.notice` 同一个契约，
-    //    手机端落到 `openNoticeSheet`（只有一颗「知道了」）
+    // 只读提示（https 连不上那一类）—— 与电脑端 `host.notice` 同一个契约，
+    // 手机端落到 `openNoticeSheet`（只有一颗「知道了」）
     notice: (title, text) => openNoticeSheet(title, text),
-    // ⭐ 弹层里任一保存成功 ⇒ 把入口行的摘要一起重画（否则「改完了、退回屏上还是旧状态」）
     onSaved: () => {
       refreshAll().catch(() => {});
     },
@@ -153,12 +130,12 @@ async function buildHome(box) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'ai-row';
-    // ⚠️ 只把**静态的**箭头 SVG 交给 innerHTML；标题与摘要一律走 `textContent`（不拼 HTML）
+    // 只把**静态的**箭头 SVG 交给 innerHTML；标题与摘要一律走 `textContent`（不拼 HTML）
     btn.innerHTML = `<span></span><em></em><i>${CHEV}</i>`;
     btn.querySelector('span').textContent = s.title;
     const sum = btn.querySelector('em');
-    // ⚠️ 先写「正在读取…」：六行是先画、数据随后到（与各块自己在面板里的写法同一口径）——
-    //    右侧空着会看着像「这一项没有状态」，而那只是还没读完。
+    // 先写「正在读取…」：六行是先画、数据随后到（与各块自己在面板里的写法同一口径）——
+    // 右侧空着会看着像「这一项没有状态」，而那只是还没读完。
     sum.textContent = '正在读取…';
     rowSums.push(sum);
     btn.addEventListener('click', () => {
@@ -178,14 +155,9 @@ async function buildHome(box) {
 /**
  * 功能：把 AI 面板挂进给定的容器（设置页「AI 设置」那一栏）。
  *
- * 说明：⭐ 0.8.9：它原来叫 `renderAi()`、画进 `#view-ai` ——
- *      现在 AI 不再有自己的屏，改由设置分栏片段 `./mobile-settings-pane.js` 调本函数。
- *      容器由调用方给（设置页每次重画都是一个新节点），所以这里**不能**写死选择器。
- *      ⚠️ **重画闸门**：这一栏的结构与六个区**只建一次**（区里可能有用户正打着的字）；
- *      再挂回来时只把**同一份** `home` 挪进新容器并重画入口行摘要，⛔ 不重建、也不重发请求
- *      —— 数据只在「首次」与「弹层里保存成功」两种时机刷新（后者由 `onSaved` 触发）。
- * @param {HTMLElement} box - 设置页那一栏的容器（挂载方给的新节点）
- * @returns {Promise.<void>}
+ * 现在 AI 不再有自己的屏，改由设置分栏片段 `./mobile-settings-pane.js` 调本函数。
+ * 容器由调用方给（设置页每次重画都是一个新节点），所以这里**不能**写死选择器。
+ * **重画闸门**：这一栏的结构与六个区**只建一次**（区里可能有用户正打着的字）；
  */
 export async function mountAiPane(box) {
   if (!box) return;

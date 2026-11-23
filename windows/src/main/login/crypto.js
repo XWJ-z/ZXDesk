@@ -1,12 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：crypto.js
- * 职责：飞牛 WS 登录的密码学（移植自 `Project/Android/core/connection/FnCrypto.kt`）
- *
- * ⚠️ 与网上社区文档不一致的两处（以实测为准，⛔ 别改回去）：
- * 1. **AES-256，不是 128** —— key 是 32 个 `[0-9a-zA-Z]` 字符，按 UTF-8 字节当 key；
- *    16 字符的做法服务端会**静默丢掉那一帧**（不报错，只等超时）。
- * 2. **RSA 是 PKCS#1 v1.5，不是 OAEP** —— 信封里也就不带 `v` 字段。
  */
 
 import crypto from 'node:crypto';
@@ -18,10 +11,6 @@ export const IV_LENGTH = 16;
 /**
  * 均匀取 `[0,1)` 的随机数（默认源）。
  *
- * ⚠️ 不用 `Math.random`：V8 的 Math.random 是 xorshift128+，状态可被反推 ——
- * 而这里生成的是**一次登录的 AES 会话密钥**（它加密的是账号密码信封）。
- * 虽然密钥还会用 RSA 包一层，但「密钥可预测」等于把机密性押在实现细节上；
- * Android 侧用的是 SecureRandom，两端对齐。
  */
 function secureRandom() {
   return crypto.randomBytes(4).readUInt32BE(0) / 0x100000000;
@@ -56,7 +45,7 @@ export function rsaEncryptKey(key, publicKeyPem) {
 
 /**
  * 加密信封：`{"req":"encrypted","iv":b64,"rsa":b64,"aes":b64}`
- * ⛔ 不带 `v`、⛔ 不带外层 `reqid`（reqid 在 AES 里那份明文 JSON 上）。
+ * 不带 `v`、⛔ 不带外层 `reqid`（reqid 在 AES 里那份明文 JSON 上）。
  */
 export function envelope(innerJson, publicKeyPem, key, iv) {
   return JSON.stringify({

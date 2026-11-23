@@ -2,15 +2,12 @@
  * core/date.js —— 日期工具（两端唯一一份）
  *
  * 功能：以 `YYYY-MM-DD` 字符串为中心的一组日期助手 —— `todayStr()` 取今天、`addDays()` 加减天数、
- *      `dow()` / `weekName()` / `weekdayChar()` 取星期、`isWeekend()` 判周末、`mondayOf()` 求所在周周一，
- *      以及 `fmtShort()` / `fmtLong()` / `fmtDuration()` 三种短格式化。
- *
- * ⚠️ 一律手工解析字符串，**不转 Date 做比较**：`YYYY-MM-DD` 字典序即时序，
- *    而 `new Date(...)` 会带进时区坑（本项目踩过）。
+ * `dow()` / `weekName()` / `weekdayChar()` 取星期、`isWeekend()` 判周末、`mondayOf()` 求所在周周一，
+ * 以及 `fmtShort()` / `fmtLong()` / `fmtDuration()` 三种短格式化。
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.8.18
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/07-前端-电脑版与手机版.md
  */
 
@@ -116,8 +113,6 @@ export function weekdayChar(dateStr) {
 /**
  * 功能：把「分钟数」写成中文时长（`150` → `2 小时 30 分`）—— 课表「午休 / 晚休」分界行用它。
  *
- * 说明：放在 `core/` 是因为**两端要一模一样**：同一个空档在电脑版写「2 小时 30 分」、
- *      手机版写「150 分钟」会让人以为是两回事。
  *
  * @param {number} m - 分钟数
  * @returns {string} 形如 `45 分钟` / `2 小时` / `2 小时 30 分`
@@ -130,23 +125,18 @@ export function fmtDuration(m) {
   return mm ? `${h} 小时 ${mm} 分` : `${h} 小时`;
 }
 
-// ⚠️ 电脑版管它叫 fmtDate、手机版管它叫 fmtLong —— **同一份实现**，两个名字都导出，
+// 电脑版管它叫 fmtDate、手机版管它叫 fmtLong —— **同一份实现**，两个名字都导出，
 
-//    免得为了统一名字去改几十处调用点（改名是没收益的 churn）。
+// 免得为了统一名字去改几十处调用点（改名是没收益的 churn）。
 
 export { fmtLong as fmtDate };
 
 /**
  * 功能：把服务端时间戳（`YYYY-MM-DD HH:MM:SS`）压成「今天 14:30」这种一眼看得懂的小字。
  *
- * 说明：⭐ 0.8.18 收进 `core/` —— 原先 `modules/idea/` 的**两端各写了一份私有的同名函数**，
- *      而收藏夹的「网址详情」现在也要显示时间。模块之间⛔ **不许互相 import**
- *      （删掉 `modules/idea/` 整目录时收藏夹仍要起得来），所以共用件只能住在 `core/`。
- *      ⚠️ 纯字符串切片，⛔ **不转 `Date`** —— 与本文件其余部分同一条口径（时区坑）。
- *      ⚠️ 判「今天」走 `todayStr()`（同一个 core 里的口径），⛔ 别自己 `new Date()` 拼一次。
- *
- * @param {string} stamp - 服务端时间戳；为空时返回空串
- * @returns {string} 展示用文案（空时间戳回空串）
+ * （删掉 `modules/idea/` 整目录时收藏夹仍要起得来），所以共用件只能住在 `core/`。
+ * 纯字符串切片，⛔ **不转 `Date`** —— 与本文件其余部分同一条口径（时区坑）。
+ * 判「今天」走 `todayStr()`（同一个 core 里的口径），⛔ 别自己 `new Date()` 拼一次。
  */
 export function whenText(stamp) {
   const s = String(stamp || '');

@@ -1,17 +1,14 @@
 /**
-timetable/schedule-solve.js —— 作息求解（时段块 → 逐节时间）
+ * timetable/schedule-solve.js —— 作息求解（时段块 → 逐节时间）
  *
  * 功能：把「时段块」解成逐节时间 —— 生成默认节次（`generatePeriods`）、算块时长
- *      （`blockDuration`）、用「节次覆盖」与「时长拟合」两个**独立信号交叉求解**上课时间
- *      （`fitClassTimes` / `bestSplits` / `sameNums` / `solveSchedule`），
- *      以及解析节次串与连续区段（`parsePeriodNumbers` / `contiguousRuns`）。
- *
- * ⚠️ 为什么是「两个独立信号交叉」：真实课表里「第 1 节」几点开始**不写在格子里**，
- *    只能从「节次覆盖了哪几行」与「每节课多长」两头夹逼；单靠任一头都会被样本推翻。
+ * （`blockDuration`）、用「节次覆盖」与「时长拟合」两个**独立信号交叉求解**上课时间
+ * （`fitClassTimes` / `bestSplits` / `sameNums` / `solveSchedule`），
+ * 以及解析节次串与连续区段（`parsePeriodNumbers` / `contiguousRuns`）。
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.5.3
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/06-课表.md
  */
 'use strict';
@@ -22,10 +19,8 @@ const { fmtMin, numOr, toMin } = require('./date-util.js');
  * 功能：由时段块生成逐节时间表（需求 2 的四个参数就在这一层）。
  *
  * 说明：`block_index` 指向入参数组下标 —— 落库时再换成真实 `block_id`；
- *      某块起始时间读不出时，仍按节数补齐占位条目，只是时间留空。
+ * 某块起始时间读不出时，仍按节数补齐占位条目，只是时间留空。
  *
- * @param {Array.<Object>} blocks - 时段块数组，每块用到 `period_count` / `class_minutes` / `break_minutes` / `start_time`
- * @returns {Array.<Object>} 逐节条目，形如 `{ index_no, block_index, start_time, end_time }`
  */
 function generatePeriods(blocks) {
   const out = [];
@@ -65,10 +60,8 @@ function blockDuration(b) {
  * 功能：信号② —— 由「块时长」穷举求解 `(每节分钟, 课间分钟)`。
  *
  * 说明：判据是**精确整除**（残差必须为 0）：`时长 = 节数 × 课时 + (节数−1) × 课间`。
- *      返回 `[{ c, b, n: [..] }]`（可能有多个解 —— 样本上就有 (20,5) 与 (45,5) 两组）。
+ * 返回 `[{ c, b, n: [..] }]`（可能有多个解 —— 样本上就有 (20,5) 与 (45,5) 两组）。
  *
- * @param {Array.<Object>} blocks - 时段块数组
- * @returns {Array.<Object>} 所有能精确拟合的解，每项含每节分钟 `c`、课间分钟 `b` 与各块节数 `n`
  */
 function fitClassTimes(blocks) {
   const durs = (blocks || []).map(blockDuration);
@@ -98,9 +91,6 @@ function fitClassTimes(blocks) {
  * 说明：得分按「`[节次]` 区间完整落在本行内」的条目数累计 —— 这是作息求解的信号①。
  *
  * @param {Array.<Array.<Array.<number>>>} rowPeriods - 每行解析到的节次分组，供覆盖打分
- * @param {number} total - 需要拆分的总小节数
- * @param {number} parts - 要拆成的份数（即时段块数）
- * @returns {{score: number, splits: Array.<Array.<number>>}} 最高得分与所有并列最优拆法；无解时得分为 -Infinity、拆法为空
  */
 function bestSplits(rowPeriods, total, parts) {
   /**
@@ -109,7 +99,6 @@ function bestSplits(rowPeriods, total, parts) {
    * @param {number} i - 行下标
    * @param {number} lo - 划分段的起始小节号
    * @param {number} hi - 划分段的结束小节号
-   * @returns {number} 完整落入该段的节次分组条数
    */
   const cover = (i, lo, hi) => {
     let n = 0;
@@ -155,7 +144,6 @@ function bestSplits(rowPeriods, total, parts) {
    * @param {number} i - 已处理的份数
    * @param {number} j - 已用掉的小节号上限
    * @param {Array.<number>} acc - 回溯过程中累积的每份小节数（倒序）
-   * @returns {void}
    */
   const walk = (i, j, acc) => {
     if (i === 0) {
@@ -181,8 +169,6 @@ function bestSplits(rowPeriods, total, parts) {
  * 说明：用来比对信号①的节次划分与信号②拟合出的节数是不是同一组。
  *
  * @param {Array.<number>} a - 数组一
- * @param {Array.<number>} b - 数组二
- * @returns {boolean} 长度相同且逐项相等时为 true
  */
 const sameNums = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 
@@ -190,16 +176,8 @@ const sameNums = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]
  * 功能：求解「每个时段块占哪几个小节」以及「每节多长、课间多长」。
  *
  * 说明：⭐ **两个独立信号必须交叉**：
- *      ① 节次覆盖 —— 正确的划分会让尽可能多的 `[节次]` 区间完整落在它所属的行内；
- *      ② 时长拟合 —— 块时长必须能被 `节数×课时+(节数−1)×课间` 精确整除。
- *      单独任何一个都不唯一：样本上 ① 有并列最优（[2,2,3,2,3] 与 [2,2,4,1,3] 同为 14 分），
- *      ② 也有多解（(20,5) 与 (45,5) 都能精确拟合）。交集才是唯一的。
- *      交集为空时不猜，按块时长均分，并把置信度标成 `low` 提醒人工确认。
- *
- * @param {Array.<Object>} blocks - 时段块数组
- * @param {Array.<Array.<Array.<number>>>} rowPeriods - 每行解析到的节次分组
- * @returns {Object} 求解结果：`ok` 是否可信、`splits` 各块小节数、`classMinutes` 每节分钟、
- *                    `breakMinutes` 课间分钟、`confidence` 置信度（`high` / `medium` / `low`）、`note` 中文说明
+ * ② 时长拟合 —— 块时长必须能被 `节数×课时+(节数−1)×课间` 精确整除。
+ * 单独任何一个都不唯一：样本上 ① 有并列最优（[2,2,3,2,3] 与 [2,2,4,1,3] 同为 14 分），
  */
 function solveSchedule(blocks, rowPeriods) {
   const parts = (blocks || []).length;
@@ -271,7 +249,6 @@ function solveSchedule(blocks, rowPeriods) {
  * 说明：超出 1..60 或转不成数字的号一律丢弃。
  *
  * @param {string} s - 节次号串
- * @returns {?Array.<number>} 节次号数组；一个有效号都没有时返回 null
  */
 function parsePeriodNumbers(s) {
   const nums = String(s)
@@ -288,7 +265,6 @@ function parsePeriodNumbers(s) {
  * 说明：用于把跨小节的连堂课合并成一次课次。
  *
  * @param {Array.<number>} nums - 节次号（允许重复与乱序）
- * @returns {Array.<Array.<number>>} 去重升序后的连续段
  */
 function contiguousRuns(nums) {
   const sorted = [...new Set(nums)].sort((a, b) => a - b);

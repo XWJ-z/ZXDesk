@@ -1,32 +1,8 @@
 'use strict';
 /**
  * login.js —— 登录 / 首次注册页（电脑与触屏**共用同一页**）
- *
  * 功能：登录页的全部交互 —— 查 `/api/auth/state` 决定进登录还是注册形态、在两个形态间切换、
- *      提交表单（注册成功续上登录）并在成功后回 `/`，以及错误提示与提交期间的按钮禁用。
- *
- * ⚠️ 为什么这里**不做**手机版 / 电脑版分流（与 index.html 的引导脚本不同）：
- *   登录成功后必然跳 `/`，而 `/` 的引导脚本本来就会把手机送去 `/mobile/` ——
- *   所以本页不需要第二份设备判定，少一份副本就少一处漂移。
- *   窄屏可用性靠 login.css 解决（16px 输入框防 iOS 聚焦缩放、44px 触摸目标、安全区留白）。
- *
- * 页面形态由 `/api/auth/state` 决定：
- *   - 库里已有账号（**正常情况**：启动时已内置管理员 `admin`）→ 登录；管理员开着自主注册时额外给一颗「新用户注册」按钮
- *   - 库里连一个账号都没有（极端情况：只读降级导致内置管理员没建成）→ 直接进注册形态，至少让人能进门
- *   - 已登录 → 直接回 `/`
- *
- * 表单下面固定是两颗次级按钮（一左一右）：左「新用户注册／返回登录」、右「忘记密码」——
- * 0.9.1 之前它们是小灰字链接，触屏上不好点，而且「注册一个」那半句套在「还没有账号？」里读着像说明文字。
- *
- * ⚠️ 自己注册出来的一律是**普通成员**；管理员是出厂内置的 `admin`（见 server.js 的 ensureBuiltinAdmin）。
- *
- * ⭐ **`BASE`：本页被挂在哪个路径下**（0.3.5 统一网关改造）——
- *    飞牛统一网关把应用挂在系统域名的 `/app/zxdesk` 下，接口地址必须带这层前缀，
- *    否则登录请求会打到飞牛自己的站点根（表现为「网络异常，请重试」）。
- *    ⚠️ 本页是**经典脚本**（刻意不用 ESM，见），拿不到 `core/api.js` 的 `BASE`，
- *      所以在这里就地按「当前页面所在目录」算：`/login.html` → `''`；`/app/zxdesk/login.html` → `/app/zxdesk`。
- *      **两个算法必须给出同一个值** —— 登录页永远在应用根，这一条成立。
- *
+ * 提交表单（注册成功续上登录）并在成功后回 `/`，以及错误提示与提交期间的按钮禁用。
  * @author zx
  * @date   2026-09-10
  * @since 0.9.7
@@ -39,21 +15,17 @@
   /**
    * 功能：把地址上的查询串带走（去掉 `view`）—— 登录成功回 `/` 时用。
    *
-   * 说明：⭐⭐ 2026-10-19（「手机端访问要输入访问码…只有中转模式下会这样」）：
-   *      飞牛网关会在入口地址上带它自己的票据 / 标记（走 FN Connect 中继时尤其明显）。
-   *      整页跳转时**把 `location.search` 丢掉** = 网关认为这一趟没带凭证 ⇒ 又弹出访问码页
-   *      （用户看到的就是「输入对了还回到输入界面」）。
-   *      本页与两个 `index.html` 里的 `carrySearch()` 是**同一套规则**（只摘掉我们自己的 `view`），
-   *      ⛔ 别只改一处：任何一处漏掉都会让那一跳把票据甩掉。
-   * @returns {string} 要拼在地址后面的查询串（含 `?`）；没有时为空串
+   * 飞牛网关会在入口地址上带它自己的票据 / 标记（走 FN Connect 中继时尤其明显）。
+   * 整页跳转时**把 `location.search` 丢掉** = 网关认为这一趟没带凭证 ⇒ 又弹出访问码页
+   * （用户看到的就是「输入对了还回到输入界面」）。
    */
   function carrySearch() {
     const s = String(location.search || '');
     if (!s) return '';
     try {
       const usp = new URLSearchParams(s);
-      // ⭐ 0.9.6：`view=desktop` 要带到下一屏（见 index.html 里同一处说明）；
-      //    `view=mobile` 仍是临时预览，丢掉。
+      // `view=desktop` 要带到下一屏（见 index.html 里同一处说明）；
+      // `view=mobile` 仍是临时预览，丢掉。
       if (usp.get('view') !== 'desktop') usp.delete('view');
       const out = usp.toString();
       return out ? '?' + out : '';
@@ -64,13 +36,9 @@
   /**
    * 功能：读登录闸门带过来的 `next`（登录成功后该回哪儿）—— **不合法一律当没有**。
    *
-   * 说明：⭐⭐ 0.9.8 第 6 轮（方案 §十一）：`core/static.js` 在未登录时会 302 到
-   *      `/login.html?next=<应用内相对地址>`，这样「从文件管理器双击 `.zxdesk`」的人
-   *      登录完能回到**同一个文件**，而不是掉在工作台首页。
-   *      ⚠️ 这里是一道**安全闸**（开放重定向）：只接受 `/` 开头、且**不能**是 `//`、
-   *      也不能是 `/\` —— 后两种会被浏览器当成「协议相对地址」，等于把登录后的用户
-   *      送到 `evil.com` 去。指回登录 / 设置页也一律忽略（否则是死循环）。
-   * @returns {string} 合法的应用内地址（含查询串）；不合法时为空串
+   * `/login.html?next=<应用内相对地址>`，这样「从文件管理器双击 `.zxdesk`」的人
+   * 登录完能回到**同一个文件**，而不是掉在工作台首页。
+   * 这里是一道**安全闸**（开放重定向）：只接受 `/` 开头、且**不能**是 `//`、
    */
   function nextTarget() {
     try {
@@ -123,11 +91,8 @@
    * 功能：重设表单下方的两颗次级按钮与它们下面那行说明。
    *
    * 版式：一左一右并排（`login.css` 的 `.aux` 是两列网格）—— 左边那颗是「换形态」（新用户注册／返回登录），
-   *      右边那颗固定是「忘记密码」。左按钮传空串时整颗不出现（管理员关了自主注册），
-   *      此时 `one` 类让右边那颗占满整行，否则它会缩成半宽贴左边。
+   * 右边那颗固定是「忘记密码」。左按钮传空串时整颗不出现（管理员关了自主注册），
    * @param {string} altLabel - 左边按钮的文案；空串表示这颗不出现
-   * @param {string} [note] - 说明行文案；空值表示不显示（关了自主注册时用它写「请向管理员申请账号」）
-   * @returns {void}
    */
   function setAux(altLabel, note) {
     altBtn.textContent = altLabel || '';
@@ -189,11 +154,8 @@
   }
 
   /**
-   * 功能：打开「重置密码」弹窗 —— 焦点移到关闭按钮，并锁住背景滚动（否则弹窗后面还能跟着滑）。
    *
-   * ⚠️ 弹窗里**只有说明文字**，没有任何在线重置通道 —— 忘记密码只能由人在 NAS 本机上
-   *    用 `cmd/reset-admin` 重置。⛔ 别在这里挂接口，那等于给所有人一个后门。
-   * @returns {void}
+   * 弹窗里**只有说明文字**，没有任何在线重置通道 —— 忘记密码只能由人在 NAS 本机上
    */
   function openReset() {
     resetModal.hidden = false;
@@ -252,14 +214,14 @@
         showError((l.data && l.data.error) || `登录失败（${l.status}）`);
         return;
       }
-      // ⭐ 首登强制：内置管理员还在用公开初始口令 ⇒ 先去设置页，改完才能进主界面
+      // 首登强制：内置管理员还在用公开初始口令 ⇒ 先去设置页，改完才能进主界面
       if (l.data && l.data.mustSetup) {
         window.location.replace(BASE + '/setup.html' + carrySearch());
         return;
       }
-      // ⭐ 0.2.15：登录成功就把离线快照清掉 —— 这台设备可能换了账号，上一个账号的
-      //    只读缓存（任务 / 记账 / 密码库条目）不能在断网时被下一个人看到。
-      //    ⚠️ 键前缀与 `core/cache.js` 的 PREFIX 必须一致（登录页是经典脚本，没法 import）。
+      // 登录成功就把离线快照清掉 —— 这台设备可能换了账号，上一个账号的
+      // 只读缓存（任务 / 记账 / 密码库条目）不能在断网时被下一个人看到。
+      // 键前缀与 `core/cache.js` 的 PREFIX 必须一致（登录页是经典脚本，没法 import）。
       try {
         const stale = [];
         for (let i = 0; i < localStorage.length; i += 1) {
@@ -267,11 +229,13 @@
           if (k && k.indexOf('zxdesk.cache.v1:') === 0) stale.push(k);
         }
         stale.forEach(k => localStorage.removeItem(k));
+        // ⚠️ 草稿（`zxdesk.draft.v1:`）**不在这里清**：`core/draft.js` 的键带了账号 id 前缀，
+        //    换人登录本来就看不到上一个人的半截字；在这里无差别清掉，会把**本账号**刚打完的
+        //    草稿也一起删了（会话过期重登时尤其致命）。过期与条数由那两处上限兜底。
       } catch (_e) {
         /* 存储不可用：本来也没有缓存 */
       }
-      // ⚠️ 带上查询串（见 `carrySearch()`）—— 丢掉它会被飞牛网关重新弹访问码
-      // ⭐ 0.9.8 第 6 轮：闸门带了 `next` 就回那一屏（双击 `.zxdesk` 的动线靠它）
+      // 带上查询串（见 `carrySearch()`）—— 丢掉它会被飞牛网关重新弹访问码
       const next = nextTarget();
       window.location.replace(next ? BASE + next : BASE + '/' + carrySearch());
     } catch (_e) {
@@ -282,7 +246,6 @@
   });
 
   /**
-   * 功能：页面初始化 —— 查会话状态；已登录直接回 `/`，否则按库里有无账号决定登录 / 注册形态并显示表单。
    * @returns {Promise.<void>}
    */
   (async function init() {
@@ -290,7 +253,7 @@
       const res = await fetch(BASE + '/api/auth/state');
       const s = await res.json();
       if (s && s.authenticated) {
-        // ⭐ 首登强制：账号还在用公开初始口令 ⇒ 先去设置页
+        // 首登强制：账号还在用公开初始口令 ⇒ 先去设置页
         const next = nextTarget();
         window.location.replace(
           s.mustSetup ? BASE + '/setup.html' + carrySearch() : next ? BASE + next : BASE + '/' + carrySearch(),

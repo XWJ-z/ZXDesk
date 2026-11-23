@@ -2,22 +2,9 @@
  * context.js —— 运行期单例与启动期自检（数据目录 / Store / 会话密钥 / 日志）
  *
  * 功能：持有**整个进程唯一**的那几样东西，并按顺序完成启动期的一次性工作 ——
- *      解析数据目录、建目录、构造 `Store`（内部含迁移与备份）、读取或生成会话签名密钥，
- *      以及把数据层体检结果写进启动日志。对外导出 `dataDir` / `store` / `storeInfo` /
- *      `secretInfo` / `AUTH_SECRET` / `logLine` / `resolveDataDir`。
- *
- * ⚠️ **为什么单独一个文件**：拆分前这些都是 `server.js` 的模块级单例，所有 handler 直接闭包引用
- *    （`store` 被引用 100+ 处）。若把它们留在 `server.js`、handler 搬去 `routes/*`，`routes/*` 就必须
- *    反过来 require 入口 —— **成环**。所以单例下沉到这里，依赖方向变成单向：
- *    `context ← http-util ← routes ← server`。本文件**不许** require 上面任何一个。
- * ⚠️ **加载顺序即语义**：`process.env.HOME` 必须在 `Store` 构造**之前**改好（飞牛 package 用户没有真实 home，
- *    不改会写文件 EACCES）；`store` 构造必须先于任何 handler 被调用。所以 `server.js` 必须**第一个** require 本文件。
- *
- * ⭐ 0.8.1（记账 2 期）＋ 0.9.8（zx 实验室）：数据层现在是**三个库**（主库 + 记账库 + 实验室库），
- *    两个**分库**的启动日志各报一次 —— 后端 / 文件 / WAL 探测 / 只读降级 / 迁移前备份 / 建索引失败，
- *    两套结果**分开写**（`logSideDb()` 一份实现，两个库各调一次）。
- *    判据来自 `dbStatusOf(store)`（`{main, ledger, lab}`，只含非敏感信息）而不是 `storeInfo`：
- *    `info()` 住在 `store/methods/admin.js`。
+ * 解析数据目录、建目录、构造 `Store`（内部含迁移与备份）、读取或生成会话签名密钥，
+ * 以及把数据层体检结果写进启动日志。对外导出 `dataDir` / `store` / `storeInfo` /
+ * `secretInfo` / `AUTH_SECRET` / `logLine` / `resolveDataDir`。
  *
  * @author zx
  * @date   2026-09-12
@@ -31,7 +18,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { Store, dbStatusOf } = require('./storage.js');
 const { hashPassword, hashUsable, loadOrCreateSecret } = require('./auth.js');
-const { resolveStartup, runCleanupSync, repairState } = require('./data-location.js');
 
 ('use strict');
 
@@ -69,14 +55,6 @@ function logLine(level, msg) {
 }
 
 /**
- * 功能：把一个**分库**（记账 / 实验室）的体检结果写进启动日志 —— 三件事各报一次。
- *
- * 说明：⭐ 0.8.1 起「主库正常」**完全不代表**分库正常；0.9.8 起分库变成两个。
- *      两个分库的报法**逐字同构**（后端/文件、不可用原因、WAL、迁移前备份、建索引失败），
- *      所以只写一份、用名字参数区分 —— ⛔ 别复制成两段：那种副本的失效方式是
- *      「改了一个忘了另一个」，而症状是某个库坏了却**没有人说得出来**。
- *      ⚠️ 状态拿不到时**照实说拿不到**，绝不让一段体检报告把整个进程打挂。
- *
  * @param {string} name - 日志里的库名（如 `'记账数据库'`）
  * @param {string} short - 功能名（如 `'记账'`，用于「已停止 X 读写」）
  * @param {?Object} st - `dbStatusOf().<库>` 的状态项
@@ -125,74 +103,52 @@ function logSideDb(name, short, st, indexErrors, backupFile) {
 
 // ---- 初始化数据层 ----
 /**
- * 默认目录：安装时由 `data-share` 定的那一个，索引与归档住在它里面。
- * ⚠️ 它与「数据目录」不是同一件事：迁移过之后数据在别处，默认目录只留 `data-location.json`
- *    与 `zxdesk-data-*.zip`。
+ * 数据目录：**安装时定下的那一个** —— 有 `DATA_DIR`（`cmd/main` 按安装向导的选择传进来）就用它，
+ * 没有就是飞牛 `data-share` 给的位置。装好之后不再变，所以它既是"默认"也是唯一的。
  */
 const DEFAULT_DIR = resolveDataDir();
 
-/**
- * 启动判定：用默认目录 / 用索引里的自定义位置 / 位置不可信（只能出恢复引导）。
- * ⚠️ 判定必须在**建目录与开库之前**完成 —— 否则一个没挂上的卷会被 `mkdirSync` 建出来，
- *    `Store` 再在里面建一个空库，用户看到的就是「数据全没了」。
- */
-const STARTUP = resolveStartup({ defaultDir: DEFAULT_DIR, pkgvar: PKGVAR });
-
-/** 位置不可信时的现场（`null` 表示正常启动） */
-const repair = STARTUP.mode === 'repair' ? STARTUP : null;
-
-const dataDir = repair ? DEFAULT_DIR : STARTUP.dir;
+// 数据目录**只由安装时决定**（安装向导 → `cmd/install_callback` → `cmd/main` 的 `DATA_DIR`）。
+//    这里不再有位置索引、没有「自定义位置」、没有恢复态 —— 也就不存在"位置对不上"这一类问题。
+//    ⚠️ 打不开就退出（见下面 `openStore` 那段），⛔ 绝不在原地建一个空库：那会让用户看到"数据全没了"。
+const dataDir = DEFAULT_DIR;
 
 /**
- * 功能：建目录并打开数据层（只在「位置可信」时调用）。
+ * 功能：建目录并打开数据层。
  * @param {string} dir - 数据目录
- * @returns {Object} `Store` 实例
+ * @returns {Object} `Store` 实例（目录建不出来 / 打不开时抛出，由调用方决定怎么报）
  */
 function openStore(dir) {
   fs.mkdirSync(dir, { recursive: true });
   return new Store(dir);
 }
 
-// ⭐ 索引已提交、源位置还没清理完：**在建库之前**清掉（此刻源库的句柄还没打开，删才安全）。
-//    清理只动索引 `cleanup.paths` 里列出的相对路径，目录里别人的文件一个都不动；删失败就留到下次启动。
-if (!repair && STARTUP.index) {
-  try {
-    runCleanupSync({ index: STARTUP.index, defaultDir: DEFAULT_DIR, pkgvar: PKGVAR, log: logLine });
-  } catch (e) {
-    logLine('warn', `源位置清理未能完成（不影响本次使用，下次启动会重试）: ${(e && e.message) || e}`);
-  }
+
+// ⚠️ 数据目录打不开（卷没挂上 / 权限被改坏）时**立刻退出**，⛔ 不在原地建一个空库：
+//    那会让用户看到"数据全没了"，而实际上数据还在原来那块盘上。
+let store;
+try {
+  store = openStore(dataDir);
+} catch (e) {
+  logLine(
+    'error',
+    `数据目录不可用：${dataDir} —— ${(e && e.message) || e}。` +
+      '应用没有新建任何文件；请检查存储空间是否挂载、目录属主是否为 zxdesk:zxdesk，修好后重启应用。',
+  );
+  process.exit(1);
 }
 
-const store = repair ? null : openStore(dataDir);
-
-// ⭐ 把「安装位置」与「位置索引」交给数据层：`storageInfo()` 要据此算出「默认 / 自定义」、
-//    列出归档与最近一次搬迁。⚠️ 不放进构造参数是为了不改 `Store` 的签名（那边有 100+ 处调用）。
-if (store) {
-  store.defaultDir = DEFAULT_DIR;
-  store.locationIndex = STARTUP.index || null;
-}
 
 const storeInfo = store ? store.info() : null;
 
-// ⭐ 0.8.1：两个库的只读体检结果（主库那一半另有 `storeInfo`，见 store/methods/admin.js）——
+// 两个库的只读体检结果（主库那一半另有 `storeInfo`，见 store/methods/admin.js）——
 //    读口统一在 `storage.js` 的 `dbStatusOf()` 上，本文件不直接去摸实例字段。
 const dbStatus = store ? dbStatusOf(store) : null;
 
-if (repair) {
-  logLine(
-    'error',
-    `数据位置不可用（${repair.reason}）：${dataDir} —— 应用没有打开数据库，也没有新建任何文件；` +
-      '请在恢复引导页重新授权、换一个位置，或用安装位置里的归档恢复。',
-  );
-  if (repair.detail) logLine('info', `数据位置不可用的细节：${repair.detail}`);
-}
 
-// ⚠️ 位置不可信时下面这一整段体检都不成立（没有库可体检）：只出恢复引导，不建库、不登录
-if (!repair) {
-
-// ⭐ 0.8.9：启动日志**固定一行**「Node 版本 · 存储后端 · 库路径」。
+// 启动日志**固定一行**「Node 版本 · 存储后端 · 库路径」。
 //   换运行时这种改动，事后只能靠日志回答「这个包到底跑在哪个 Node 上」「数据写进了哪个文件」——
-//   而这正是 0.8.9 唯一的主题，所以它必须**固定、完整、每次都有**，⛔ 不许散在别处拼。
+//   而这正是 唯一的主题，所以它必须**固定、完整、每次都有**，⛔ 不许散在别处拼。
 logLine('info', `Node ${process.version} · 存储后端 ${storeInfo.backend} · ${storeInfo.dbFile}`);
 
 if (storeInfo.initError) {
@@ -220,7 +176,7 @@ if (storeInfo.backend === 'sqlite') {
   }
 }
 
-// ⭐ 0.8.1 / 0.9.8：**两个分库（记账 ＋ 实验室）** 各报一次体检结果。
+// / ：**两个分库（记账 ＋ 实验室）** 各报一次体检结果。
 //   ⚠️ 两组探测结果必须能分开看：合成一行之后就再也说不清「是哪个库没启用 WAL」，
 //   而这条日志的用处正是「一眼看出数据目录是不是网络盘」。同理，只报「主库正常」会让
 //   某个分库打不开这件事**完全无声**（用户那边只看到那块功能整天 503）。
@@ -263,7 +219,7 @@ if (storeInfo.backend === 'sqlite' && storeInfo.foreignKeys === false) {
   logLine('warn', '⚠️ SQLite 外键未能启用（PRAGMA foreign_keys=ON 失败）—— 级联删除将退回应用层保证');
 }
 
-// 表改名迁移（0.1.2：课表 5 张加 `timetable_` 前缀；0.8.13：三块并版，16 张加 `time_` 前缀）
+// 表改名迁移
 if (storeInfo.renamedTables && storeInfo.renamedTables.length) {
   logLine('info', `数据库表名已规范化（原地改名，数据未搬动）: ${storeInfo.renamedTables.join('、')}`);
 }
@@ -279,7 +235,7 @@ if (storeInfo.tableAliasConflicts && storeInfo.tableAliasConflicts.length) {
   );
 }
 
-// ⭐ 0.8.12 列改名迁移（users.hide_chat → hide_teamwork）：与表改名同性质，原地改名、数据未搬动
+// 列改名迁移（users.hide_chat → hide_teamwork）：与表改名同性质，原地改名、数据未搬动
 if (storeInfo.renamedColumns && storeInfo.renamedColumns.length) {
   logLine('info', `数据库列名已规范化（原地改名，数据未搬动）: ${storeInfo.renamedColumns.join('、')}`);
 }
@@ -315,18 +271,10 @@ if (storeInfo.legacyNullStartDates > 0) {
     `检测到 ${storeInfo.legacyNullStartDates} 条历史任务没有开始日期 —— ` +
       '按截止日期推断显示，不会修改数据库里的原始值。',
   );
-}
 
-if (repair) {
-  // 恢复态不报路径：此时「默认目录」只是索引与归档的落点，不是真正的数据位置
-  logLine('info', `数据目录: （不可用，见上面的原因）`);
-} else if (STARTUP.mode === 'custom') {
-  logLine('info', `数据目录: ${dataDir}（自定义；默认目录 ${DEFAULT_DIR} 存有索引与归档）`);
-} else {
-  logLine('info', `数据目录: ${dataDir}`);
-}
+logLine('info', `数据目录: ${dataDir}`);
 
-// ⭐⭐ 0.8.12：协作附件**孤儿巡检** —— 「库里有记录、磁盘没文件」与
+// 协作附件**孤儿巡检** —— 「库里有记录、磁盘没文件」与
 //   「磁盘有文件、库里没记录」各报一次。⚠️⭐ **只报告、绝不自动删**（绝不改写用户数据）。
 //   附件子系统住在任务板模块里（可整目录删掉）⇒ 方法不在时静默跳过；巡检本身出错也不阻断启动。
 if (typeof store.collabFileOrphans === 'function') {
@@ -359,13 +307,8 @@ if (storeInfo.usersIndexError) {
 /**
  * 会话签名密钥。
  * ⚠️ 必须落盘：不落盘则每次重启换密钥 → 所有人被登出。
- * ⚠️ 落盘失败**不阻断启动**，但要显著告警 —— 静默降级是不可接受的。
  */
-const secretInfo = store
-  ? loadOrCreateSecret(dataDir)
-  : // 恢复态没有数据目录：给一个**临时**密钥，让模块加载与未登录页面照常工作。
-    // 这个进程里本来也开不了库、登不了录，重启即失效。
-    { secret: crypto.randomBytes(32).toString('hex'), file: '', error: null };
+const secretInfo = loadOrCreateSecret(dataDir);
 
 const AUTH_SECRET = secretInfo.secret;
 
@@ -379,68 +322,17 @@ if (secretInfo.error) {
 
 /**
  * 功能：出厂内置管理员的凭据常量（用户名 / 初始口令 / 显示名），供 `ensureBuiltinAdmin()` 建号与日志提示使用。
- *
  * 说明：⭐ 内置管理员：`admin` / `admin123`（替换掉「首个注册者即管理员」）。
- *
  * **为什么必须有内置账号**：「谁先注册谁就是管理员」把部署者自己关在了门外 ——
  * 他装好应用后先注册了自己的成员账号，从此系统里**一个管理员都没有**，谁也开不了「成员管理」。
  * 一个「可能把自己锁死」的账号模型是不可接受的，所以改成**出厂就带一个管理员**：
  * 凭据是公开的（文档与启动日志里都写着），登录后第一件事就是去「设置 → 账号设置」改掉它。
- *
- * 规则（`ensureBuiltinAdmin()`，每次启动跑一遍，**以「内置管理员这个账号」为准，
- * **不以「库里有没有管理员」为准**）。⚠️ 0.2.1 起**先按身份、再按名字**两道判据（见 `BUILTIN_ADMIN_KEY`）：
- *
- * | 库里状态                                    | 动作                                                       |
- * | ------------------------------------------- | ---------------------------------------------------------- |
- * | `admin` 已是管理员，且**口令可用**           | **什么都不做**（绝不重置它的密码 —— 大多数启动走这条），并把它的 id 记进 `builtin_admin_id` |
- * | `admin` 存在但**没有可用口令**（空/损坏）    | **重写为初始口令**（否则这个账号谁都进不去，见下）           |
- * | `admin` 存在但是普通成员，且口令可用         | **提升为管理员，绝不改它的密码**（谁设的密码谁是主人）       |
- * | `admin` 不存在（无论库里有没有别的管理员）   | 建 `admin` / `admin123`                                    |
- * | `builtin_admin_id` 指向的账号已不存在        | 清掉这个失效标记，再按上面四条按名字兜底                     |
- *
- * ⚠️ 一旦 `builtin_admin_id` 认领成功，**上面四条就只处理那一个身份，与名字无关** ——
- *    这正是「登录名可以改成维护者的名字、而重启不会重造一个 `admin`」的机制所在。
- *
- * ⚠️ **第三行是 改的**：最初的判据是「库里一个管理员都没有才补」，
- *    结果早期库在单用户时代就有数据、又用旧版注册过账号（那个账号就是管理员），
- *    于是这条规则**永远不为他创建 admin** —— 他按文档敲 `admin` / `admin123` 只会得到「密码不正确」。
- *    现在的判据改成「`admin` 这个入口在不在」：**只要名字还空着就补上**，
- *    这样「忘记管理员密码」也永远有救；代价见下面那条安全说明。
- *
- * ⚠️ **第二行是同一天第三次踩坑后补的**（配合 `auth.js` 的 `hashUsable`）：
- *    单用户时代**就已经有一张 `users` 表**（只有 id / username / display_name / created_at，
- *    没有密码列 —— 见 `storage.js` 的 `_ensureColumn('users', 'password_hash', ...)`），
- *    老库升级上来时那个补出来的列是 **NULL**。而旧规则是「名字被占 → 提升它、绝不改密码」，
- *    于是提升出了一个**没有密码的管理员**：账号在、权限在、显示名还叫「管理员」，
- *    但 `verifyPassword(任何口令, NULL)` 恒为 false —— 敲什么都是「密码不正确」，
- *    而「绝不改密码」又让它永远修不回来。**判据必须是「能不能用它登录」，不是「这一行在不在」。**
- *    散列为空/损坏时重写口令**不违反「绝不重置密码」**：那种状态下没有任何人的密码被夺走。
- *
- * ⚠️ 这个默认口令是**公开**的 —— 谁能在改密码之前访问到这个应用，谁就是管理员。
- *    因此：启动日志每次都会 `[warn]` 催改；**已经另有管理员的库里补出它时会额外告警**
- *    （那等于给一个本来安全的库加了一个公开口令的入口，必须让人看见）。
- *    应用只跑在 NAS 的局域网端口上，所以实际风险窗口很短。
  */
 const BUILTIN_ADMIN = { username: 'admin', password: 'admin123', displayName: '管理员' };
 
 /**
- * ⭐ **内置管理员身份标记**（0.2.1，随「登录名可改」一起加的）：
+ * ⭐ **内置管理员身份标记**：
  * 在 `settings` 里记下「哪个账号是内置管理员」。
- *
- * **为什么非有不可**：原来这条兜底是靠**名字**认人的 —— 「名字 `admin` 还在不在」。
- * 可 0.2.1 起**登录名可以改了**（所有账号、含管理员），于是「把 `admin` 改成人名」的下一刻，
- * 名字就空了出来，下次启动这条兜底会**老老实实再建一个 `admin` / `admin123` 的管理员**——
- * 也就是说：改个名就凭空多出一个**口令公开、且按现有接口删不掉**的入口，而且只有第一次的日志
- * 看起来像提醒。那是把「兜底」变成了「后门」。
- *
- * 所以判据从**名字**改成**落库的身份**：只要这一条记录还在，就永远认得出它是内置管理员，
- * 改多少次名都不影响兜底；`settings` 是全局键值表，随整库备份走，天然自洽
- * （⚠️ 不放 `users` 上加列：那要动结构，而这件事**只需要记住一个 id**）。
- *
- * ⚠️ 与 的关系：那条结论**一个字没改** —— 「判据必须是『这账号在不在』**且**『它的口令能不能用』」。
- *    变的只是「怎么定位那个账号」：从「名字叫 `admin`」换成「id 存在这个键里」。
- *    认不到时（键缺失 / 指向的账号被删 / 指向的账号已经不是管理员且口令也坏了）一律**退回按名字兜底**，
- *    「永不把人锁在门外」保持完整。
  */
 const BUILTIN_ADMIN_KEY = 'builtin_admin_id';
 
@@ -455,11 +347,9 @@ function builtinAdminId() {
 
 /**
  * 功能：把某个账号认领为「内置管理员」（写 `settings` 的 `builtin_admin_id`），失败只告警不抛。
- *
  * 说明：⚠️ 刻意**不阻断启动**：只读降级时写入必然失败，而那种情况下应用本来就该照常起得来
  *      （进去还能导出备份自救），不能因为记不下一个 id 就起不来。但**必须响** ——
  *      写不进去意味着下次启动还会按名字兜底，改名后的后门就又有了，得让人看见。
- *
  * @param {number} id - 要认领的账号 id
  * @returns {void}
  */
@@ -483,11 +373,9 @@ function claimBuiltinAdmin(id) {
  */
 /**
  * 功能：生成一次性初始口令（内置管理员散列为空/损坏、必须重写时用）。
- *
  * 说明：⚠️ 刻意**不复用** `BUILTIN_ADMIN.password` —— 那个口令是公开的，用它重置等于把一个
  *      「账号不可用」的故障自动转换成「公开口令可登录」。这里给 12 位随机串，只打印到启动日志一次。
  *      `base64url` 不会产生需要转义的字符，复制粘贴进登录框即可。
- *
  * @returns {string} 12 位一次性口令
  */
 function oneTimePassword() {
@@ -500,7 +388,7 @@ function ensureBuiltinAdmin() {
     //    ⚠️ 不靠「缺键即关闭」推断 —— 管理员在界面上要能看见「已关闭」这个状态，而不是一片空白。
     //    ⚠️ 只写一次：老库若已显式开过（'1'），这里不动它。
     if (store.getSetting('allow_self_register') == null) store.setSetting('allow_self_register', '0');
-    // ---- ⭐ 第一判据：按**身份**认领（0.2.1 起登录名可改，不能再看名字了）----
+    // ---- ⭐ 第一判据：按**身份**认领----
     //      分支与下面的按名字兜底**逐条对应**，只是不依赖名字。
     const claimedId = builtinAdminId();
     if (claimedId !== null) {
@@ -634,7 +522,6 @@ process.on('SIGINT', () => {
 
 /**
  * 功能：对外可读的**运行期量**容器，目前只有「实际监听到的端口」一个字段。
- *
  * ⚠️ 为什么需要它：`healthPayload()` 要上报**真实端口**（`service_port` 8990 被占用时会顺延 +1…+20），
  *    而持有该端口的是入口 `server.js` 里的 `server` 对象。让 `routes/system.js` 反过来 require 入口
  *    就成了**循环依赖**，所以只把这**一个值**下发到这里。
@@ -643,10 +530,6 @@ process.on('SIGINT', () => {
  */
 const runtime = { port: null };
 
-/** 恢复引导页需要的那份状态（不含完整路径的裁剪在路由层做） */
-function locationState() {
-  return repairState({ defaultDir: DEFAULT_DIR, pkgvar: PKGVAR, startup: STARTUP });
-}
 
 module.exports = {
   DATA_DIR_ENV,
@@ -655,9 +538,6 @@ module.exports = {
   resolveDataDir,
   logLine,
   DEFAULT_DIR,
-  STARTUP,
-  repair,
-  locationState,
   dataDir,
   store,
   storeInfo,

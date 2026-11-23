@@ -2,19 +2,12 @@
  * core/backup.js —— 备份文件的**客户端**识别与摘要（两端共用）
  *
  * 功能：`readZipManifest(file)` 从整体备份压缩包里读出那份摘要；`orgCounts(counts)` 把摘要或
- *      老式 JSON 备份里的条数整理成统一的一列「名称 · 条数」。两端的「恢复整体备份」弹窗都用它，
- *      所以放在 `core/` —— 这是**真正该一致**的东西，不是两段长得像的代码。
- *
- * ⭐ 为什么浏览器里能直接读 ZIP 里的 `manifest.json`：服务端把这一份**不压缩**存进来
- *    （见 `routes/backup.js` 的 `handleExportOrg`）。于是这里只要按局部文件头切一段字节、
- *    `JSON.parse` 一下就行 —— 不需要解压，也就不用 `DecompressionStream` 那种新内核才有的东西。
- * ⚠️ 代价是这份探测只认「第一个成员就是不压缩的 manifest.json」这个形状：用户若拿
- *    资源管理器把包解开再重压一遍，`readZipManifest()` 会返回 null。这**不影响恢复**
- *    （服务端按中央目录读，什么形状都认），只让预览少几个数字 —— 调用方要能接受 null。
+ * 老式 JSON 备份里的条数整理成统一的一列「名称 · 条数」。两端的「恢复整体备份」弹窗都用它，
+ * 所以放在 `core/` —— 这是**真正该一致**的东西，不是两段长得像的代码。
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.8.13
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/03-数据安全.md
  */
 
@@ -31,12 +24,8 @@ const ZIP_HEAD_BYTES = 4096;
  * 功能：判断选中的文件是不是一个 ZIP（只看头 4 字节的签名）。
  *
  * 说明：⭐ 前端**必须**按内容判断该走哪条路，不能按扩展名 —— 而且不能拿
- *      「`readZipManifest()` 有没有返回值」当判据：那个只认「第一个成员是不压缩的
- *      manifest.json」这一种形状，用户重压过的包读不出摘要，但**恢复照样是好的**。
- *      拿它当判据会把一份好备份挡在「这不是一个有效的 JSON 文件」上。
- *
- * @param {File} file - 用户选中的文件
- * @returns {Promise.<boolean>} 是 ZIP 返回 true
+ * 「`readZipManifest()` 有没有返回值」当判据：那个只认「第一个成员是不压缩的
+ * manifest.json」这一种形状，用户重压过的包读不出摘要，但**恢复照样是好的**。
  */
 export async function isBackupZip(file) {
   try {
@@ -51,10 +40,8 @@ export async function isBackupZip(file) {
  * 功能：从整体备份压缩包里读出摘要对象；不是压缩包、或读不出来时返回 null。
  *
  * 说明：任何一步不对劲都**安静地**返回 null —— 这里只是「预览」，失败不该打断用户；
- *      真正判断文件合不合法的地方是服务端。
+ * 真正判断文件合不合法的地方是服务端。
  *
- * @param {File} file - 用户选中的文件
- * @returns {Promise.<?Object>} 摘要对象；读不出来时为 null
  */
 export async function readZipManifest(file) {
   let head;
@@ -105,10 +92,8 @@ function num(v) {
  * 功能：把整体备份的条数整理成 `[[名称, 条数], …]`，供两端渲染预览。
  *
  * 说明：⭐ 两种形状都吃 —— 新版压缩包给 `manifest.counts`（数字），
- *      0.2.0 及更早导出的纯 JSON 给 `dump.tables`（数组）。调用方不必分流。
+ * 及更早导出的纯 JSON 给 `dump.tables`（数组）。调用方不必分流。
  *
- * @param {Object} counts - `manifest.counts` 或老备份的 `dump.tables`
- * @returns {Array.<Array>} 与 `countsHtml` / `chipsHtml` 对接的「名称 · 条数」列表
  */
 export function orgCounts(counts) {
   const c = counts || {};
@@ -119,7 +104,7 @@ export function orgCounts(counts) {
     ['日常任务', num(c.daily_tasks)],
     ['学期', num(firstOf(c, 'time_timetable_terms', 'terms'))],
     ['课次', num(firstOf(c, 'time_timetable_sessions', 'course_sessions'))],
-    // ⭐ 0.3.1：整体备份的条数摘要也带上硬件台账（与个人备份的预览同一口径）
+    // 整体备份的条数摘要也带上硬件台账（与个人备份的预览同一口径）
     ['数码台账', num(c.hardware)],
   ];
 }

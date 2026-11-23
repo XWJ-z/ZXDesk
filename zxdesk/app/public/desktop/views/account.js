@@ -2,18 +2,9 @@
  * desktop/views/account.js —— 我的账号
  *
  * 功能：「设置 → 账号设置」那一栏的内容 —— 展示当前登录账号的资料，并提供**改用户名**、改密码与退出登录。
- *      `loadMe()` 拉取当前账号并缓存进 `state.me`；
- *      `accountPaneHtml()` **返回**资料卡的 HTML（⭐ 0.4.1 起不再自己写 DOM：它由
- *      `views/settings.js` 的左右结构嵌进右侧那一屏，见开发）；
- *      `openUsernameModal()` 打开改用户名弹窗并提交；`openPasswordModal()` 打开改密码弹窗并提交；
- *      `doLogout()` 退出登录后回登录页。
- *
- * ⭐ **0.4.1 撤掉了独立的「我的账号」视图**：原来它是一整屏（`#account-view` + 「返回设置」按钮），
- *    设置页改成左右结构之后，「点左侧菜单却整页跳走」是自相矛盾的 ⇒ 资料改成就地显示在右侧那一栏。
- *    ⚠️ 所以本文件**不再导出 `openAccount()` / `renderAccount()`**，也不再 `showView`；
- *    三个动作按钮的事件由 `settings.js` 在渲染后绑定（它才是画这一栏的人）。
- *    ⚠️ 依赖方向必须保持**单向** `settings.js → account.js`：账号资料改完之后要重画那一栏，
- *    走的是 `openUsernameModal(onDone)` 的回调，**不是**反过来 import settings.js（那会成环）。
+ * `loadMe()` 拉取当前账号并缓存进 `state.me`；
+ * `accountPaneHtml()` **返回**资料卡的 HTML（起不再自己写 DOM：它由
+ * `views/settings.js` 的左右结构嵌进右侧那一屏，见开发）…
  *
  * @author zx
  * @date   2026-09-11
@@ -32,12 +23,9 @@ import { initialOf, lastLoginText, rolePill, shortStamp } from './admin.js';
 // ---------- 我的账号（所有人） ----------
 /**
  * 功能：读取当前登录账号（`GET /api/auth/me`）并缓存进 `state.me`；请求失败时把它置空，
- *      交由渲染方给出重试提示。
+ * 交由渲染方给出重试提示。
  *
- * 说明：⭐ 0.2.1 起这里**不再同步任何入口显隐** —— 侧栏那三个按钮（导出备份 / 账号 / 成员）
- *      已经收进「设置」页，而设置页每次打开都会重画，天然不会显示过期状态。
- *
- * @returns {Promise.<void>}
+ * 已经收进「设置」页，而设置页每次打开都会重画，天然不会显示过期状态。
  */
 export async function loadMe() {
   try {
@@ -49,12 +37,10 @@ export async function loadMe() {
 
 /**
  * 功能：返回「我的账号」资料卡的 HTML —— 头像、显示名与角色标签，以及用户名 / 显示名 / 创建时间 /
- *      上次登录四项资料，外加「修改用户名」「修改密码」「退出登录」三个按钮，末尾一句数据可见性说明
- *      （自己是管理员时措辞不同）。账号信息为空时返回一条「读取失败、点刷新重试」的提示。
+ * 上次登录四项资料，外加「修改用户名」「修改密码」「退出登录」三个按钮，末尾一句数据可见性说明
+ * （自己是管理员时措辞不同）。账号信息为空时返回一条「读取失败、点刷新重试」的提示。
  *
  * 说明：⭐ 只**返回字符串**、不碰 DOM —— 调用方（`views/settings.js`）决定它嵌在哪儿、事件怎么绑。
- *
- * @returns {string} 资料卡 HTML（外层是 `.panel-card`）；账号没读到则是一段 `.es-text` 提示
  */
 export function accountPaneHtml() {
   const me = state.me;
@@ -76,6 +62,11 @@ export function accountPaneHtml() {
         <dt>创建时间</dt><dd>${esc(shortStamp(me.created_at, 16) || '—')}</dd>
         <dt>上次登录</dt><dd>${esc(lastLoginText(me.last_login_at))}</dd>
       </dl>
+      ${
+        me.username === 'admin'
+          ? '<div class="sec-note" style="margin: -2px 0 10px; line-height: 1.7; color: var(--text-3); font-size: 12px">登录名还是 admin —— 这是公开的初始标识，建议改成只有你知道的名字（可选）。</div>'
+          : ''
+      }
       <div class="acct-actions">
         <button id="btn-change-name" class="btn btn-subtle" type="button">修改用户名</button>
         <button id="btn-change-pw" class="btn btn-subtle" type="button">修改密码</button>
@@ -89,15 +80,10 @@ export function accountPaneHtml() {
 
 /**
  * 功能：打开「修改用户名」弹窗并接管「保存」按钮 —— 提交 `PUT /api/auth/username`，
- *      成功后刷新缓存的账号信息并重画（侧栏与设置页里显示的名字也要跟着变）。
+ * 成功后刷新缓存的账号信息并重画（侧栏与设置页里显示的名字也要跟着变）。
  *
  * 说明：⚠️ 与改密码**恰好相反**：改名**不踢会话**，本机与其他设备都继续在线；
- *      但改完**旧名字立刻不能登录**，这就是「改登录名」本身的含义 —— 提示里两件事都要说清。
- *      校验只在服务端做（长度 / 字符集 / 重名），这里只挡「空」：两个口径各写一份必然漂移。
- *      ⚠️ `onDone` 是「改完之后由谁重画」的回调（本文件不认识设置页，见文件头）。
- *
- * @param {Function} [onDone] - 改名成功后的回调（设置页传 `renderSettings`）
- * @returns {void}
+ * 但改完**旧名字立刻不能登录**，这就是「改登录名」本身的含义 —— 提示里两件事都要说清。
  */
 export function openUsernameModal(onDone) {
   const me = state.me || {};
@@ -121,7 +107,7 @@ export function openUsernameModal(onDone) {
       state.me = r.user || state.me;
       closeModal();
       renderSidebar();
-      // ⚠️ 设置页那一栏里也写着用户名 —— 不重画它就会一直显示旧名字，直到用户跑去点别的栏
+      // 设置页那一栏里也写着用户名 —— 不重画它就会一直显示旧名字，直到用户跑去点别的栏
       if (typeof onDone === 'function') onDone();
       toast('用户名已改为「' + ((state.me && state.me.username) || name) + '」');
     } catch (e) {
@@ -132,13 +118,10 @@ export function openUsernameModal(onDone) {
 
 /**
  * 功能：打开「修改密码」弹窗，并接管「保存」按钮 —— 校验新密码长度与两次输入是否一致后提交
- *      `POST /api/auth/password`，成功则关闭弹窗并提示「其他设备已下线」。
+ * `POST /api/auth/password`，成功则关闭弹窗并提示「其他设备已下线」。
  *
  * 说明：管理员改自己的密码也走这里（成员管理里对他自己不提供「重置密码」按钮）——
- *      本路径改完会给**本机**续上新会话，只踢掉该账号的**其他**设备；
- *      而成员管理里的「重置密码」会作废该账号的**全部**在线会话。
- *
- * @returns {void}
+ * 本路径改完会给**本机**续上新会话，只踢掉该账号的**其他**设备；
  */
 export function openPasswordModal() {
   openModal(
@@ -168,7 +151,7 @@ export function openPasswordModal() {
 
 /**
  * 功能：退出登录 —— 请求 `POST /api/auth/logout` 后跳回登录页；请求失败也照样跳转，
- *      反正本地已经不该再停留在应用里。
+ * 反正本地已经不该再停留在应用里。
  * @returns {Promise.<void>}
  */
 export async function doLogout() {
@@ -177,7 +160,7 @@ export async function doLogout() {
   } catch (_e) {
     /* 本来就已经掉线了也无所谓，照样回登录页 */
   }
-  // ⭐ 0.2.15：退出就把离线快照清掉 —— 换账号时绝不能把上一个账号的数据留在本机
+  // 退出就把离线快照清掉 —— 换账号时绝不能把上一个账号的数据留在本机
   cacheClear();
   location.href = BASE + '/login.html';
 }

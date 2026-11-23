@@ -1,16 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：index.js
- * 职责：ZXDesk 工作台 · Windows 壳（Electron 主进程入口）
- *
- * 启动顺序（每一步都写 `data/logs/boot.log`，首跑翻车时这就是验尸包）：
- * ① 参数判定（`--diagnose` / `--smoke`）→ ② 绿色路径（`app.setPath`，必须在 ready 之前）
- * → ③ 单实例 → ④ 壳窗口 → ⑤ 远程视图 → ⑥ 导航。
- *
- * 三条不可退让的边界：
- * - 远程视图：独立 partition、无 preload、无 node、`sandbox:true`；
- * - 壳：`sandbox:true` + preload，IPC 只走白名单 + 来源校验；
- * - 凭据只在主进程，日志一律脱敏。
  */
 
 import {
@@ -61,7 +50,7 @@ const SMOKE_TIMEOUT_MS = 15_000;
 
 /**
  * 版本检测接口。默认线上正式地址；`ZXDESK_UPDATE_URL` 只用于联调与自检，
- * 指向本地假接口时不必重新打包（指向 http 也只放行 127.0.0.1）。
+ * 指向本地假接口时不必重新打包。
  */
 const UPDATE_API_URL = String(process.env.ZXDESK_UPDATE_URL || DEFAULT_API_URL).trim();
 const UPDATE_CHANNEL = process.env.ZXDESK_UPDATE_CHANNEL === 'beta' ? 'beta' : 'stable';
@@ -142,9 +131,6 @@ function fatal(where, error) {
 /**
  * 调一个「可能是异步、也可能同步」的主进程动作，并把异常收进日志。
  *
- * ⛔ 不要在这种地方对动作的返回值直接接 `.catch(`：
- * `openNotice()` 是同步方法，返回 null ⇒ `null.catch` 抛 TypeError，
- * 用户看到的是点一下菜单就弹「ZXDesk 出错了」（0.2.2 真机第一次跑就踩到了）。
  */
 function fire(action, label) {
   try {
@@ -174,9 +160,7 @@ let isQuitting = false;
 
 /**
  * 读偏好（窗口尺寸 / 上次地址 / 设备 id）。
- * ⚠️ **必须在 createWindow() 之前**：`createWindow()` 第一行就是 `prefs.get().window`。
- * 0.1.0 把它藏在 buildController 里、又让 createWindow 先跑 ⇒ 首跑直接
- * `Cannot read properties of null (reading 'get')`。
+ * **必须在 createWindow() 之前**：`createWindow()` 第一行就是 `prefs.get().window`。
  */
 function initPrefs() {
   prefs = new PrefsStore(files.prefs, (m) => logger.warn(m));
@@ -187,8 +171,6 @@ function initPrefs() {
 /**
  * 公告历史窗口（单例）。
  *
- * 为什么单独开窗而不是在壳里画：公告要能滚动看全部历史，壳的 `WebContentsView` 会盖住 DOM，
- * 自绘列表要么藏视图（背后空白），要么被网页盖住。独立窗口没有这个矛盾，也和 Windows 程序的习惯一致。
  */
 let noticeWin = null;
 
@@ -245,10 +227,6 @@ function openNoticeWindow() {
 /**
  * 信息窗口（单例）：许可协议 / 打赏与支持 / 更新日志。
  *
- * 三者都是「只读、无网络、不参与状态机」的静态内容，共用一个窗口与一套页面：
- * URL 只带 `?doc=`，正文由主进程按白名单读随包文件（见 `readInfoDoc`）。
- * 为什么不开在壳里：`WebContentsView` 盖在 DOM 之上，自绘弹层要么藏视图（背后白屏）、
- * 要么被网页盖住；独立窗口两头都不占（与更新 / 公告窗口同一处置）。
  */
 let infoWin = null;
 
@@ -316,8 +294,6 @@ function openInfoWindow(doc) {
 /**
  * 信息窗口的正文来源（DTO 只给文本 / 结构化数据，⛔ 不给路径）。
  *
- * 两份文件都在 `src/shell/assets`（随包）：
- * 许可协议与安装包内那份同源，更新日志是 Windows 端自己的版本记录。
  */
 async function readInfoDoc(kind) {
   if (kind === 'eula') {
@@ -336,10 +312,6 @@ async function readInfoDoc(kind) {
 /**
  * 检查更新窗口（单例）。
  *
- * 为什么是独立窗口而不是 `dialog.showMessageBox`：更新要展示版本号、更新说明、**下载进度**，
- * 还要在下载完之后把按钮换成「立即安装」—— 原生消息框是一次性问答，撑不住这个过程。
- * 也不能画在壳里：`WebContentsView` 永远盖在 DOM 之上，自绘弹层要么藏视图（背后白屏）、
- * 要么被网页盖住。独立窗口两头都不占。
  */
 let updateWin = null;
 
@@ -396,7 +368,6 @@ function openUpdateWindow() {
 /**
  * 打开已校验的更新包。
  * - 安装包（.exe）：交给系统运行安装向导（由用户自己点「下一步」，⛔ 不静默安装）；
- * - 绿色包（.zip）：只定位到文件夹 —— 覆盖解压会替换程序目录，必须由用户自己决定。
  */
 async function openDownloadedPackage(filePath) {
   try {
@@ -466,13 +437,11 @@ function buildController() {
     onLoginRedirect: () => Boolean(controller?.onLoginPageBlocked()),
     /**
      * 子资源 401：网页先弹「登录已过期」红气泡、几百毫秒后才跳登录页。
-     * 这一段没有导航事件，只能从网络层的 401 提前接手（Android 0.3.1 第十二条）。
      */
     onUnauthorized: () => Boolean(controller?.onLoginPageBlocked()),
     /**
      * 网页会话（`zxdesk_sid`）被下发：立刻存一份。
      * ZXDesk 账号的登录是页面里的 XHR，成功后不整页导航 ⇒ 没有 `did-finish-load` ⇒
-     * 等下一次探针就永远等不到（「每次都要重新登录 ZXDesk 账号」的真因）。
      */
     onWebSession: () => fire(() => controller?.captureWebSession(), '保存网页会话失败'),
     onLoadFail: ({ code, description, url }) => {
@@ -522,15 +491,12 @@ function buildController() {
       }
     },
     // `/app/ticket` 与 FNID 解析走 `net.fetch`（Chromium 网络栈，系统 CA 与代理生效）。
-    // ⚠️ 它用的是**默认 session**：分区的访问码 Cookie 与 TOFU 判定都不在它身上 ——
+    // 它用的是**默认 session**：分区的访问码 Cookie 与 TOFU 判定都不在它身上 ——
     // 所以探网关必须用下面的 `probeFetcher`，不能图省事共用这一个。
     fetcher: (input, init) => net.fetch(input, init),
     /**
      * 探网关专用的 fetch：**绑远程视图那个分区**（`persist:zxdesk`）。
      *
-     * `net.fetch` 用的是默认 session —— 拿不到访问码凭据、也不走分区的 TOFU 判定。
-     * 开了访问码的 NAS 上，用它探网关会永远判成「还要访问码」，登录成功又被送回第 ④ 步
-     * （0.2.4 第一版真机「登录好几次才进去」的根因）。`ses.fetch` 与页面共用同一份 Cookie / 证书判定。
      */
     probeFetcher:
       typeof remoteView.session?.fetch === 'function'
@@ -541,7 +507,6 @@ function buildController() {
       apply: (fnSession, target) => applyCookies(fnSession, target, remoteView.session.cookies, (m) => logger.warn(m)),
       /**
        * 回注网关凭据（访问码 Cookie）。分区不落会话级 Cookie，所以必须每次启动自己写回去，
-       * 否则「每次开应用都要重新输一次访问码」。
        */
       applyGateway: (list, target) =>
         applyGatewayCookies(list, target, remoteView.session.cookies, (m) => logger.warn(m)),
@@ -558,7 +523,6 @@ function buildController() {
       /**
        * 远程视图分区里的 Cookie 头（`name=value; …`）。
        * 用途只有一个：开了「访问码」的 NAS 上，原生 WS 握手与原生探测要带上过访问码时种下的凭据
-       * （Electron 的 cookie 罐就是 Android 那边的 `CookieManager`）。
        */
       header: async (url) => {
         try {
@@ -601,8 +565,6 @@ function buildController() {
 /**
  * 窗口标题：`ZXDesk 工作台` 或 `ZXDesk 工作台 — <主机> · <链路>`。
  *
- * 为什么要放进标题栏：菜单栏按 Windows 规范重排之后，那里只剩下「文件 / 查看 / 工具 / 帮助」；
- * 「我现在连的是哪台设备」按 Windows 习惯属于标题栏（标题栏本来就该回答「这份文档 / 这个连接是谁」）。
  */
 function updateWindowTitle(state) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -681,7 +643,6 @@ function createWindow({ smoke = false } = {}) {
     mainWindow.on('resize', debounce(saveBounds, 400));
     mainWindow.on('move', debounce(saveBounds, 400));
   }
-  // ⚠️ `WebContentsView` **不会**跟着窗口缩放，必须手动 layout（否则最大化后页面还是小的一块）
   for (const event of ['resize', 'maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen']) {
     mainWindow.on(event, () => remoteView?.layout?.());
   }
@@ -703,8 +664,7 @@ function createWindow({ smoke = false } = {}) {
     mainWindow = null;
   });
 
-  // ⚠️ 页面**不在这里**加载：必须先 buildController（RemoteView 要拿到窗口）再 load，
-  // 否则 `did-finish-load` 可能早于装配完成 ⇒ 状态机永远不启动（白屏）。
+  // 页面**不在这里**加载：必须先 buildController（RemoteView 要拿到窗口）再 load，
   return mainWindow;
 }
 
@@ -812,11 +772,6 @@ app.whenReady().then(async () => {
 /**
  * 真实启动路径（正常启动与 `--smoke` **走同一条**，只是冒烟不显示窗口、不连 NAS、跑完退出）。
  *
- * ⚠️ 0.1.0 的 `--smoke` 自己 new 了一个 BrowserWindow 只加载壳页面 ⇒ **绕过了 createWindow/buildController**，
- * 于是「prefs 还没建就 createWindow」这个必崩的错它一点都测不出来（假绿）。现在两条路合一。
- *
- * 顺序由 `boot.js` 固定（可单测）：configureSession → initPrefs → createWindow → buildController
- * → registerIpc → attachHandlers → loadShell。
  */
 async function bootUi({ smoke = false } = {}) {
   logger.info(smoke ? '启动（冒烟模式，不联网）' : '启动（正常模式）');
@@ -912,7 +867,7 @@ function shortcutDirs() {
 }
 
 function shortcutArgs() {
-  // ⚠️ 图标必须指 **exe 自己**（`iconIndex: 0`）：`iconPath` 是
+  // 图标必须指 **exe 自己**（`iconIndex: 0`）：`iconPath` 是
   // `…\\resources\\app.asar\\src\\shell\\assets\\icon.ico` —— asar 里的**虚拟路径**，
   // Windows 外壳读不到，快捷方式就显示成白纸。exe 的图标是 build/apply-icon.js 用 resedit 写进去的。
   return shortcutOptions({ exePath: process.execPath, cwd: exeDir, iconPath: process.execPath, iconIndex: 0 });
@@ -930,10 +885,6 @@ function isAutoStartEnabled() {
 /**
  * 移动目录后的快捷方式自愈。
  *
- * `.lnk` 里存的是绝对路径（target 与 icon 都是 `process.execPath`）。绿色包被整个挪走后，
- * 旧快捷方式仍指着老位置 ⇒ 桌面图标变成 Windows 通用白纸、双击也打不开。
- * 这里只碰**我们自己的两个 .lnk**（桌面 + 启动文件夹），指向不对就按当前位置重建；
- * ⛔ 不动用户别的快捷方式，出错只记日志、不阻塞启动。
  */
 function repairShortcutsIfMoved() {
   if (!app.isPackaged) return; // 开发态的 exe 是 electron 二进制，别写坏
@@ -1068,8 +1019,6 @@ function settingsMenuTemplate() {
 /**
  * 打开启动文件夹（设置菜单里那一项）。
  *
- * 不在菜单里直接写 `C:\Users\…\Startup` 长路径；打不开/不存在时
- * 才用弹窗把路径与原因显示出来 —— 该给的信息不藏，但别占着菜单。
  */
 function openStartupFolder(startupDir) {
   try {
@@ -1198,15 +1147,6 @@ function hasUpdate() {
 /**
  * 顶栏文字菜单（文件 / 查看 / 工具 / 帮助）。
  *
- * 用原生 `Menu.popup`：壳只发一个 `openMenu(which)`，菜单项与动作都在主进程 —— 壳里没有菜单逻辑，
- * 也就没有「自绘下拉层被 WebContentsView 盖住」的问题。
- *
- * ⭐ 0.2.6 起按 **Windows 规范**分组：
- * 文件(F) / 查看(V) / 工具(T) / 帮助(H)。原先照 Android 抽屉分的「连接 / 模式 / 账户」是把手机端的
- * 抽屉硬塞进菜单栏 —— 手机抽屉里「模式」「账户」是页面级入口，桌面端的同义物就是「文件」菜单。
- * ⚠️ 「模式（仅连接 NAS / 仅本机 / 混合）」不再出现在菜单里：那两项本来就是占位，
- * 放一个永远灰着的单选项只会让人以为功能坏了（⛔ 不做假入口）。
- * 连接身份（主机 · 链路）也不在菜单里了 —— 那是**窗口标题栏**的位置，见 `updateWindowTitle()`。
  */
 function showMenu(which) {
   const win = mainWindow;
@@ -1228,7 +1168,7 @@ function showMenu(which) {
   const openInfo = (doc) => () => fire(() => openInfoWindow(doc), `打开${INFO_DOCS[doc]?.title || '信息'}失败`);
   const openLogDir = () => shell.openPath(path.dirname(files.bootLog)).catch((e) => logger.error('打开日志目录失败', e));
 
-  /** 「切换账号」菜单项：直接打开弹窗（0.2.6 起不再是子菜单列表 —— 列表在弹窗里，且能在那里新增账号）。 */
+  /** 「切换账号」菜单项：直接打开弹窗（不再是子菜单列表 —— 列表在弹窗里，且能在那里新增账号）。 */
   const openAccounts = () => fire(() => controller?.openAccounts(), '打开切换账号失败');
 
   const helpItems = [

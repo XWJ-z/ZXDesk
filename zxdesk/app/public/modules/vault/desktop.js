@@ -1,49 +1,10 @@
 /**
- * modules/vault/desktop.js —— 密码库**视图**（电脑版，0.3.2）
+ * modules/vault/desktop.js —— 密码库**视图**
  *
  * 功能：电脑版密码库这一屏的全部取数与渲染 —— `openVault()` 开屏并取状态，
- *      `renderVault()` 按「未初始化 / 已解锁 / 已锁定」三种状态画出整屏，
- *      `renderVaultRows()` 画（筛过之后的）条目列表，`openVaultEntryForm()` 是新增 / 编辑弹窗，
- *      `openVaultDetail()` 是详情弹窗（**唯一**会显示密码的地方），
- *      `openVaultTag()` 是标签管理弹窗（改名 / 删除），
- *      `lockVault()` / `vaultReset()` 是手动锁定与离开这一屏时的清理，`tickVault()` 是倒计时。
- *
- * ⭐ **三种状态是这一屏的全部**（方案 §七）：
- *    ① 没设过主密码 → 「设置主密码」页（**必须**有「忘记即永久丢失」的强提示 + 二次确认）；
- *    ② 设过但没解锁 → 解锁页（只问主密码，什么都没有的第二入口）；
- *    ③ 已解锁 → 筛选条 + 列表 + 详情 + 新增 / 编辑 + 生成器 + 锁定按钮 + 剩余时间。
- *
- * ⭐ **标签与筛选（0.4.4 起）**：标签睡在**每一条的密文里**（`{…,tags:[…]}`），
- *    所以服务端**筛不了** —— 筛选与关键词搜索都在这里、在已经解密到内存的摘要上做。
- *    代价是「几十~几百条全在内存里过一遍」，收益是库里连标签名都是密文。
- *    ⚠️ **搜索框是静态骨架**（0.8.7 起住 `desktop-webpass-pane.js` 那张骨架的 `.home-head` 里；
- *    `index.html` 已经没有这一屏了）：
- *    它是「边打边筛」的框，进重画范围就会每敲一个字重建 input、焦点丢失
- *    （表现是「只能打进去一个字」——与收藏夹搜索框同一条规矩）。
- *    所以本文件里**只有 `renderVaultRows()` 会碰列表**，筛选永远不重建输入框。
- *    ⚠️ 筛选态住 `state`（`vaultQuery` / `vaultTag`）而不是 DOM class，
- *    并且**在 `vaultReset()` 里一起清掉** —— 「我刚才在搜哪个网站」本身也是隐私。
- *
- * ⚠️ **四条界面硬约定**（方案 §七、§八-9，别被后来的人改掉）：
- *    ① **密码默认掩码**，点「显示」才明文 —— 「默认不复制的语义」；
- *    ② ⚠️ **不得承诺「自动清空剪贴板」**：浏览器不允许脚本主动清空剪贴板，
- *       文案只能老老实实说「复制后请自行粘贴并清理」；
- *    ③ 锁定 / 超时后**立刻清掉前端内存里的明文**（`vaultReset()`），不留残影；
- *    ④ 倒计时**必须看得见**（锁前 30 秒给提示）—— 别让用户写到一半被锁掉而不知道发生了什么。
- *
- * ⚠️ **`state` 里不存密码**：列表只放摘要（标题 / 用户名 / 网址 / 标签），密码只在详情弹窗打开时
- *    现取一次（`GET /api/vault/:id`）。这样「关掉弹窗 / 离开这一屏」就等于明文不再被持有
- *    —— 用「少存一点」换「少一个可能忘掉清理的地方」。
- *
- * ⭐ 0.5.0 模块化重构：本文件从 `desktop/views/vault.js` 搬进
- *    `public/modules/<模块名>/`（方案 §二 的目标结构：前后端**物理分开、模块名对齐**）。
- *    纯搬运不改逻辑，只改了 5 行 import 的相对路径；函数体一个字没动。
- *    ⚠️ **四条界面硬约定一个字都没改**（掩码 / 不承诺清剪贴板 / 立即清明文 / 倒计时可见）。
- *
- * ⭐ 0.8.15：「列表 ⇄ 锁定 / 设置主密码」这三态之间切换时，
- *    `#vault-body` 播一次淡入 —— 但**旧内容不参与淡出**：它是 `innerHTML` 同步换掉的，
- *    旧节点（可能含明文）**立即移除**。⛔ 这是方案里唯一一处「机制不统一」，
- *    理由是 的明文边界，不是风格偏好，⛔ 不许为了观感统一而放宽。
+ * `renderVault()` 按「未初始化 / 已解锁 / 已锁定」三种状态画出整屏，
+ * `renderVaultRows()` 画（筛过之后的）条目列表，`openVaultEntryForm()` 是新增 / 编辑弹窗，
+ * `openVaultDetail()` 是详情弹窗（**唯一**会显示密码的地方）…
  *
  * @author zx
  * @date   2026-09-12
@@ -74,29 +35,12 @@ const WARN_SECONDS = 30;
 /**
  * 上一次画的是哪一态（`'init'` / `'locked'` / `'list'`），`null` = 还没画过。
  *
- * ⚠️ 它是「**只有三态之间真的换了才播淡入**」这条判据的落点：
- *    同一态内的重画（改自动锁定分钟数、新增 / 编辑完条目后的重取）**不播**
- *    —— 与 `home.js` / `today.js` 那句「同一屏内的刷新跟着抖一下反而更像故障」同源。
- * ⚠️ 它由 `mountVault()` 在**进屏时重置成 `null`**：那时整屏是新挂上去的（宿主已经在淡入），
- *    ⛔ 不该再叠一层；⛔ 别改到 `vaultReset()` 里去 —— 那个函数在「点锁定 / 超时」这条路径上
- *    也会被调到，放那儿会让**正是要播的**「列表 → 已锁定」不播。
  */
 let lastVaultPhase = null;
 
 /**
  * 「还没设过主密码」那一支走到第几步：`1` = 知情页，`2` = 设密码页。
  *
- * ⭐⭐ 0.9.8 第 3 轮（`docs/公共/开发方案/2026-11-08-0.9.8-第3轮修改.md` §三）：
- *    这一支原来是「一屏两张卡」—— 上面一张米黄警示卡（四条），下面一张表单卡（两输入 ＋
- *    提示 ＋ 勾选 ＋ 按钮）。一屏塞不下、重点不清，而且 `.vault-body.gate` 的
- *    `justify-content:center` 叠在 `overflow:hidden` 上，内容一高**上下都被裁掉且滚不到**
- *    （截图里主按钮只剩一条边）。⇒ 拆成**一屏两步**：知情 → 设置。
- *
- * ⚠️⚠️ **两步之间的状态只存内存，⛔ 不许持久化**（同文件 §3.3 的硬要求）：
- *    ① 这个步号、② `vaultInitAck`（用户点过「我已阅读并理解上述内容」）。
- *    它们只活在本次会话的这一屏里 —— 能跨刷新保留就等于「可以跳过知情页」，
- *    而那一步正是「忘记即永久丢失」这条安全边界的载体（`16-密码库.md` §一 第 1 行）。
- *    ⛔ 别写 `localStorage` / `sessionStorage` / cookie / URL，也别塞进 `state` 的持久化分支。
  */
 let vaultInitStep = 1;
 
@@ -107,15 +51,12 @@ let vaultInitAck = false;
  * 功能：三态之间换了就给 `#vault-body` 播一次淡入（同态内不动），并记住这一次画的是哪一态。
  *
  * 说明：⚠️ **明文边界**：本函数只给**新节点**加淡入类，旧节点是 `innerHTML` 同步换掉的
- *      ⇒ 已经不在文档里、也不可能有淡出层。⛔ 别在这里改成 `crossFade()`。
+ * ⇒ 已经不在文档里、也不可能有淡出层。⛔ 别在这里改成 `crossFade()`。
  *
- * @param {HTMLElement} body - `#vault-body`（每次进屏新建，见 `desktop-webpass-pane.js` 的骨架）
- * @param {'init'|'locked'|'list'} phase - 本次画的是哪一态
- * @returns {void}
  */
 function vaultPhaseFade(body, phase) {
-  // ⭐ 0.8.51：`tier 3` —— 密码库的三态（设主密码 / 已锁定 / 列表）是**同一屏内的第二层**
-  //    （屏头药丸「网址收藏夹 ↔ 密码库」才是二级）。
+  // `tier 3` —— 密码库的三态（设主密码 / 已锁定 / 列表）是**同一屏内的第二层**
+  // （屏头药丸「网址收藏夹 ↔ 密码库」才是二级）。
   if (lastVaultPhase !== null && lastVaultPhase !== phase) swapIn(body, 3);
   lastVaultPhase = phase;
 }
@@ -123,31 +64,26 @@ function vaultPhaseFade(body, phase) {
 /**
  * 功能：清空密码库相关的前端内存状态与倒计时定时器。
  *
- * 说明：⚠️ 这是「锁定后立刻清掉前端内存里的明文」这条硬约定的执行点（方案 §七）：
- *      它同时清掉列表摘要（摘要里虽然没有密码，但「你存了哪些站点」同样是私事）、
- *      倒计时句柄与服务端状态快照。离开这一屏、锁定、超时**三条路径都必须调它**。
- *      ⭐ 也清**筛选态**（0.4.4 起）：搜索框里那半句网址、选中过的标签名，
- *      同样是「你有哪些账号」的一部分 —— 锁定之后不该还留在界面上。
- *
- * @returns {void}
+ * 它同时清掉列表摘要（摘要里虽然没有密码，但「你存了哪些站点」同样是私事）、
+ * 倒计时句柄与服务端状态快照。离开这一屏、锁定、超时**三条路径都必须调它**。
+ * 同样是「你有哪些账号」的一部分 —— 锁定之后不该还留在界面上。
  */
 export function vaultReset() {
   if (state.vaultTimer) clearInterval(state.vaultTimer);
   state.vaultTimer = null;
   state.vaultItems = [];
   state.vaultBroken = 0;
-  // ⭐ 0.8.18：标签池也是「你有哪些分类」的一部分（与条目同一条隐私口径）⇒ 锁定就一起丢掉。
+  // 标签池也是「你有哪些分类」的一部分（与条目同一条隐私口径）⇒ 锁定就一起丢掉。
   state.vaultTagPool = [];
-  // ⭐⭐ 0.8.18 任务八：绑定的网址收藏同样是「你有哪些账号」的线索（哪个密码对应哪个站），
-  //    而且它来自收藏夹那一侧 ⇒ 锁定必须一起丢（⛔ 别让它留在锁屏后的内存里）。
+  // 任务八：绑定的网址收藏同样是「你有哪些账号」的线索（哪个密码对应哪个站），
+  // 而且它来自收藏夹那一侧 ⇒ 锁定必须一起丢（⛔ 别让它留在锁屏后的内存里）。
   state.vaultBmLinks = {};
   state.vaultBmAll = [];
   state.vaultLeft = 0;
   state.vault = null;
   state.vaultQuery = '';
   state.vaultTag = null;
-  // ⭐⭐ 0.9.8 第 3 轮：知情页的步号与确认态也一起清 —— 「离开这一屏 / 锁定 / 超时之后
-  //    再回来」必须**回到第一步**（确认态只存内存，这是它的全部意义，见上面 `vaultInitStep` 那段）。
+  // 再回来」必须**回到第一步**（确认态只存内存，这是它的全部意义，见上面 `vaultInitStep` 那段）。
   vaultInitStep = 1;
   vaultInitAck = false;
   const q = $('#vault-q');
@@ -155,13 +91,8 @@ export function vaultReset() {
 }
 
 /**
- * ⭐⭐ 0.8.7：**宿主不再静态 import 本模块**（撤了那条 import 才能保证
+ * **宿主不再静态 import 本模块**（撤了那条 import 才能保证
  * 「删掉 `modules/vault/` 两个目录 ⇒ 宿主页照旧」）⇒ 「关掉密码库 / 切走时清掉内存里的明文」
- * 这条硬约定改走**留白事件**：谁持有明文谁自己听。
- *
- * ⚠️ 事件名是两端**同一套**（`desktop/shell.js` 与 `mobile/app.js` 的 `applyPrefsVisibility()`
- * 各派一处，`webpass` 那一屏切视图时再派一处）。⛔ 不许删：内存里不留明文是硬要求。
- * ⚠️ 本模块**从没被加载过**时没有监听者 —— 那时也没有任何明文可清（加载才可能取过数）。
  */
 document.addEventListener('zx:pane-flush', () => vaultReset());
 
@@ -170,11 +101,8 @@ document.addEventListener('zx:pane-flush', () => vaultReset());
  * 功能：把倒计时重设到「现在起 lockAfterSeconds 秒」—— 每次成功的接口调用后都要调它。
  *
  * 说明：⭐ 服务端是**空闲超时 + 滑动续期**（每次访问都往后推），所以前端也必须跟着推 ——
- *      否则会出现「服务端刚给你续了 10 分钟、界面上的倒计时却还在往下走并在 0 秒时把人锁住」
- *      这种自相矛盾的表现（用户会以为程序坏了）。重设的时机就是「每一次成功的接口调用之后」。
+ * 这种自相矛盾的表现（用户会以为程序坏了）。重设的时机就是「每一次成功的接口调用之后」。
  *
- * @param {number} [seconds] - 剩余秒数；省略时读 `state.vault.lockAfterSeconds`
- * @returns {void}
  */
 function vaultArmTimer(seconds) {
   const s = Number(seconds);
@@ -187,10 +115,8 @@ function vaultArmTimer(seconds) {
  * 功能：倒计时每秒走一格 —— 到 30 秒内把提示显出来，走到 0 就本地判定为已锁定并重画。
  *
  * 说明：⚠️ 到 0 时**不是**「假装锁了」：本地立刻按已锁定重画（清掉明文与列表），
- *      同时下一次任何请求都会被服务端的超时判定拦成 403 —— 两边口径一致。
- *      这样即使服务端因为忙碌晚了几百毫秒，界面也不会多显示一段不该显示的明文。
+ * 同时下一次任何请求都会被服务端的超时判定拦成 403 —— 两边口径一致。
  *
- * @returns {void}
  */
 function tickVault() {
   if (!state.vault || !state.vault.unlocked) return;
@@ -212,13 +138,9 @@ function tickVault() {
 /**
  * 功能：判定「已经锁上了」并收拾现场 —— 清明文、**关掉可能开着的编辑弹层**、画回锁屏。
  *
- * 说明：⭐⭐ 0.9.8 第 7 轮（老大 2026-11-09）：以前到点只重画列表，**弹层不关** ——
- *      一条密码正在编辑框里躺着，锁屏之后它还在屏幕上。现在两条触发路径共用这一个函数：
- *      · 本屏的本地倒计时走到 0（`tickVault()`）；
- *      · 全局计时者派来的 `zx:vault-locked`（人可能停在加密信息那一屏）。
- *      ⚠️ 防重复 toast 的判据是 `state.vault.unlocked`：本地已经处理过时它是 false，
- *      事件再来一次就直接返回（⛔ 不弹两遍「已自动锁定」）。
- * @returns {void}
+ * 一条密码正在编辑框里躺着，锁屏之后它还在屏幕上。现在两条触发路径共用这一个函数：
+ * 本屏的本地倒计时走到 0（`tickVault()`）；
+ * 全局计时者派来的 `zx:vault-locked`（人可能停在加密信息那一屏）。
  */
 function lockNow() {
   const prev = state.vault;
@@ -238,7 +160,7 @@ function lockNow() {
  * 功能：听全局锁库事件（`core/vault-watch.js` 派的）—— 本屏不在前台时也要被锁上。
  *
  * 说明：⚠️ 只在「本屏仍认为解锁着」时才动手：本地倒计时已经处理过的情况下再走一遍，
- *      会把刚画好的锁屏再画一次、并弹第二遍提示。
+ * 会把刚画好的锁屏再画一次、并弹第二遍提示。
  * @returns {void}
  */
 document.addEventListener('zx:vault-locked', () => {
@@ -249,12 +171,9 @@ document.addEventListener('zx:vault-locked', () => {
 /**
  * 功能：渲染标签筛选栏 —— 「全部 N」+ 每个标签（带计数）+ 「未分类 N」+ 选中标签后的「⚙ 管理」。
  *
- * 说明：⭐ 0.8.9 修订：「密码库的标签筛选做成和网址收藏夹一样的**左右结构**」
- *      ⇒ 从「一排胶囊（`.chip`）」改成**左侧竖栏里的整行项**（`.sf-item`：名称 ＋ 计数两件式）。
- *      ⚠️ `.sf-item` 的尺寸**与收藏夹 / 随手记的标签项共用一份**（`desktop/app.css` 里
- *      `.sf-item` 那几条多重选择器）—— ⛔ 别在这里另写一套观感。
- *      ⭐ 0.8.18：「未分类」从「全部」之后挪到**最后**（与随手记逐字同序，见函数末尾那条注释）。
- * @returns {string} 筛选栏的 HTML 片段
+ * ⇒ 从「一排胶囊（`.chip`）」改成**左侧竖栏里的整行项**（`.sf-item`：名称 ＋ 计数两件式）。
+ * `.sf-item` 的尺寸**与收藏夹 / 随手记的标签项共用一份**（`desktop/app.css` 里
+ * `.sf-item` 那几条多重选择器）—— ⛔ 别在这里另写一套观感。
  */
 function vaultTagsHtml() {
   const st = vaultTagStats(state);
@@ -269,24 +188,16 @@ function vaultTagsHtml() {
         data-vault-tag="${esc(t.name)}"><span>${esc(t.name)}</span><b>${t.count}</b></button>`,
     )
     .join('');
-  // ⭐⭐ 0.8.16（「网页/密码库：电脑端的左侧分类底部加 [＋ 新标签 / ⚙ 管理]，
-  //    和随手记一样」）：从「**选中某个标签才出现**的『⚙ 管理这个标签』」改成**固定那一颗**
-  //    （与收藏夹 / 随手记左栏同形，都用 `.sf-btns`）。
-  //    ⭐⭐ 0.8.18（截图批注：「我框选的新建标签应该和随手记一样」）：
-  //    现在密码库**也有「先建一个空标签」这件事了** —— 那个名字落在 `vault_meta` 的
-  //    **加密标签池**上（与条目同一把 DEK，见 `modules/vault/schema.js` 文件头），
-  //    ⛔ 依旧**不是**明文 `vault_tags` 表。所以左栏那套「全部 / 各标签 / 未分类」的形状
-  //    与随手记、收藏夹三者彻底一致，建出来的空标签计数为 0、排在最后。
-  //    ⚠️ 别把「空标签」理解成假数据：它**真在库里**（密文形式），换设备/恢复备份都跟着走。
+  // （「网页/密码库：电脑端的左侧分类底部加 [＋ 新标签 / ⚙ 管理]，
+  // 和随手记一样」）：从「**选中某个标签才出现**的『⚙ 管理这个标签』」改成**固定那一颗**
+  // （与收藏夹 / 随手记左栏同形，都用 `.sf-btns`）。
   const btns =
     '<div class="sf-btns">' +
     '<button class="btn btn-subtle btn-sm" type="button" id="vault-manage-tags">⚙ 管理</button>' +
     '</div>';
-  // ⭐⭐ 0.8.18（截图批注：「未分类应该显示在最后，和随手记一样」）：
-  //    这一枚原来插在「全部」**之后**、各标签**之前** ⇒ 挪到**最后**（各标签之后、⚙ 管理之前）。
-  //    ⚠️ 顺序与随手记**逐字对齐**（`idea/desktop.js` 的 `sideBox.innerHTML = allChip + chips + noneChip + tagBtns`）：
-  //    「全部」是「不筛」、各标签是用户自己建的分类、**「未分类」是兜底那一档** —— 它排在
-  //    用户建的分类中间，每次新增标签都会把它的位置顶来顶去。⛔ 别改回去。
+  // ：
+  // 这一枚原来插在「全部」**之后**、各标签**之前** ⇒ 挪到**最后**（各标签之后、⚙ 管理之前）。
+  // 顺序与随手记**逐字对齐**（`idea/desktop.js` 的 `sideBox.innerHTML = allChip + chips + noneChip + tagBtns`）：
   return all + rest + none + btns;
 }
 
@@ -294,10 +205,8 @@ function vaultTagsHtml() {
  * 功能：点标签 chip 之后就地把筛选条与列表更新一遍 —— **不重新取数、不碰输入框**。
  *
  * 说明：⭐ 筛选完全在本地做（标签在密文里，服务端看不见），所以这里只做两件事：
- *      重画 chips（把选中的那枚点亮）与重画列表。搜索框在静态骨架里，
- *      这里一个字节都不动它。
- *
- * @returns {void}
+ * 重画 chips（把选中的那枚点亮）与重画列表。搜索框在静态骨架里，
+ * 这里一个字节都不动它。
  */
 function rerenderVaultFilter() {
   const box = $('#vault-tags');
@@ -307,19 +216,10 @@ function rerenderVaultFilter() {
 
 /**
  * 功能：打开**标签管理**弹层（左栏「⚙ 管理」）—— 列出全部标签（每个可改名 / 删除），
- *      底部**还带一行**「写一个新标签 ＋ ＋新建」。
+ * 底部**还带一行**「写一个新标签 ＋ ＋新建」。
  *
- * 说明：⭐⭐ 0.8.16（「网页/密码库：电脑端的左侧分类底部加 [＋ 新标签 / ⚙ 管理]，
- *      和随手记一样」）：与收藏夹的 `manageBmTags()`、随手记的 `manageIdeaTags()` 同形。
- *      ⚠️⭐ 密码库这两个动作在服务端是**按标签名**做的（`{from,to}` / `{name}`）——
- *      标签本体住在密文里、服务端没有 id 可用；一次改**全部**相关记录（先全解密、全成功才写回）。
- *      ⚠️ 改名 / 删除后**就地重画**这份清单，并 `loadVaultList()` 把左栏与列表一起刷新。
- *      ⭐⭐ 0.8.18（截图批注）：「新建标签」这一行改成**与随手记逐字同形**
- *      （`.tag-row.tag-row-new` ＋ 输入框 ＋ 「＋ 新建」，收藏夹用的是同一个类名）——
- *      原先那一行是「一句说明 ＋ ＋新增记录」，因为**当时密码库没有地方存空标签**。
- *      现在有地方了：名字落在 `vault_meta.tags_*` 那份**加密标签池**上（见 `schema.js` 文件头），
- *      ⇒ 这一行是**真建标签**（不是跳去新增记录），建完计数 0 出现在左栏。
- * @returns {void}
+ * 和随手记一样」）：与收藏夹的 `manageBmTags()`、随手记的 `manageIdeaTags()` 同形。
+ * 密码库这两个动作在服务端是**按标签名**做的（`{from,to}` / `{name}`）——
  */
 function manageVaultTags() {
   const list = vaultTagStats(state).tags;
@@ -349,8 +249,8 @@ function manageVaultTags() {
   );
   setModalSave('关闭', false);
   $('#modal-save').onclick = closeModal;
-  // ⚠️ 委托挂在**这份清单自己那个容器**上（不是 `#modal-body`）—— 容器随弹窗一起重建，
-  //    监听器跟着消失，⛔ 不会残留到下一个弹窗上去。
+  // 委托挂在**这份清单自己那个容器**上（不是 `#modal-body`）—— 容器随弹窗一起重建，
+  // 监听器跟着消失，⛔ 不会残留到下一个弹窗上去。
   const box = $('#modal-body .tag-manage');
   if (box) {
     box.onclick = (e) => {
@@ -364,14 +264,8 @@ function manageVaultTags() {
 }
 
 /**
- * 功能：在「管理标签」弹层底部**新建一个空标签**（0.8.18）—— 成功后**就地重画**这份清单（弹层不关）。
  *
  * 说明：⭐⭐ 这是密码库第一次有「建出来时还没有任何记录用到它」的标签。它落在
- *      `vault_meta.tags_*` 那份**加密清单**（「标签池」）上 —— 与条目同一条隐私口径，
- *      ⛔ 不是明文 `vault_tags` 表（见 `modules/vault/schema.js` 文件头那段）。
- *      ⚠️ 与随手记的 `createIdeaTag()` 逐字同形：同名不报错（服务端回 `added:false`，照旧 200），
- *      建完 `loadVaultList()` ＋ 本函数重画 —— 用户能连着建好几个。
- * @returns {void}
  */
 function createVaultTag() {
   const inp = $('#vault-f-newtagname');
@@ -393,14 +287,13 @@ function createVaultTag() {
  * 功能：把某个标签改名（管理弹层里那一行）—— 服务端一次改完所有相关记录。
  *
  * 说明：⚠️⭐ 若当前正按这个标签筛（`state.vaultTag`），必须把筛选值**跟着换成新名字** ——
- *      否则列表会被一个已经不存在的名字筛成空白，而且**不报错**。
  * @param {string} from - 原标签名
  * @returns {void}
  */
 function renameVaultTagRow(from) {
-  // ⚠️⭐ 刻意**不写** `[data-vault-tag-name="…"]` 那种「按名字拼选择器」的写法：`vault.test.js`
-  //    有一条护栏扫「`data-*` 插值必须过 `esc()`」（本意是**用户内容进 DOM 要转义**）——
-  //    选择器里的那个值并不进 DOM，可那条正则会把这个写法一起圈进来 ⇒ **按行序**定位最干净。
+  // 刻意**不写** `[data-vault-tag-name="…"]` 那种「按名字拼选择器」的写法：`vault.test.js`
+  // 有一条护栏扫「`data-*` 插值必须过 `esc()`」（本意是**用户内容进 DOM 要转义**）——
+  // 选择器里的那个值并不进 DOM，可那条正则会把这个写法一起圈进来 ⇒ **按行序**定位最干净。
   const list = vaultTagStats(state).tags;
   const idx = list.findIndex((x) => x.name === from);
   const inputs = [...document.querySelectorAll('#modal-body .tag-row input')];
@@ -426,7 +319,6 @@ function renameVaultTagRow(from) {
 /**
  * 功能：确认并删除一个标签（**密码记录保留**，只取消归类）—— 管理弹层里那一行。
  *
- * 说明：⚠️ 删掉的若正是当前筛的那个标签，把筛选退回「全部」（理由同 `renameVaultTag()`）。
  * @param {string} name - 标签名
  * @returns {void}
  */
@@ -466,7 +358,7 @@ function vaultPickHtml(t) {
 /**
  * 功能：读出弹层里**已选**的那几枚标签名。
  * 说明：⚠️ 用 `getAttribute('data-vault-pick')` 而不是 `dataset` —— 标签名是原样的中文 / 带空格串，
- *      直接读原始属性最稳；选择器带 `#vf-picks` 前缀，⛔ 免得把别处同名的属性一起读进来。
+ * 直接读原始属性最稳；选择器带 `#vf-picks` 前缀，⛔ 免得把别处同名的属性一起读进来。
  * @returns {Array.<string>} 标签名数组
  */
 function vaultPickedNames() {
@@ -492,10 +384,8 @@ function addVaultPick(name) {
  * 功能：进入密码库视图 —— 取一次状态，按状态画出整屏。
  *
  * 说明：⚠️ 开屏时**必须先 `vaultReset()`**：上一次离开时可能还留着定时器与旧列表，
- *      而这一屏的状态完全由服务端的 `/api/vault/status` 决定（例如服务重启后
- *      「刚才还解锁着」就变成了「已锁定」）。
- *
- * @returns {Promise.<void>}
+ * 而这一屏的状态完全由服务端的 `/api/vault/status` 决定（例如服务重启后
+ * 「刚才还解锁着」就变成了「已锁定」）。
  */
 export async function mountVault() {
   vaultReset();
@@ -519,30 +409,25 @@ export async function mountVault() {
  * 功能：按 `state.vault` 的三种状态渲染整屏 —— 顶栏按钮与筛选条的显隐也一并处理。
  *
  * 说明：⚠️ 它**不碰** `#vault-q` 的输入焦点：搜索框与标签条是静态骨架，
- *      这里只往里塞 chips（`#vault-tags`），输入框本身一个字节都不动。
- *      真正的列表由 `renderVaultRows()` 单独重画 —— 敲字只走那一条路径。
- *
- * @returns {void}
+ * 这里只往里塞 chips（`#vault-tags`），输入框本身一个字节都不动。
+ * 真正的列表由 `renderVaultRows()` 单独重画 —— 敲字只走那一条路径。
  */
 export function renderVault() {
   const v = state.vault;
   const body = $('#vault-body');
   if (!body) return;
   const unlocked = !!(v && v.unlocked);
-  // ⭐ 0.7.6：锁定 / 「还没设主密码」这两个「**门**」状态整页只有一张卡 ——
-  //    加个 `gate` 类让 CSS 把它水平居中、限宽、并推到视觉中部；
-  //    之前它贴在左上角、下面整页空白（报的）。
+  // 锁定 / 「还没设主密码」这两个「**门**」状态整页只有一张卡 ——
+  // 加个 `gate` 类让 CSS 把它水平居中、限宽、并推到视觉中部；
+  // 之前它贴在左上角、下面整页空白（报的）。
   body.classList.toggle('gate', !unlocked);
   const filter = $('#vault-filter');
-  // ⚠️ 未解锁（含「还没设过主密码」）时筛选条整块藏起来：它只对列表有意义，
-  //    而且「上次搜的是哪个网站」不该在锁定后的界面上露出来。
+  // 未解锁（含「还没设过主密码」）时筛选条整块藏起来：它只对列表有意义，
+  // 而且「上次搜的是哪个网站」不该在锁定后的界面上露出来。
   if (filter) filter.classList.toggle('hidden', !unlocked);
-  // ⭐ 0.8.17：「把搜索框与锁定按钮放到『已解锁 · 倒计时 / 自动锁定』那一排」
-  //    —— 那四件（倒计时 / 搜索 / 🔒锁定 / 自动锁定下拉）现在同住在静态骨架的 `#vault-bar` 里
-  //    ⇒ 显隐**整条一起管**：从前那种「`#vault-q` 与 `#btn-vault-lock` 各 toggle 一次」的写法
-  //    已经不需要了（父级那一层带得住），⛔ 别再加回来（两处判据迟早分家）。
-  //    ⚠️ 未解锁（含「还没设过主密码」）时整条藏起来：搜索框只对列表有意义，
-  //    而且「上次搜的是哪个网站」不该在锁定后的界面上露出来。
+  // 「把搜索框与锁定按钮放到『已解锁 · 倒计时 / 自动锁定』那一排」
+  // —— 那四件（倒计时 / 搜索 / 🔒锁定 / 自动锁定下拉）现在同住在静态骨架的 `#vault-bar` 里
+  // ⇒ 显隐**整条一起管**：从前那种「`#vault-q` 与 `#btn-vault-lock` 各 toggle 一次」的写法
   const bar = $('#vault-bar');
   if (bar) bar.classList.toggle('hidden', !unlocked);
 
@@ -570,8 +455,8 @@ export function renderVault() {
     hint.textContent = `🔓 已解锁 · ${formatLeft(state.vaultLeft)}后自动锁定`;
     hint.classList.remove('warn');
   }
-  // ⭐⭐ 0.8.18：这里原来还要回填「自动锁定」下拉的选中项 —— 那一枚已经**搬去设置页**
-  //    （`desktop-settings-pane.js` 自己读 `/api/vault/status` 回填），本函数不再认识它。
+  // 这里原来还要回填「自动锁定」下拉的选中项 —— 那一枚已经**搬去设置页**
+  // （`desktop-settings-pane.js` 自己读 `/api/vault/status` 回填），本函数不再认识它。
   vaultPhaseFade(body, 'list');
 }
 
@@ -579,11 +464,8 @@ export function renderVault() {
  * 功能：只重画列表区与计数 —— **筛选（敲字 / 点标签）走的就是这一条路径**。
  *
  * 说明：⭐ 它是「搜索框不会被重画」这条保证的落点：动它永远不会重建
- *      `#vault-q`（那在静态骨架里），所以光标与输入内容都稳稳留在原地。
- *      ⚠️ 计数写成「筛出来几条 / 一共几条」：只写筛出来的条数，用户会以为记录少了
- *      （收藏夹那边同一手法）。
- *
- * @returns {void}
+ * `#vault-q`（那在静态骨架里），所以光标与输入内容都稳稳留在原地。
+ * 计数写成「筛出来几条 / 一共几条」：只写筛出来的条数，用户会以为记录少了
  */
 export function renderVaultRows() {
   const box = $('#vault-rows');
@@ -597,16 +479,8 @@ export function renderVaultRows() {
 }
 
 /**
- * 功能：渲染「设置主密码」这一支 —— ⭐⭐ **一屏两步**（0.9.8 第 3 轮，方案 §三）。
  *
  * 说明：⚠️ 强提示 ＋ 二次确认这条安全边界**一点没放宽**（`16-密码库.md` §一 第 1 行、
- *      `05-密码库-1期.md` §一 第 1 行）：它换了个载体 ——
- *      ① **独立一屏**读四条（比原来挤在一屏里更显眼）→ ② **勾选** → ③ **下一步** → ④ 再输两遍。
- *      勾选 ＋ 下一步就是「二次确认」的等价物，⛔ 别被后人当成「放宽了」。
- *      ⚠️ 两条文案是**定稿**（老大 2026-11-08 拍板）：⛔ 不许再压缩、不许补解释性从句 ——
- *      上一版每条都挂一句「为什么」，四条一起铺开就读成了一段连续的解释文。
- *
- * @returns {string} 该状态的 HTML 片段
  */
 function vaultInitHtml() {
   return vaultInitStep === 2 ? vaultInitStep2Html() : vaultInitStep1Html();
@@ -616,7 +490,7 @@ function vaultInitHtml() {
  * 功能：第一步 —— **知情页**（标题 ＋ 四条 ＋ 勾选 ＋ 下一步）。
  *
  * 说明：⚠️ 标题与四条**逐字定稿**（`§3.1`），回单要 `grep` 对；勾选文案同样逐字定稿。
- *      ⚠️ 第 2 条（忘记就找不回）用 `<b>` 加重 —— 它是四条里唯一的「损失警告」。
+ * 第 2 条（忘记就找不回）用 `<b>` 加重 —— 它是四条里唯一的「损失警告」。
  * @returns {string} HTML
  */
 function vaultInitStep1Html() {
@@ -645,10 +519,8 @@ function vaultInitStep1Html() {
  * 功能：第二步 —— **设置页**（主密码 ＋ 再输一次 ＋ 一句提示 ＋ 主按钮 ＋ 返回）。
  *
  * 说明：⚠️ 这一步**刻意不再放勾选框**（同一句话不说两遍）：确认态在内存里（`vaultInitAck`），
- *      提交前照样校验一次，没确认就提示并退回第一步。
- *      ⚠️ 提示语是定稿、**与旧版相反**：旧版推荐「长短语」，老大 2026-11-08 改为推荐
- *      「大小写 ＋ 数字 ＋ 符号」的组合密码。
- * @returns {string} HTML
+ * 提交前照样校验一次，没确认就提示并退回第一步。
+ * 「大小写 ＋ 数字 ＋ 符号」的组合密码。
  */
 function vaultInitStep2Html() {
   return `
@@ -670,13 +542,9 @@ function vaultInitStep2Html() {
 /**
  * 功能：渲染「已锁定」页 —— 只有一个主密码输入框（**没有**找回入口，界面不给后门）。
  *
- * 说明：⭐ 0.7.6 重排了版式：锁形图标 → 标题 → 说明 → 输入框 → 主按钮 → 安全提示，共三档
- *      字号 / 颜色（原来标题、说明、脚注几乎一样灰）。卡片由 `.vault-gate` 居中限宽
- *      —— 它原来贴在左上角，下面整页空白。
- *      ⚠️⛔ 最后那句「忘记主密码没有任何找回办法」是**安全边界**（方案 §1.2）：
- *      它必须显眼，⛔ 不许为了「层级好看」把它弱化成灰字脚注。
+ * 字号 / 颜色（原来标题、说明、脚注几乎一样灰）。卡片由 `.vault-gate` 居中限宽
+ * —— 它原来贴在左上角，下面整页空白。
  *
- * @returns {string} 该状态的 HTML 片段
  */
 function vaultLockedHtml() {
   const mins = (state.vault && state.vault.lockMinutes) || 10;
@@ -701,12 +569,8 @@ function vaultLockedHtml() {
  * 功能：渲染已解锁的**正文** —— 坏记录提示 ＋ 一个**空的**列表容器。
  *
  * 说明：⭐ 列表容器（`#vault-rows`）刻意与那一排工具条分开：筛选时只重画它，
- *      工具条（倒计时 / 搜索 / 锁定 / 自动锁定）是**静态骨架**，不必也不许跟着重建。
- *      ⚠️ 0.8.17 起那排工具条**不再由本函数生成**（它搬进了 `desktop-webpass-pane.js` 的
- *      静态骨架，原因见那边的说明）—— ⛔ 别把 head 加回来：同 id 会出现两份，
- *      `document.getElementById` 只命中前一个 ⇒ 后一份永远停在初始文案（且不报错）。
- *
- * @returns {string} 该状态的 HTML 片段
+ * 起那排工具条**不再由本函数生成**（它搬进了 `desktop-webpass-pane.js` 的
+ * 静态骨架，原因见那边的说明）—— ⛔ 别把 head 加回来：同 id 会出现两份，
  */
 function vaultListHtml() {
   const broken = state.vaultBroken || 0;
@@ -721,10 +585,8 @@ function vaultListHtml() {
  * 功能：按当前筛选给列表区的空态 —— ⚠️ **三种空态说的是三件不同的事**。
  *
  * 说明：⭐ 一条都没有、与「有记录但这次没筛出来」是完全不同的处境：
- *      用同一句「还没有密码记录」会让一个已经存了 50 条密码的人以为数据丢了
- *      （收藏夹那边同一条规矩）。
+ * （收藏夹那边同一条规矩）。
  *
- * @returns {string} 空态 HTML
  */
 function vaultEmptyHtml() {
   if (vaultFiltering(state)) {
@@ -752,20 +614,13 @@ function vaultRowHtml(it) {
       </div>`;
   }
   const title = it.title || '（无标题）';
-  // ⭐⭐ 0.9.8（方案 42 §一·4）：老库里已经存进去的**空白密码**条目——不自动删、不自动改（R-002），
-  //    只在列表里标一句「这条没设密码」，让用户自己补或删。判据是服务端算出来的
-  //    `blank_password`（不进表、不加列），⛔ 别在前端拿摘要去猜（摘要里没有密码）。
+  // 只在列表里标一句「这条没设密码」，让用户自己补或删。判据是服务端算出来的
+  // `blank_password`（不进表、不加列），⛔ 别在前端拿摘要去猜（摘要里没有密码）。
   const blank = it.blank_password === true;
   const tags = (Array.isArray(it.tags) ? it.tags : []).map((n) => `<span class="vault-tag">${esc(n)}</span>`).join('');
-  // ⭐⭐ 0.8.18 任务八：「在记录条上有一键复制网址的按键」。
-  //    ⭐⭐ 同日第二轮（他截图批注：「**没有网址的 要有【点击绑定】**」）：这颗键**恒在**，
-  //    只是形态跟着「有没有网址」走 —— 与网址收藏夹那颗「绑定密码」**同一套口径**
-  //    （`只有绑定了密码的才显示密码，没有绑定密码的显示：点击绑定`）：
-  //      · 有有效网址（绑定的收藏 or 自己填的）⇒ 「复制网址」；
-  //      · 一个都没有 ⇒ 「🔗 点击绑定」——点它**就是打开这条记录的详情**（那一层里有
-  //        「绑定的网址收藏」那块，挑一条就绑上了）。⛔ 不给它编一套独立动作：
-  //        详情里那块既能绑也能解，是同一件事的完整入口。
-  //    ⚠️ 所以列表行的动作键**恒为 4 颗**，⛔ 别再写「没有网址就不画」那一版（会当成缺功能）。
+  // 任务八：「在记录条上有一键复制网址的按键」。
+  // 同日第二轮：这颗键**恒在**，
+  // 只是形态跟着「有没有网址」走 —— 与网址收藏夹那颗「绑定密码」**同一套口径**
   const effUrl = vaultEffUrl(state, it);
   return `<div class="vault-row" data-vault-open="${esc(String(it.id))}" tabindex="0">
       <span class="vault-ico">🔑</span>
@@ -799,16 +654,9 @@ function vaultRowHtml(it) {
 /**
  * 功能：取一次「网址收藏夹」的**只读快照** —— 绑定的网址收藏 + 可供挑选的全部收藏。
  *
- * 说明：⭐⭐ 0.8.18 任务八（「网址收藏夹要和密码库**互通**」）：
- *      绑定关系的**唯一真相住在收藏夹那边**（`bookmarks.vault_entry_id`，0.8.5 就有）——
- *      密码库这一侧只**读**它，于是「在收藏夹绑了密码」与「在密码库绑了网址」是同一件事，
- *      不会出现两边各记一份然后对不上。绑定 / 解绑由 `setVaultLink()` 写同一个字段。
- *      ⚠️ 这是**跨模块**的一次调用（收藏夹模块可以被整目录删掉）⇒ 失败一律静默降级成空：
- *      那时界面上不出现「绑定的网址」这一块，其余功能一字不受影响（⛔ 别让这里抛出）。
- *      · `state.vaultBmLinks`：`密码条目 id → 绑在它上面的收藏`（列表行渲染按它查）
- *      · `state.vaultBmAll`：全部收藏的**精简副本**（详情弹窗那个「选一条来绑定」的下拉的选项）
- *      ⚠️ 两份都从同一次请求来 —— ⛔ 别只存一份再去现算另一份（那多一次遍历，还容易两边不同步）。
- * @returns {Promise.<void>}
+ * 密码库这一侧只**读**它，于是「在收藏夹绑了密码」与「在密码库绑了网址」是同一件事，
+ * 不会出现两边各记一份然后对不上。绑定 / 解绑由 `setVaultLink()` 写同一个字段。
+ * 这是**跨模块**的一次调用（收藏夹模块可以被整目录删掉）⇒ 失败一律静默降级成空：
  */
 async function refreshVaultLinks() {
   /** @type {Array.<Object>} */
@@ -838,10 +686,10 @@ export async function loadVaultList() {
   const r = await api('GET', '/api/vault');
   state.vaultItems = Array.isArray(r.items) ? r.items : [];
   state.vaultBroken = Number(r.broken) || 0;
-  // ⭐ 0.8.18：标签池跟着列表一起回来（见 `store.listVaultEntries`）——
-  //    「建过、还没有记录用到」的标签靠它出现在左栏（`vaultTagStats`）。
+  // 标签池跟着列表一起回来（见 `store.listVaultEntries`）——
+  // 「建过、还没有记录用到」的标签靠它出现在左栏（`vaultTagStats`）。
   state.vaultTagPool = Array.isArray(r.tagPool) ? r.tagPool : [];
-  // ⭐⭐ 0.8.18 任务八：绑定的网址收藏也一起取（列表行上那颗「复制网址」要按它决定复制哪个）。
+  // 任务八：绑定的网址收藏也一起取（列表行上那颗「复制网址」要按它决定复制哪个）。
   await refreshVaultLinks();
   vaultArmTimer();
   renderVault();
@@ -851,10 +699,8 @@ export async function loadVaultList() {
  * 功能：手动锁定密码库 —— 先本地清干净，再告诉服务端把 DEK 扔掉。
  *
  * 说明：⚠️ **顺序不能反**：先本地清（立刻从界面上抹掉明文），再发请求。
- *      反过来的话，请求在途的那几百毫秒里界面上还显示着明文 —— 而用户按「锁定」
- *      的意图恰恰是「现在马上让它们消失」。
- *
- * @returns {Promise.<void>}
+ * 反过来的话，请求在途的那几百毫秒里界面上还显示着明文 —— 而用户按「锁定」
+ * 的意图恰恰是「现在马上让它们消失」。
  */
 export async function lockVault() {
   vaultReset();
@@ -872,19 +718,14 @@ export async function lockVault() {
  * 功能：打开「新增 / 编辑密码」弹窗（字段：标题 / 用户名 / 密码 / 网址 / 备注 + 生成器）。
  *
  * 说明：⭐ 生成器**内嵌在密码字段旁边**（而不是单独一个页面）：用户点「＋ 新增密码」的
- *      真实场景就是「这个站点的密码我还没想好 / 想换一个」，让他在两个界面之间来回跳
- *      是没有必要的。生成的密码会直接填进输入框，用户能看到、能改。
- *      ⚠️ 编辑模式下密码框**预填当前密码**（详情弹窗已经把明文取回来了）——
- *      留空表示「不改」在这个界面上反而更容易出错（用户看不出留空是「不改」还是「清空」）。
- *
- * @param {?Object} item - 要编辑的条目（**含 `password`**）；为 null 时是新增
- * @returns {void}
+ * 真实场景就是「这个站点的密码我还没想好 / 想换一个」，让他在两个界面之间来回跳
+ * 是没有必要的。生成的密码会直接填进输入框，用户能看到、能改。
  */
 export function openVaultEntryForm(item) {
   const isEdit = !!item;
   const v = (k) => esc((item && item[k]) != null ? String(item[k]) : '');
-  // ⚠️ 标签是数组：⛔ 不能走上面那个 v()（`String(['a','b'])` 会写出 'a,b' 再被逗号切回来）。
-  //    现在药丸列表**逐枚**渲染（`vaultPickHtml()`），本来就不经过逗号串。
+  // 标签是数组：⛔ 不能走上面那个 v()（`String(['a','b'])` 会写出 'a,b' 再被逗号切回来）。
+  // 现在药丸列表**逐枚**渲染（`vaultPickHtml()`），本来就不经过逗号串。
   const picked = (item && Array.isArray(item.tags) ? item.tags : []).map((n) => String(n));
   // 下拉列的是**全部**已有标签（⛔ 不排除已选的那几枚：一排除就出「去掉之后加不回来」）
   const list = vaultTagStats(state).tags;
@@ -924,9 +765,11 @@ export function openVaultEntryForm(item) {
      <div class="tt-field"><label for="vf-note">备注</label>
        <textarea id="vf-note" rows="3" maxlength="4096">${v('note')}</textarea></div>
      <div class="vault-note dim">密码库中的全部记录（含标题与标签）都会加密后存进数据库，没有明文标签。</div>`,
+    // 密码库**不存草稿**：明文只活到弹窗关闭（`vault/pw` 的纪律），密码框也已被全局跳过
+    { draft: false },
   );
   setModalSave(isEdit ? '保存' : '添加', false);
-  // ⚠️ 弹层内容每次都是新造的 ⇒ 在这里绑一次就够（⛔ 别挂到 document 上，那会越挂越多）。
+  // 弹层内容每次都是新造的 ⇒ 在这里绑一次就够（⛔ 别挂到 document 上，那会越挂越多）。
   const picks = $('#vf-picks');
   if (picks) {
     picks.addEventListener('click', (e) => {
@@ -938,8 +781,8 @@ export function openVaultEntryForm(item) {
   if (sel) {
     sel.addEventListener('change', () => {
       const val = sel.value;
-      // ⚠️⭐ 先**重置**再挂：不重置的话「再选同一枚」值没变 ⇒ `change` 根本不触发
-      //    （用户看到的就是「选了没反应」，而且不报错）。
+      // 先**重置**再挂：不重置的话「再选同一枚」值没变 ⇒ `change` 根本不触发
+      // （用户看到的就是「选了没反应」，而且不报错）。
       sel.value = '';
       if (val) addVaultPick(val);
     });
@@ -958,7 +801,7 @@ export function openVaultEntryForm(item) {
   if (nt) {
     nt.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter') return;
-      // ⛔ 必须挡掉默认行为：这个弹窗的回车主键是「保存」，不挡就变成「一敲回车整条记录就提交了」
+      // 必须挡掉默认行为：这个弹窗的回车主键是「保存」，不挡就变成「一敲回车整条记录就提交了」
       e.preventDefault();
       commitNew();
     });
@@ -973,11 +816,9 @@ export function openVaultEntryForm(item) {
     eye.textContent = show ? '隐藏' : '显示';
   };
   $('#vf-eye').addEventListener('click', toggleEye);
-  // ⭐⭐ 0.8.19 任务五（截图批注：「这个密码生成设置要**一直显示**，
-  //    而不是点击生成了才显示」）—— 生成器那一块（长度 / 字符集 / 不含易混字符）**常显**
-  //    （它原先带 `hidden`，靠点「生成」才 `remove('hidden')` 展开），
-  //    「🎲 生成」现在只负责**生成一个**（⛔ 不再兼任「展开它」）。
-  //    ⚠️ 两个监听都**只挂一次**：弹窗每次都是新造的节点，不存在叠加的问题。
+  // 任务五（截图批注：「这个密码生成设置要**一直显示**，
+  // 而不是点击生成了才显示」）—— 生成器那一块（长度 / 字符集 / 不含易混字符）**常显**
+  // （它原先带 `hidden`，靠点「生成」才 `remove('hidden')` 展开），
   $('#vf-gen').addEventListener('click', (e) => {
     e.stopPropagation();
     fillGenerated();
@@ -1009,13 +850,13 @@ export function openVaultEntryForm(item) {
       title: $('#vf-title').value,
       username: $('#vf-user').value,
       password: $('#vf-pw').value,
-      // ⭐⭐ 0.8.19：「新建中移除网址列，网址不再单独输入，全部交给【点击绑定】」
-      //    ⇒ 表单里没有 `#vf-url` 了。**编辑时把原来的网址原样带回去**：PUT 是整条覆盖，
-      //    不传就等于把老数据里的网址悄悄清掉（数据丢失且**不报错**）。新增这一支写空串。
+      // 「新建中移除网址列，网址不再单独输入，全部交给【点击绑定】」
+      // ⇒ 表单里没有 `#vf-url` 了。**编辑时把原来的网址原样带回去**：PUT 是整条覆盖，
+      // 不传就等于把老数据里的网址悄悄清掉（数据丢失且**不报错**）。新增这一支写空串。
       url: (item && item.url) || '',
       note: $('#vf-note').value,
-      // ⚠️ 标签 = 已选药丸 ＋ 输入框里还没挂上去的（进接口前切成数组、去掉空白项）。
-      //    中英文逗号与顿号都收 —— 中文输入法下打出来的是「，」。
+      // 标签 = 已选药丸 ＋ 输入框里还没挂上去的（进接口前切成数组、去掉空白项）。
+      // 中英文逗号与顿号都收 —— 中文输入法下打出来的是「，」。
       tags: vaultPickedNames().concat(
         String($('#vf-newtag').value || '')
           .split(/[,，、]/)
@@ -1023,9 +864,7 @@ export function openVaultEntryForm(item) {
           .filter(Boolean),
       ),
     };
-    // ⭐⭐ 0.9.8（方案 42 §一·1）：`!fields.password` 是**真假值**判据，而 `' '` 是真值
-    //    ⇒ 只敲一个空格也能提交（服务端那时同样放行，两边同一条错）。
-    //    ⚠️ 只换判据、**不改写提交值**：`" a b "` 原样提交（trim 会让人在别处登不上）。
+    // ⇒ 只敲一个空格也能提交（服务端那时同样放行，两边同一条错）。
     if (isBlankPassword(fields.password)) return toast('密码不能为空（只输空格不算密码）', true);
     try {
       if (isEdit) await api('PUT', `/api/vault/${item.id}`, fields);
@@ -1057,27 +896,17 @@ export async function fetchVaultEntry(id) {
 
 /**
  * 功能：画详情弹窗里「绑定的网址收藏」那一段 —— 已绑的逐条列出（每条一颗「解绑」），
- *      下面挂一个下拉用来绑新的。
+ * 下面挂一个下拉用来绑新的。
  *
- * 说明：⭐⭐ 0.8.18 任务八：「同网址收藏夹绑定密码一样，在密码库也可以绑定网址，
- *      **可以取消绑定**」——所以这一块**两个方向都要有**：绑定（那个下拉）与解绑（每条那颗）。
- *      ⭐ 0.8.19 任务七：「密码与网址收藏夹**仅允许一对一绑定**，
- *      不能一对多、多对多」⇒ 那个「一个密码条目可以绑多条」的旧口径**作废**：绑定 / 解绑
- *      一律单条，下面的下拉也已把「被别人绑走的」排除掉。
- *      ⚠️ 但这段**逐条列**的渲染照旧（`links` 仍按数组处理）—— 老数据里已经一对多的
- *      要能照常显示（铁律 18：不改写用户数据），只是**不再允许新增**。
- *      ⚠️ 已绑的那几条**不出现在下拉里**（避免选一个已经绑上的、看起来什么都没发生）。
- *      ⚠️ 一条收藏都没有、也一条没绑 ⇒ **整块不返回**：留一个「选不了任何东西」的下拉
- *      看起来像坏了（收藏夹模块被整目录删掉时也是这一支）。
- * @param {Object} item - 含密码的完整条目
- * @returns {string} 该区块的 HTML（可能是空串）
+ * **可以取消绑定**」——所以这一块**两个方向都要有**：绑定（那个下拉）与解绑（每条那颗）。
+ * 任务七：「密码与网址收藏夹**仅允许一对一绑定**，
  */
 function vaultLinksHtml(item) {
   const links = vaultLinksOf(state, item.id);
   const boundIds = new Set(links.map((b) => String(b.id)));
-  // ⭐⭐ 0.8.19 任务七：「密码与网址收藏夹**仅允许一对一绑定**」——
-  //    已被**别的**密码条目绑走的收藏不再出现在下拉里（挑它只会吃一个 400）。
-  //    ⚠️ 本条自己那几条先由 `boundIds` 排掉，这里只管「别人占着的」。
+  // 任务七：「密码与网址收藏夹**仅允许一对一绑定**」——
+  // 已被**别的**密码条目绑走的收藏不再出现在下拉里（挑它只会吃一个 400）。
+  // 本条自己那几条先由 `boundIds` 排掉，这里只管「别人占着的」。
   const takenElsewhere = new Set(
     Object.entries(state.vaultBmLinks || {})
       .filter(([vid]) => Number(vid) !== Number(item.id))
@@ -1126,11 +955,8 @@ function redrawVaultLinks(item) {
  * 功能：写一次绑定关系 —— **跨模块写**收藏夹那一侧的 `vault_entry_id`。
  *
  * 说明：⚠️ 只传这一个键：`checkBookmark()` 按「请求体里有没有这个键」决定改哪些列，
- *      所以不会顺手把标题 / 网址 / 分类清掉；`updateBookmark()` 也只更新传进来的键。
- *      ⚠️ `vaultId` 传 `null` 就是**解绑**（`checkBookmark` 明写支持 `null` / 空串）。
- * @param {number} bmId - 收藏夹条目 id
- * @param {?number} vaultId - 要绑的密码条目 id；`null` = 解绑
- * @returns {Promise.<void>}
+ * 所以不会顺手把标题 / 网址 / 分类清掉；`updateBookmark()` 也只更新传进来的键。
+ * `vaultId` 传 `null` 就是**解绑**（`checkBookmark` 明写支持 `null` / 空串）。
  */
 async function setVaultLink(bmId, vaultId) {
   await api('PUT', `/api/bookmarks/${Number(bmId)}`, { vault_entry_id: vaultId });
@@ -1142,15 +968,13 @@ async function setVaultLink(bmId, vaultId) {
  * @param {number} bmId - 收藏夹条目 id
  * @param {?number} vaultId - 要绑的密码条目 id；`null` = 解绑
  * @param {string} okText - 成功提示
- * @returns {Promise.<void>}
  */
 async function applyVaultLink(item, bmId, vaultId, okText) {
   try {
     await setVaultLink(bmId, vaultId);
     await refreshVaultLinks();
     redrawVaultLinks(item);
-    // ⚠️ 列表行上那颗「复制网址」是按绑定情况画的（没网址就不画）⇒ 必须跟着重画，
-    //    否则会出现「刚绑上，行上那颗按钮要刷新页面才出来」。
+    // 列表行上那颗「复制网址」是按绑定情况画的（没网址就不画）⇒ 必须跟着重画，
     renderVaultRows();
     toast(okText);
   } catch (e) {
@@ -1162,31 +986,21 @@ async function applyVaultLink(item, bmId, vaultId, okText) {
  * 功能：打开条目详情弹窗 —— **唯一**会显示密码的地方（默认掩码，可显示 / 分别复制）。
  *
  * 说明：⚠️ 复制用的是 `navigator.clipboard`，而**浏览器不允许脚本主动清空剪贴板**，
- *      所以这里的文案只能提醒用户自己去粘走、自己清理 —— **绝不许**写成
- *      「复制后会自动清空」（方案 §七 明令禁止）。
  *
  * @param {number} id - 条目 id
- * @returns {Promise.<void>}
  */
 export async function openVaultDetail(id) {
   const item = await fetchVaultEntry(id);
   if (!item) return;
-  // ⭐⭐ 0.8.19 任务六：「①原来独立的网址设置有残留，应该全部清除才对；
-  //    ②参照网址收藏夹的详情改造现在的密码详情」——
-  //    ⇒ 版式整份对齐收藏夹的详情（`bookmarks/desktop.js` 的 `openBmDetail()`）：
-  //    弹窗标题固定「密码详情」，正文第一行是**大字条目标题**，字段走
-  //    `<dl class="bm-fields">`（dt / dd 的**只读字段表**），底部只留一颗「编辑」（关窗走页头 ✕）。
-  //    ⚠️ ①「网址」那一块**整块消失**：网址不再属于条目自己（任务三已把表单里的独立网址列撤了），
-  //    它统一由下面「绑定的网址收藏」那一块表达 —— 那才是这次残留的根。
-  //    ⚠️ ②用户名 / 密码不再是 `<input readonly>`：字段表里是**纯文字**，右侧挂行内小键
-  //    （收藏夹详情的字段表里一个输入框都没有）。⇒ `#vd-pw` 由 `input` 变 `<b>`，
-  //    关闭时清的是 `textContent`；复制失败也不再能「帮用户全选输入框」。
+  // 任务六：「①原来独立的网址设置有残留，应该全部清除才对；
+  // ②参照网址收藏夹的详情改造现在的密码详情」——
+  // ⇒ 版式整份对齐收藏夹的详情（`bookmarks/desktop.js` 的 `openBmDetail()`）：
   const tags = (Array.isArray(item.tags) ? item.tags : [])
     .map((n) => `<span class="vault-tag">${esc(n)}</span>`)
     .join('');
-  // ⭐ 0.9.8：空白密码的老条目 —— 详情里必须直说「它现在是空的」，并给出两条出路。
-  //    ⚠️ 判据用完整条目的 `password` 现算（`GET /api/vault/:id` 回的就是明文），
-  //    比列表里那个 `blank_password` 更可信（用户可能刚在别处补上了）。
+  // 空白密码的老条目 —— 详情里必须直说「它现在是空的」，并给出两条出路。
+  // 判据用完整条目的 `password` 现算（`GET /api/vault/:id` 回的就是明文），
+  // 比列表里那个 `blank_password` 更可信（用户可能刚在别处补上了）。
   const blankNote = isBlankPassword(item.password)
     ? `<div class="vault-broken">⚠️ 这条记录<b>没有设密码</b>（保存时只有空格或空）。
          点右下角「编辑」补一个，或者直接删掉它 —— 留着它只会在复制时给你一个空串。</div>`
@@ -1216,46 +1030,37 @@ export async function openVaultDetail(id) {
        <div id="vd-links-box">${vaultLinksHtml(item)}</div>
      </div>`,
   );
-  // ⭐ 0.8.19 任务七残留（截图批注：「删除这个文案」）：
-  //    这里原来还有一句「⚠️ 复制之后请自己粘贴使用，并在用完后清理剪贴板 ——
-  //    浏览器不允许网页替你清空剪贴板。」—— **整句删掉**（他点名要删）。
-  //    ⚠️ 但那条**承诺本身**一个字没改：本应用**从不承诺**自动清剪贴板（方案 §七）；
-  //    复制失败时那句兜底提示照旧在（`copy()` 里）。
-  // ⭐⭐ 0.8.18 任务八（截图批注：「**编辑**进入详情弹窗里，和网址收藏夹与随手记一致」）：
-  //    弹窗右下那颗主按钮从「关闭」改成「**编辑**」（点了直接进编辑表单）——
-  //    ⚠️ 关窗改走**页头那个 ✕**（`openModal()` 静态骨架里就有，一直都在）。
-  //    与网址收藏夹的详情弹层、随手记的只读弹层**同一口径**：那一层底部也只有一颗「编辑」。
-  //    ⚠️ 列表行上那颗「编辑」**同时撤了**（见 `vaultRowHtml()`）—— 同一件事不留两个入口。
+  // 任务七残留：
+  // 这里原来还有一句「⚠️ 复制之后请自己粘贴使用，并在用完后清理剪贴板 ——
+  // 浏览器不允许网页替你清空剪贴板。」—— **整句删掉**（他点名要删）。
   setModalSave('编辑', false);
   $('#modal-save').onclick = () => {
     // 关掉弹窗即让明文离开 DOM（下一次打开会重新现取）
-    // ⭐ 0.8.19 任务六：`#vd-pw` 现在是**文字**不是 input ⇒ 清的是 `textContent`。
+    // 任务六：`#vd-pw` 现在是**文字**不是 input ⇒ 清的是 `textContent`。
     $('#vd-pw').textContent = '';
     closeModal();
-    // ⚠️ `item` **就是**含密码的完整条目（本函数开头刚取回来的）⇒ 直接进表单，
-    //    ⛔ 别再打一次接口（那会多留一份明文在别处，也没必要）。
+    // `item` **就是**含密码的完整条目（本函数开头刚取回来的）⇒ 直接进表单，
+    // 别再打一次接口（那会多留一份明文在别处，也没必要）。
     openVaultEntryForm(item);
   };
-  // ⭐ 0.8.19 任务六：`#vd-pw` 是 `<b>`（不是 input）⇒ 显示/隐藏改成切 `bm-vmasked` ＋ 换文案，
-  //    与手机端 `vaultReveal()` 同一个判据（两端只差版式）。
+  // 任务六：`#vd-pw` 是 `<b>`（不是 input）⇒ 显示/隐藏改成切 `bm-vmasked` ＋ 换文案，
+  // 与手机端 `vaultReveal()` 同一个判据（两端只差版式）。
   $('#vd-eye').addEventListener('click', () => {
     const el = $('#vd-pw');
     if (!el) return;
     const masked = el.classList.toggle('bm-vmasked');
     el.textContent = masked ? '••••••••' : item.password || '（空）';
-    // ⭐ 0.8.19 任务六：明文加 `.on`（品牌色加粗）—— 与手机端同一个视觉提示，
-    //    免得「一眼看不出现在屏幕上是不是明文」。
+    // 任务六：明文加 `.on`（品牌色加粗）—— 与手机端同一个视觉提示，
+    // 免得「一眼看不出现在屏幕上是不是明文」。
     el.classList.toggle('on', !masked);
     $('#vd-eye').textContent = masked ? '显示' : '隐藏';
   });
   /**
    * 功能：把一段文本复制到剪贴板，并给出「环境不允许」的兜底提示。
    *
-   * ⭐ 0.8.19 任务六：第三个参数（只读输入框）**撤了** —— 字段表里已经没有输入框可「帮用户全选」，
+   * 任务六：第三个参数（只读输入框）**撤了** —— 字段表里已经没有输入框可「帮用户全选」，
    * 兜底文案与手机端 `vaultCopy()` 逐字一致。
    * @param {string} text - 待复制文本
-   * @param {string} what - 提示里的名字
-   * @returns {Promise.<void>}
    */
   const copy = async (text, what) => {
     const ok = await copyText(text || '');
@@ -1263,16 +1068,15 @@ export async function openVaultDetail(id) {
   };
   $('#vd-copy-user').addEventListener('click', () => copy(item.username, '用户名'));
   $('#vd-copy-pw').addEventListener('click', () => copy(item.password, '密码'));
-  // ⚠️ 0.8.19 任务六：「网址」那一块连同它那颗复制键**整块撤了**（网址不再是条目自己的字段，
-  //    统一走下面的「绑定的网址收藏」）⇒ 原来那行 `#vd-copy-url` 的监听器随之消失。
-  // ⭐⭐ 0.8.18 任务八：绑定 / 解绑那两处 —— 挂在 `#vd-links-box` 上（它是**常驻**节点，
-  //    里面那份清单才是被重画的）⇒ 重画之后监听器还在，⛔ 不用也不许每次重画都重挂一遍。
+  // 任务六：「网址」那一块连同它那颗复制键**整块撤了**（网址不再是条目自己的字段，
+  // 统一走下面的「绑定的网址收藏」）⇒ 原来那行 `#vd-copy-url` 的监听器随之消失。
+  // 任务八：绑定 / 解绑那两处 —— 挂在 `#vd-links-box` 上（它是**常驻**节点，
   const linksBox = $('#vd-links-box');
   if (linksBox) {
     linksBox.addEventListener('click', (e) => {
-      // ⭐ 0.8.19 任务七：「网址的【解绑】左边加一个【复制】」——
-      //    网址写在按钮的 `data-url` 上（它不敏感、那块清单本来就整份在内存里），
-      //    ⛔ 不必为复制一个网址再打一次接口。
+      // 任务七：「网址的【解绑】左边加一个【复制】」——
+      // 网址写在按钮的 `data-url` 上（它不敏感、那块清单本来就整份在内存里），
+      // 不必为复制一个网址再打一次接口。
       const cp = e.target.closest('[data-vault-copy-bm]');
       if (cp) {
         void copyText(cp.dataset.url || '').then((ok) =>
@@ -1282,8 +1086,8 @@ export async function openVaultDetail(id) {
       }
       const un = e.target.closest('[data-vault-unlink]');
       if (un) {
-        // ⭐⭐ 0.8.19 任务七：「解绑也要二次弹窗确认」——
-        //    它挨着新加的「复制」，而这一步会**同时**改收藏夹那一侧。
+        // 任务七：「解绑也要二次弹窗确认」——
+        // 它挨着新加的「复制」，而这一步会**同时**改收藏夹那一侧。
         const bid = Number(un.dataset.vaultUnlink);
         openConfirmModal(
           '取消绑定',
@@ -1329,17 +1133,8 @@ export function confirmDelVault(id) {
 }
 
 /**
- * 功能：打开「管理这个标签」弹窗 —— 改名 / 删除（0.4.4 起）。
  *
  * 说明：⚠️ 「删除这个标签」的按钮放在**弹窗正文里**（而不是注入弹窗底部的按钮排）——
- *      底部按钮排是页面上的静态 DOM，往里临时插按钮就必须记得清理，漏了的表现是
- *      「第二次打开时出现两个删除按钮，其中一个还是上一次那个标签的」，点下去删的是**另一个**
- *      （收藏夹的标签管理踩过这个坑，同一手法）。
- *      ⭐ 文案里把两件事写死：改名/合并**不动记录内容**、删标签**一条记录都不会少** ——
- *      这是用户点下去之前唯一想知道的事。
- *
- * @param {string} name - 要管理的标签名
- * @returns {void}
  */
 export function openVaultTag(name) {
   const st = vaultTagStats(state).tags.find((t) => t.name === name) || { name, count: 0 };
@@ -1371,8 +1166,7 @@ async function renameVaultTag(from, rawTo) {
   try {
     const r = await api('POST', '/api/vault/tags/rename', { from, to });
     closeModal();
-    // ⚠️ 选中态要跟着走到新名字上：否则筛选条还指着一个**已经不存在的标签**，
-    //    列表会立刻变成空的，看起来像记录被删光了。
+    // 列表会立刻变成空的，看起来像记录被删光了。
     if (state.vaultTag && state.vaultTag.kind === 'tag' && state.vaultTag.name === from) {
       state.vaultTag = { kind: 'tag', name: to };
     }
@@ -1401,7 +1195,6 @@ export function confirmDelVaultTag(name) {
       try {
         const r = await api('POST', '/api/vault/tags/remove', { name: st.name });
         closeModal();
-        // 删掉的正好是当前筛选项 → 退回「全部」（否则列表会空着，而用户不知道为什么）
         if (state.vaultTag && state.vaultTag.kind === 'tag' && state.vaultTag.name === st.name) {
           state.vaultTag = null;
         }
@@ -1418,17 +1211,15 @@ export function confirmDelVaultTag(name) {
  * 功能：处理「设置主密码」提交 —— 本地先做二次确认（两次输入一致 + 勾了那句声明），再提交。
  *
  * 说明：⚠️ 校验在这里做只是为了**少一次白跑的请求**；真正的下限（8 位）在服务端
- *      （`validate.js` 的 `checkMasterPassword`）—— 两处口径必须一致。
+ * （`validate.js` 的 `checkMasterPassword`）—— 两处口径必须一致。
  *
- * @returns {Promise.<void>}
  */
 async function submitVaultInit() {
   const a = $('#vault-master').value;
   const b = $('#vault-master2').value;
   if (a.trim().length < 8) return toast('主密码至少 8 位', true);
   if (a !== b) return toast('两次输入的主密码不一致', true);
-  // ⚠️ 第二步没有勾选框（同一句话不说两遍）⇒ 校验的是**内存里**那个确认态。
-  //    没确认就退回第一步，让用户自己重新读一遍再勾 —— ⛔ 不许「顺手帮他确认」。
+  // 第二步没有勾选框（同一句话不说两遍）⇒ 校验的是**内存里**那个确认态。
   if (!vaultInitAck) {
     vaultInitStep = 1;
     renderVault();
@@ -1436,7 +1227,7 @@ async function submitVaultInit() {
   }
   try {
     await api('POST', '/api/vault/init', { masterPassword: a });
-    // ⭐ 成功之后这一支就结束了 ⇒ 把两步的状态清干净（下次进「未初始化」要从头读）
+    // 成功之后这一支就结束了 ⇒ 把两步的状态清干净（下次进「未初始化」要从头读）
     vaultInitStep = 1;
     vaultInitAck = false;
     state.vault = await api('GET', '/api/vault/status');
@@ -1470,33 +1261,30 @@ async function submitVaultUnlock() {
 
 /**
  * 功能：给密码库这一屏挂**一次性**的事件委托 —— 这一屏的内容几乎每次都是重画的，
- *      逐个绑按钮必然漏一处（漏掉的那处表现是「点了没反应」，本项目最忌讳的一类缺陷）。
  *
  * 说明：⚠️ 只挂**这一屏内部**的动态元素；顶栏那三个按钮（开屏 / 锁定 / 新增）
- *      是静态 DOM，由 `desktop/app.js` 的 `bindEvents()` 直接绑。
+ * 是静态 DOM，由 `desktop/app.js` 的 `bindEvents()` 直接绑。
  *
- * @returns {void}
  */
 /** 弹窗正文里那处委托**只许挂一次**（弹窗是常驻节点，而本函数每次挂载都会被调） */
 let vaultModalBound = false;
 
 export function bindVaultEvents(root) {
-  // ⚠️ 0.8.7：根节点由**视图片段**传进来。原来写死 `$('#vault-view')`，
-  //    而那一屏已经删了 ⇒ 写死的话这里回 null、整个屏的交互都不挂，而且**不报错**。
+  // 根节点由**视图片段**传进来。原来写死 `$('#vault-view')`，
+  // 而那一屏已经删了 ⇒ 写死的话这里回 null、整个屏的交互都不挂，而且**不报错**。
   if (!root) return;
 
-  // ⭐ 搜索是「边打边筛」：不请求服务端（标签与标题都在密文里，服务端筛不了），
-  //    只在内存里重画列表 —— 所以**不需要防抖**（本地过滤比一次定时器还便宜）。
-  //    ⚠️ 只调 `renderVaultRows()`：输入框在静态骨架里，绝不能被这次重画带上。
+  // 搜索是「边打边筛」：不请求服务端（标签与标题都在密文里，服务端筛不了），
+  // 只在内存里重画列表 —— 所以**不需要防抖**（本地过滤比一次定时器还便宜）。
+  // 只调 `renderVaultRows()`：输入框在静态骨架里，绝不能被这次重画带上。
   root.addEventListener('input', (e) => {
     if (!e.target || e.target.id !== 'vault-q') return;
     state.vaultQuery = e.target.value;
     renderVaultRows();
   });
 
-  // ⭐⭐ 0.9.8 第 3 轮：知情页那颗勾选框 —— 勾了才放开「下一步」（没勾时按钮 `disabled`）。
-  //    ⚠️ 确认态写在**内存**里（`vaultInitAck`），不读 DOM：第二步没有勾选框，
-  //    提交前那次校验读的就是这份变量（⛔ 别改成「回头找 #vault-init-ack」——那时它已经不在文档里）。
+  // 确认态写在**内存**里（`vaultInitAck`），不读 DOM：第二步没有勾选框，
+  // 提交前那次校验读的就是这份变量（⛔ 别改成「回头找 #vault-init-ack」——那时它已经不在文档里）。
   root.addEventListener('change', (e) => {
     if (!e.target || e.target.id !== 'vault-init-ack') return;
     vaultInitAck = !!e.target.checked;
@@ -1506,7 +1294,6 @@ export function bindVaultEvents(root) {
 
   root.addEventListener('click', (e) => {
     const t = e.target;
-    // ⭐ 一屏两步（方案 §3.1 / §3.2）：下一步 → 设置页；返回上一步 → 知情页（勾选态保留）
     if (t.closest('#vault-init-next')) {
       vaultInitStep = 2;
       return void renderVault();
@@ -1532,21 +1319,17 @@ export function bindVaultEvents(root) {
       state.vaultTag = { kind: 'tag', name: chip.dataset.vaultTag || '' };
       return void rerenderVaultFilter();
     }
-    // ⭐ 0.8.16：左栏底部那颗**固定**的「⚙ 管理」—— 一次列全部标签（见 `manageVaultTags()`）。
-    //    ⭐ 0.8.17：「＋ 新标签」那一支**撤了** —— 它的落点搬进管理弹层底部
-    //    （那颗「＋ 新增记录」在 `manageVaultTags()` 的委托里接）。
+    // 左栏底部那颗**固定**的「⚙ 管理」—— 一次列全部标签（见 `manageVaultTags()`）。
+    // 「＋ 新标签」那一支**撤了** —— 它的落点搬进管理弹层底部
+    // （那颗「＋ 新增记录」在 `manageVaultTags()` 的委托里接）。
     if (t.closest('#vault-manage-tags')) {
       manageVaultTags();
       return undefined;
     }
 
-    // ⚠️ **顺序不能反**：几个行内按钮都在 `[data-vault-open]` 那一行**里面**，
-    //    所以 `closest('[data-vault-open]')` 对着「点其中一颗」也会命中。
-    //    先判按钮、再判整行 —— 反过来（先判整行）的表现是「点那颗按钮却弹出了详情」，
-    //    而且不报任何错。**这是真浏览器冒烟脚本抓到的**（`ttt/temp/vault-smoke.js`）。
-    //    ⭐⭐ 0.8.18 任务八：这里原来还有一支 `[data-vault-edit]`（点编辑取回完整条目再开表单）——
-    //    那一支**已随列表行上那颗「编辑」一起撤了**（编辑入口搬进详情弹窗，见 `vaultRowHtml()`）。
-    //    ⛔ 别把它加回来：留着就是一份永不命中的死代码。
+    // **顺序不能反**：几个行内按钮都在 `[data-vault-open]` 那一行**里面**，
+    // 所以 `closest('[data-vault-open]')` 对着「点其中一颗」也会命中。
+    // 先判按钮、再判整行 —— 反过来（先判整行）的表现是「点那颗按钮却弹出了详情」，
     const del = t.closest('[data-vault-del]');
     if (del) return confirmDelVault(Number(del.dataset.vaultDel));
 
@@ -1559,9 +1342,9 @@ export function bindVaultEvents(root) {
       );
     }
 
-    // ⭐ 0.8.9：「给每个账户条添加复制密码的按钮」。
-    //    ⚠️ 列表里那份是**摘要**（`/api/vault` 刻意不回明文）⇒ 点它要先取一次这一条的详情。
-    //    ⚠️ **不承诺清剪贴板** —— 与详情里那颗 `#vd-copy-pw` 同一条约定（见 16-密码库.md）。
+    // 「给每个账户条添加复制密码的按钮」。
+    // 列表里那份是**摘要**（`/api/vault` 刻意不回明文）⇒ 点它要先取一次这一条的详情。
+    // **不承诺清剪贴板** —— 与详情里那颗 `#vd-copy-pw` 同一条约定（见 16-密码库.md）。
     const cpp = t.closest('[data-vault-copy-pw]');
     if (cpp) {
       const id = Number(cpp.dataset.vaultCopyPw);
@@ -1571,9 +1354,9 @@ export function bindVaultEvents(root) {
         .catch((e) => toast(e.message, true));
     }
 
-    // ⭐⭐ 0.8.18 任务八：「在记录条上有一键复制网址的按键」。
-    //    ⚠️ 复制的是**有效网址**（绑定的收藏优先，其次条目自己填的那个，见 `vaultEffUrl()`），
-    //    所以不需要再打一次接口 —— 摘要里就有。
+    // 任务八：「在记录条上有一键复制网址的按键」。
+    // 复制的是**有效网址**（绑定的收藏优先，其次条目自己填的那个，见 `vaultEffUrl()`），
+    // 所以不需要再打一次接口 —— 摘要里就有。
     const cu = t.closest('[data-vault-copy-url]');
     if (cu) {
       const it = (state.vaultItems || []).find((x) => Number(x.id) === Number(cu.dataset.vaultCopyUrl));
@@ -1589,9 +1372,8 @@ export function bindVaultEvents(root) {
   });
 
   // 弹窗正文里的两个标签动作（弹窗不在视图根节点里，所以另挂一处）。
-  // ⚠️⭐ 0.8.7：本函数**每挂载一次视图片段都会被调一次**，而 `#modal-body` 是
-  //    **常驻节点**（不属于任何一屏）⇒ 必须用模块级闸门只挂一次，
-  //    否则弹窗里的「删这个标签」会**触发两次**（第一次成功、第二次报找不到）。
+  // 本函数**每挂载一次视图片段都会被调一次**，而 `#modal-body` 是
+  // **常驻节点**（不属于任何一屏）⇒ 必须用模块级闸门只挂一次，
   if (vaultModalBound) return;
   vaultModalBound = true;
   const mbody = $('#modal-body');
@@ -1615,10 +1397,9 @@ export function bindVaultEvents(root) {
     }
   });
 
-  // ⭐⭐ 0.8.18：这里原来还有一处 `change` 委托，管的是工具条上那枚「自动锁定」下拉 ——
-  //    那一枚已**搬去设置页**（`desktop-settings-pane.js` 自己挂监听、自己发请求），
-  //    本屏的工具条如今只剩「倒计时（点一下即锁定）＋ 搜索框」两件。
-  //    ⛔ 别为了「万一还有人用」把那个分支留在这儿：留着就是一份永不触发的死代码。
+  // 这里原来还有一处 `change` 委托，管的是工具条上那枚「自动锁定」下拉 ——
+  // 那一枚已**搬去设置页**（`desktop-settings-pane.js` 自己挂监听、自己发请求），
+  // 本屏的工具条如今只剩「倒计时（点一下即锁定）＋ 搜索框」两件。
 
   // 双击条目行 == 点进去（与任务板一致的手感）
   root.addEventListener('dblclick', (e) => {

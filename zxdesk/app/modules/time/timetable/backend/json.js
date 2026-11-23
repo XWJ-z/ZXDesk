@@ -2,23 +2,11 @@
 
 /**
  * modules/timetable/backend/json.js —— 课表的八张表（学期 / 时段块 / 逐节时间 / 课程 / 课次 / 单次调课 / 内置作息 / 内置版式 …）的**JSON 版原语**
- *
  * 功能：本模块自己的存储原语（JSON 回退），与另一个后端**同名同参** ——
- *      「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，少一个 / 打错名 / 形参个数不一致 = 启动即抛。
- *
- * ⭐ 0.5.0 模块化重构（方案 `09-模块化重构` §四 第 2 行）：比对的粒度从「两个大文件」下移到**每个模块自己的一对**。
- *    ⚠️ **纯搬运**：方法体是从 `store/backend/json.js` 按**行区间逐字节**切出来的，一个字都没重写
- *    （切块前后 sha256 见 0.5.0的提交说明）。
- *    ⚠️ 课表那一段在原来那个大文件里是被 `exportAll()` 的 `return {...}` **隔开的连续两块**：
- *    前一块是**读取语句**（原样搬进文件末尾的 `exportTimetable()`，只把共享的 `let x` 改成 `const x`），
- *    后一块是 op 方法（原样进下面的 `ops`）。
- *
- * ⚠️ ops 里的 `this` 是 **Store 实例**（门面用 `.apply(store, …)` 调用），所以照常访问
- *    `this.db` / `this.data` / `this._listSql()`。
- *
+ * 「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，少一个 / 打错名 / 形参个数不一致 = 启动即抛。
  * @author zx
  * @date   2026-09-14
- * @since 0.8.13
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/02-存储层与数据模型.md、docs/公共/架构文档/06-课表.md、docs/公共/开发方案/09-模块化重构.md
  */
 
@@ -51,8 +39,7 @@ const ops = {
    * @param {number} id - 学期 id
    * @param {number} u - 已转成数字的用户 id（由调用方保证）
    * @returns {boolean} 学期行是否真的被删掉
-   * 说明：六张子表按学期 id 无条件各清一遍（0.7.1 起多了 `time_timetable_day_notes`）；
-   *      归属判断用的是已归一化的 `u`，所以调用方必须先 `Number(uid)`。
+   * 归属判断用的是已归一化的 `u`，所以调用方必须先 `Number(uid)`。
    */
   deleteTerm(id, u) {
     /** 功能：判断一行是否属于该账号。 */
@@ -241,7 +228,7 @@ const ops = {
    * @returns {boolean} 课次行是否真的被删掉
    */
   deleteSession(uid, id) {
-    // ⚠️ 先清它名下的单次调课：课次没了，调整行就是悬空的孤儿（与 SQLite 后端逐字一致）
+    // 先清它名下的单次调课：课次没了，调整行就是悬空的孤儿（与 SQLite 后端逐字一致）
     this.data.time_timetable_adjustments = (this.data.time_timetable_adjustments || []).filter(
       (a) => !(a.session_id === Number(id) && uidOf(a) === Number(uid)),
     );
@@ -333,13 +320,8 @@ const ops = {
   },
 
   /**
-   * 功能：列出某个学期的全部**按日期的课次备注**（0.7.1，与 SQLite 后端语义一致）。
    *
    * 说明：⚠️ 写入同样**不走原语层**（见 SQLite 后端同名 op 的注释）—— 这里只提供读口，
-   *      两个后端各一份、逐字对齐。
-   * @param {(number|string)} uid - 用户 id
-   * @param {(number|string)} termId - 学期 id
-   * @returns {Array.<Object>} 备注行数组（按 date、id 升序）
    */
   listDayNotes(uid, termId) {
     return (this.data.time_timetable_day_notes || [])
@@ -348,11 +330,9 @@ const ops = {
   },
 
   /**
-   * 功能：删掉「某一天那节课」的那一条备注（0.7.1，与 SQLite 后端语义一致）。
    * @param {(number|string)} uid - 用户 id
    * @param {(number|string)} sessionId - 课次 id
    * @param {string} date - 公历日期 `YYYY-MM-DD`
-   * @returns {boolean} 备注行是否真的被删掉
    */
   deleteDayNote(uid, sessionId, date) {
     const before = (this.data.time_timetable_day_notes || []).length;
@@ -374,7 +354,6 @@ const ops = {
    * @param {(number|string)} sessionId - 原课次 id
    * @param {(number|string)} newSessionId - 新课次 id
    * @param {(number|string)} fromWeek - 分界周次，>= 它的调整改挂
-   * @returns {number} 改挂的行数
    */
   repointAdjustments(uid, sessionId, newSessionId, fromWeek) {
     let n = 0;
@@ -414,7 +393,7 @@ const ops = {
    */
   scheduleOf(termId, u) {
     /* eslint-disable prefer-const -- 这几行是从改造前的 db.js 原样搬来的**共享声明**：
-       原代码里它们同时服务 if/else 两个分支，所以必须是 let、且 daily 需要初值（JSON 分支要走 daily++）。
+ * 原代码里它们同时服务 if/else 两个分支，所以必须是 let、且 daily 需要初值（JSON 分支要走 daily++）。
        拆开后各占一个 op，lint 才会建议改 const / 去掉初值 —— 改了就属于「改逻辑」，不在本次搬家范围内。 */
     let cells;
     const cmap = new Map(
@@ -441,13 +420,13 @@ const ops = {
           period_start: s.period_start,
           period_end: s.period_end,
           weeks: s.weeks || '',
-          // 0.2.3：课次备注与课程备注分开带出，与 SQLite 后端逐字一致
+          // 课次备注与课程备注分开带出，与 SQLite 后端逐字一致
           remark: s.remark || '',
           course_remark: c.remark || '',
         };
       });
     /* eslint-enable prefer-const */
-    // ⭐ 0.7.1：按日期的课次备注一起带出（与 SQLite 后端**逐字一致**：同样只给这三列）
+    // 按日期的课次备注一起带出（与 SQLite 后端**逐字一致**：同样只给这三列）
     const dayNotes = (this.data.time_timetable_day_notes || [])
       .filter((r) => uidOf(r) === u && Number(r.term_id) === Number(termId))
       .map((r) => ({ session_id: r.session_id, date: r.date, note: r.note }));
@@ -489,13 +468,13 @@ const ops = {
     const sessions = mine(d.time_timetable_sessions).sort(
       (a, b) => byTerm(a, b) || a.weekday - b.weekday || a.period_start - b.period_start,
     );
-    // ⭐ 0.2.3 单次调课：也要进备份 —— 漏了它的表现是「备份看着成功，恢复后调过的课全变回原样」
+    // 单次调课：也要进备份 —— 漏了它的表现是「备份看着成功，恢复后调过的课全变回原样」
     const adjustments = mine(d.time_timetable_adjustments).sort((a, b) => byTerm(a, b) || a.week_no - b.week_no);
-    // ⭐ 0.6.2 假期调休：同理（漏了是「恢复后调休规则全没了」）
+    // 假期调休：同理（漏了是「恢复后调休规则全没了」）
     const dayRules = mine(d.time_timetable_day_rules).sort(
       (a, b) => byTerm(a, b) || String(a.date || '').localeCompare(String(b.date || '')),
     );
-    // ⭐ 0.7.1 按日期的课次备注：同理（漏了是「备份看着成功，恢复后写的备注全没了」）
+    // 按日期的课次备注：同理（漏了是「备份看着成功，恢复后写的备注全没了」）
     const dayNotes = mine(d.time_timetable_day_notes).sort(
       (a, b) => byTerm(a, b) || String(a.date || '').localeCompare(String(b.date || '')),
     );

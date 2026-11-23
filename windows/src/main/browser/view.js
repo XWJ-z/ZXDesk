@@ -1,13 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：view.js
- * 职责：远程内容视图（`WebContentsView`）
- *
- * 为什么单独一个视图而不是塞进壳的 webContents：`WebContentsView` 永远画在窗口 DOM 之上，
- * 塞一起远程页面就会拿到壳的 preload / IPC。拆开后远程视图**没有 preload、没有 node**。
- *
- * ⚠️ 一期兜底（S1）：`WebContentsView` 创建或加载失败 → 退化为「单 BrowserWindow 直接加载远程页」
- * （没有工具栏，但能进），并写日志说明降级 —— ⛔ 不许白屏。
  */
 
 import { PROBE_SCRIPT, classifyProbeResult } from '../connection/gateway.js';
@@ -16,7 +8,7 @@ import { canOpenExternal, isAllowedNavigation } from './nav.js';
 
 export const TOOLBAR_HEIGHT = 44;
 
-/** 子资源 401 的去重窗口：一屏十几个接口同时 401 只报一次（Android 0.3.1 同口径）。 */
+/** 子资源 401 的去重窗口：一屏十几个接口同时 401 只报一次（Android 同口径）。 */
 const UNAUTHORIZED_DEDUPE_MS = 2000;
 /**
  * `zxdesk_sid` 下发的去重窗口。
@@ -38,9 +30,7 @@ function shortUrl(url) {
 
 /**
  * 响应头里有没有下发指定的 Cookie（`Set-Cookie` 的键名大小写不统一，两种都认）。
- *
  * @param {Record<string, string[]>|undefined} headers - `webRequest` 的 `responseHeaders`
- * @param {string} name - Cookie 名
  */
 function hasSetCookie(headers, name) {
   if (!headers || typeof headers !== 'object') return false;
@@ -59,11 +49,6 @@ export class RemoteView {
    * @param {object} options
    * @param {object} options.electron - `require('electron')` 的结果
    * @param {object} options.win - 壳窗口（BrowserWindow）
-   * @param {string} options.partition
-   * @param {object} options.logger
-   * @param {Function} options.onProbe - `(page, url) => void`
-   * @param {Function} options.onLoadFail - `({url, code, description}) => void`
-   * @param {Function} options.onTitleChange - `(title) => void`
    */
   constructor(options) {
     this.electron = options.electron;
@@ -85,16 +70,12 @@ export class RemoteView {
      */
     this.onLoginRedirect = options.onLoginRedirect || (() => false);
     /**
-     * 子资源 401：页面里的 `fetch` 打接口被服务端拒了（照 Android 0.3.1 第十二条）。
      * 返回 true = 上层已接手（正在静默续会话）；这里只负责上报，不做去重以外的判断。
      */
     this.onUnauthorized = options.onUnauthorized || (() => false);
     /**
      * 网页会话（`zxdesk_sid`）被下发时回调：请上层立刻抓一次并落盘。
      *
-     * 为什么不能等下一次页面加载：ZXDesk 的账号登录是页面里的一个 XHR，成功后前端只切屏、
-     * **不做整页导航** ⇒ 没有 `did-finish-load` ⇒ `onProbe` 不跑 ⇒ 永远抓不到。
-     * 结果就是每次启动都要重新登录一次 ZXDesk 账号。
      */
     this.onWebSession = options.onWebSession || (() => {});
     // 一屏十几个接口会一起 401：2 秒内只报一次（真正的「只跑一次」由 controller 的 recovering 闸门保证）
@@ -103,7 +84,6 @@ export class RemoteView {
     this.webSessionAt = 0;
     this.unauthorizedWatched = false;
     // 快捷键（F5 / Ctrl+R / Alt+←→）：远程视图有焦点时**壳收不到 keydown**，
-    // 所以必须在主进程用 before-input-event 截（否则「按 F5 没反应」）
     this.onShortcut = options.onShortcut || (() => {});
     this.view = null;
     this.degraded = false;
@@ -118,9 +98,6 @@ export class RemoteView {
   /**
    * 远程视图用的 session（Cookie / 权限 / 证书都挂它上面）。
    *
-   * ⚠️ 视图还没建时**必须**返回 `persist:zxdesk` 分区，⛔ 不能回退到壳窗口的默认会话：
-   * 0.1.3 就是回退成壳会话，导致第一次登录的 Cookie 写进了壳、远程视图分区里没有 ⇒ 页面当成未登录，
-   * 用户要登第二次（第二次视图已建，才写对）。这是「每次登录两次」的真因。
    */
   get session() {
     if (this.view) return this.view.webContents.session;
@@ -180,19 +157,6 @@ export class RemoteView {
   /**
    * 盯住**子资源**的 401 与 **`zxdesk_sid` 的下发**（同一个 session 级监听，只能挂一次）。
    *
-   * 为什么需要 401 这条：ZXDesk 网页收到 401 时是先弹一条红色气泡「登录已过期」，**700ms 后**才
-   * `location.replace` 去登录页。在它跳之前，页面里那批 `fetch` 的 401 只发生在网络层，
-   * 不产生任何导航 —— 只靠 `will-navigate` / `will-redirect` 的话，这一段完全没人管，
-   * 用户看到的就是「弹了红气泡，然后什么都没有」，只能自己重新登录。
-   *
-   * 为什么还需要 Set-Cookie 这条（0.2.6）：**ZXDesk 账号的登录是页面里的一个 XHR**，
-   * 登录成功后前端只切屏、**不做整页导航** ⇒ `did-finish-load` 不会再触发 ⇒ `onProbe()` 不跑
-   * ⇒ `captureWebSession()` 永远等不到第二次机会 ⇒ `session.bin` 里没有 `zxdesk_sid`
-   * ⇒ 每次启动都要重新登录一次 ZXDesk 网页账号。这里在响应头出现的**当场**通知上层抓一次。
-   *
-   * ⚠️ 这个监听是 **session 级**的（Electron 一个 session 只有一个 listener），挂一次就够；
-   * 重复挂会覆盖前一个，所以用 `unauthorizedWatched` 挡住。
-   * ⚠️ 回调必须**先** `callback({cancel:false})` 再处理：同步不放行会把请求挂住。
    */
   watchUnauthorized(session) {
     if (this.unauthorizedWatched) return;
@@ -289,18 +253,9 @@ export class RemoteView {
 
   /**
    * 页面完成后判：`invalid token` / 访问码 / 正常（顺序不能反）。
-   *
-   * ⚠️ **`UNKNOWN` 也必须回调**：ZXDesk 应用根 `/app/zxdesk/` 是 SPA，`did-finish-load` 时
-   * `innerText` 还没渲染 ⇒ 探针结论是 `UNKNOWN`。0.1.6 初版「非 UNKNOWN 才回调」，
-   * 于是 `captureWebSession()` 一次都没跑过 ⇒ `session.bin` 里没有 `zxdesk_sid` ⇒ 自动登录从没生效。
-   * 判页面类型是回调方的事，探针只负责如实上报。
+   * **`UNKNOWN` 也必须回调**：ZXDesk 应用根 `/app/zxdesk/` 是 SPA，`did-finish-load` 时
    */
   /**
-   * 只读一次页面类型（访问码屏轮询用）：**不回调、不写日志**。
-   *
-   * 访问码屏不能只在 `did-finish-load` 判一次：过了访问码之后网关回的是纯文本
-   * `invalid token`（`LOGIN_REQUIRED`），那一页不会再导航，只靠加载事件永远等不到第二次判断。
-   * Android 用 700ms 轮询解决同一件事（`AccessCodeScreen` 的 `probePage()`）。
    */
   async probePage() {
     const raw = await this.webContents.executeJavaScript(PROBE_SCRIPT, true);
@@ -374,8 +329,6 @@ export class RemoteView {
   /**
    * 加载并**等结果**：true = 页面真的加载完；false = 失败/超时。
    *
-   * 为什么需要：`loadURL()` 的 Promise 在 `did-fail-load` 时也常常 resolve，
-   * 于是「中继 DNS 挂了」跟「加载成功」在代码里长得一样 —— 0.1.4 的冷启动就死磕中继、没有回落。
    */
   loadChecked(url, timeoutMs = 8000) {
     if (this.degraded) {

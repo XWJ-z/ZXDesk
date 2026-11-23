@@ -1,19 +1,13 @@
 /**
-sheet-parser.js —— 通用表格解析（**门面**：对外入口与拆分前逐字一致）
+ * sheet-parser.js —— 通用表格解析（**门面**：对外入口与拆分前逐字一致）
  *
  * 功能：**零运行时依赖**的通用表格解析入口 —— `parseSheet` 是唯一公开入口
- *      （按内容判形态 → 分派到 OLE2/BIFF8 或 CSV/TSV → 返回统一的网格 IR），
- *      另有 `sniffFormat`（按内容判形态）与 `decodeText`（UTF-8 / GBK 编码探测）。
- *
- * ⚠️ 0.2.0（002 报告 §5.1 ④）按**文件格式**拆成 `sheet/{common,ole2,biff8,csv}.js`，
- *    **门面保留在原路径** —— 外部 `require('./sheet-parser.js')` 一行都不用改，对外入口不变。
- * ⚠️ 本文件只负责**把任意表格变成二维字符串数组**，不含任何「课表」语义
- *    （星期 / 节次 / 周次都在 `timetable/`）。将来加 `.xlsx` 只动这一层。
- * ⚠️ 产出统一为网格 IR：`{ source, sheetName, sheetNames, rows, merges, warnings }`。
+ * （按内容判形态 → 分派到 OLE2/BIFF8 或 CSV/TSV → 返回统一的网格 IR），
+ * 另有 `sniffFormat`（按内容判形态）与 `decodeText`（UTF-8 / GBK 编码探测）。
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.7.9
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/06-课表.md
  */
 'use strict';
@@ -50,20 +44,8 @@ function sniffFormat(buf) {
  * 功能：把文本类字节解码成字符串，返回 `{ text, encoding }`；几种编码都解不出时返回 `null`。
  *
  * 说明：顺序有实测依据：
- *   1. `EF BB BF` → UTF-8，**必须去掉 BOM**，否则第一格列名带上不可见字符、列识别失败；
- *   2. ⭐ 0.7.9：`FF FE` / `FE FF` → UTF-16（LE / BE），同样**必须去掉 BOM**。
- *      ⚠️ 从前没有这一支 ⇒ 带 BOM 的 UTF-16LE 在严格 UTF-8 解码失败后**落到永不抛错的 GBK 兜底**，
- *      于是返回 `ok: true` + 一张乱码表 —— 用户看到的是「模板签名不匹配」，根本联想不到是编码。
- *      没有 BOM 的 UTF-16 **刻意不猜**（无法可靠判定，宁可报 `ENCODING` 让他另存一份）。
- *   3. 严格 UTF-8（`fatal:true`）—— Excel 的「CSV UTF-8」是**无 BOM 的 UTF-8**，只能靠严格解码判定；
- *   4. GBK —— Excel 的「CSV（逗号分隔）」按系统默认编码存，就是 GBK；
- *   5. 都失败 → null（由调用方给「请另存为 CSV UTF-8」）。
- *
- * ⚠️ `new TextDecoder('gbk')` 在 **small-icu** 构建上会抛（飞牛的 nodejs_v22 有可能就是），
- *    所以必须包在 try/catch 里 —— 抛了就当「解不出」，给可操作提示，而不是 500。
- *
- * @param {Buffer} buf - 待解码的原始字节
- * @returns {?{ text: string, encoding: string }} 解码后的文本与所用编码；解不出时为 null
+ * 从前没有这一支 ⇒ 带 BOM 的 UTF-16LE 在严格 UTF-8 解码失败后**落到永不抛错的 GBK 兜底**，
+ * 于是返回 `ok: true` + 一张乱码表 —— 用户看到的是「模板签名不匹配」，根本联想不到是编码。
  */
 function decodeText(buf) {
   if (!buf || !buf.length) return null;
@@ -74,8 +56,8 @@ function decodeText(buf) {
     return { text: buf.subarray(2).toString('utf16le'), encoding: 'utf-16le' };
   }
   if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
-    // ⚠️ Node 只认 `utf16le` ⇒ 大端先两两换字节再解（BOM 已去掉）。
-    //    字节数为奇数 ⇒ 不是合法的 UTF-16，直接当「解不出」（`swap16()` 会抛，不能让它抛出去）。
+    // Node 只认 `utf16le` ⇒ 大端先两两换字节再解（BOM 已去掉）。
+    // 字节数为奇数 ⇒ 不是合法的 UTF-16，直接当「解不出」（`swap16()` 会抛，不能让它抛出去）。
     const body = Buffer.from(buf.subarray(2));
     if (body.length % 2) return null;
     body.swap16();
@@ -102,11 +84,8 @@ function decodeText(buf) {
  * 功能：把上传的字节解析成网格 IR —— 先按内容识别文件形态，再分派到 OLE2/BIFF8 或 CSV/TSV 两条路径。
  *
  * 说明：⚠️ 处理的是用户上传的任意字节，体积 / 行数 / 列数 / 记录数都有上限与校验；
- *    畸形文件一律返回带可操作提示的失败结果，绝不半途静默产出一张错表。
+ * 畸形文件一律返回带可操作提示的失败结果，绝不半途静默产出一张错表。
  *
- * @param {Buffer} buf - 上传文件的原始字节
- * @returns {{ok:true, source:string, sheetName:string, sheetNames:string[], rows:string[][], merges:Array, warnings:string[]}
- *          | {ok:false, code:string, message:string}}
  */
 function parseSheet(buf) {
   if (!Buffer.isBuffer(buf) || buf.length === 0) return fail('EMPTY', '文件是空的，请重新导出后再试。');

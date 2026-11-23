@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：ConnectionPlanner.kt
- * 职责：连接选路，按输入决定网关 / 中继 / 直连，以及失败时的回退顺序
  */
 
 package com.zxdesk.core.connection
@@ -26,10 +24,6 @@ sealed interface PlanResult {
 /**
  * 把「解析后的输入」变成「加载哪条地址、走哪条流程」。
  *
- * 三条硬规则：
- * 1. **8990 永远明文**：它是本应用的局域网救援端口，用户写 `https://ip:8990` 也按 http 走；
- * 2. **明文只允许私网 IP**：公网地址给 `http://` 一律拒；
- * 3. **不写 scheme 时**：勾了 HTTPS 用 https，没勾用 `http://IP:8990`。
  */
 object ConnectionPlanner {
     /** 本应用的直连救援端口（明文）。 */

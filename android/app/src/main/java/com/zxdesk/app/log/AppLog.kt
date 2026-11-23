@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：AppLog.kt
- * 职责：本机日志，内存环形缓冲、文件追加写与滚动，供「日志」页读取
  */
 
 package com.zxdesk.app.log
@@ -31,14 +29,6 @@ data class LogEntry(
 /**
  * 本机日志：内存环形缓冲 ＋ 单文件追加写 ＋ 超限滚动。
  *
- * 为什么要它：Android 端出问题只能靠 `adb logcat`，而这台机器连着 NAS、用户手里未必有电脑。
- * 抽屉里能直接翻日志，等于把「让用户截图描述现象」换成「让他把日志复制给我」。
- *
- * 三条硬约束：
- * - ⛔ **绝不写密码 / Cookie / token**：本类不做脱敏，靠调用方守规矩（只记「做了什么、结果如何」）；
- * - **不阻塞调用方**：落盘在单线程执行器里排队，UI 线程只推一条内存记录；
- * - **有界**：内存最多 [MAX_ENTRIES] 条、磁盘超过 [MAX_BYTES] 就滚成 `zxdesk.1.log`，
- *   ⛔ 不做无上限增长（用户的手机不是日志服务器）。
  */
 object AppLog {
 
@@ -70,10 +60,6 @@ object AppLog {
     /**
      * 启动日志（只调一次，`MainActivity` 创建时）。
      *
-     * 会把磁盘上最后一段日志读回内存 —— 崩溃后重开也能看到上一次会话的尾巴。
-     *
-     * @param context 任意 Context（内部取 applicationContext）
-     * @return 本次是否真的做了初始化（`false` = 已经初始化过，转屏重建时不要再写启动行）
      */
     fun init(context: Context): Boolean {
         if (logFile != null) return false

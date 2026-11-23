@@ -1,15 +1,10 @@
 /**
- * modules/secrets/shared.js —— 加密信息两端共用的**附件纯逻辑**（0.9.8）
+ * modules/secrets/shared.js —— 加密信息两端共用的**附件纯逻辑**
  *
  * 功能：把「取附件列表 / 上传 / 删除 / 读改附件位置」这几件事，连同几个纯展示函数
- *      （大小格式化、图标、能不能内联预览）收成一份 —— 电脑版与手机版**逐字同源**，
- *      差别只在版式。⛔ 别在两端各写一套：上传的请求头、413/507 的话术、内联白名单
- *      三处必须完全一致，写两遍必然分叉（上一批 `vault` 的教训）。
- *
- * ⚠️ **上传必须用 `XMLHttpRequest`**（`fetch` 拿不到上传进度，而 200 MB 的文件没有进度条
- *    等于「点了没反应」）。⚠️ **不用 `FormData`**：服务端收的是原始字节体，不解析 multipart。
- * ⚠️ 文件名与 mime 放**请求头**（`X-File-Name` / `X-File-Mime`，URL 编码）——
- *    ⛔ 不放查询串：URL 会进访问日志，而文件名比正文更敏感。
+ * （大小格式化、图标、能不能内联预览）收成一份 —— 电脑版与手机版**逐字同源**，
+ * 差别只在版式。⛔ 别在两端各写一套：上传的请求头、413/507 的话术、内联白名单
+ * 三处必须完全一致，写两遍必然分叉（上一批 `vault` 的教训）。
  *
  * @author zx
  * @date   2026-11-07
@@ -27,22 +22,8 @@ export const MAX_FILE = 200 * 1024 * 1024;
 export const INLINE_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/webm'];
 
 /**
- * 「附件位置」面板的**全部用户可见文案**（0.9.8 第 7 轮）。
  *
- * 说明：⭐⭐ 老大 2026-11-09：「整块文案重写，先出草稿给他改」，定了之后
- *      **以后改字只改这里**，电脑版与手机版一起生效（⛔ 别再在两端各写一遍 ——
- *      上一版就是两端各拼一段，改一处忘一处，最后两句话不一样）。
- *
- * 三条口径（从这一版起沿用）：
- *  · **一块只说一件事**：当前目录 → 操作 → 用过的目录 → 钥匙文件，四块各管一段；
- *  · **技术解释不上界面**：系统版本 / 权限登记 / 重装这类话只在 `pathConvert.reason` 里给排查用。
- *    ⭐ 第 8 轮补：连「显示不了完整名称」那句也撤了 —— 现在转不出来就**直接显示原始路径**，
- *    没有需要解释的东西（老大 2026-11-09：「如果不能显示转换后的路径就显示原始的」）；
- *  · **必要承诺保留**：附件不进应用备份、钥匙要与附件分开保管 —— 这两句⛔ 不许省。
- *
- * ⚠️ `STATE_PARTIAL_NOTE` 里的 `{n}` 由调用方替换（`PANEL_TEXT.STATE_PARTIAL_NOTE.replace('{n}', n)`）。
- * ⚠️ 与方案的 ID 对应：`P_TITLE` → `PANEL_TEXT.TITLE`，依此类推（少写 30 个零散导出）。
- * @type {Object.<string, string>}
+ * **以后改字只改这里**，电脑版与手机版一起生效（⛔ 别再在两端各写一遍 ——
  */
 export const PANEL_TEXT = {
   TITLE: '附件位置',
@@ -56,10 +37,10 @@ export const PANEL_TEXT = {
   PICK: '选择目录',
   REFRESH: '刷新',
   NOTE_NEW: '新上传的附件会存到这里。',
-  /** ⭐ 2026-11-09（老大）：面板只留当前这一个目录 ——「用过的目录」那张表整块撤掉；
+  /** ⭐ 2026-11-09：面板只留当前这一个目录 ——「用过的目录」那张表整块撤掉；
    *  原来分开说的两句备份提示合成一句（说的是同一件事，分成两句只是噪音）。 */
   BACKUP_NOTE: '备份时请把这个文件夹一起复制 —— 附件不进应用备份；恢复时重新选择到这个路径即可。',
-  /** ⭐⭐ 路径状态三态 —— 老大 2026-11-09 定的名字，⛔ 别改回「缺失 N 条」那种计数说法：
+  /** ⭐⭐ 路径状态三态 —— 定的名字，⛔ 别改回「缺失 N 条」那种计数说法：
    *  它描述的是**这个路径**（账号记录里那一个），不是某一行文件。 */
   STATE_OK: '正常',
   STATE_PARTIAL: '部分缺失',
@@ -72,9 +53,8 @@ export const PANEL_TEXT = {
   ROOT_MUST_EMPTY: '附件位置只能用空文件夹 —— 已经有东西的文件夹会被拒绝；没有空文件夹就点下面的「＋ 新建文件夹」建一个。',
   /** 「重新关联」时选择器的标题：与「换目录」刻意不同 —— 这次是**找**原来的文件夹，不是挑新的 */
   RELINK_TITLE: '找到附件现在所在的目录',
-  // ⭐⭐ 0.9.8 第 8 轮（方案 §2.7）：选择器的三种状态与两条兜底路。
-  //    ⚠️ 原来那句 `PATH_FALLBACK`（「显示不了完整名称」）**整句撤掉** ——
-  //    本轮改成「转不出来就直接显示原始路径」，没有需要解释的东西了。
+  // 原来那句 `PATH_FALLBACK`（「显示不了完整名称」）**整句撤掉** ——
+  // 本轮改成「转不出来就直接显示原始路径」，没有需要解释的东西了。
   PICK_BUSY: '正在打开选择器…',
   PICK_SLOW: '正在连接飞牛…',
   PICK_NO_HOST: '飞牛没有应答。下面两条路都能选目录：「用系统授权页选择」或「手动填写路径」。',
@@ -86,10 +66,8 @@ export const PANEL_TEXT = {
   KEY: '钥匙文件',
   KEY_NOTE: '换机器、重装、账号删了，要靠它和主密码才能打开原来的附件。请与附件分开保管，别放进网盘同步目录。',
   KEY_PW: '主密码',
-  // ⭐ 2026-11-09：面板里只剩「导出」—— 导入挪到阅读器（只在要读别人发来的加密文件时才用）
   KEY_PW_PH: '导出需要',
   KEY_EXPORT: '导出钥匙文件',
-  // ⭐⭐ 2026-11-09（老大）：加密信息工具条上多一颗「阅读器」，选一个授权目录里的加密文件就地查看
   READER: '阅读器',
   READER_PICK_TITLE: '选择要查看的加密文件',
   // ---- 阅读器的**自有选择器**（列授权目录，不借飞牛宿主选择器）----
@@ -102,10 +80,9 @@ export const PANEL_TEXT = {
   BROWSE_FAIL: '读不了这个目录',
   READER_FAIL: '这里打不开选择器 —— 已进阅读器页，粘贴文件路径也能打开。',
   NO_ROOT: '还没有选附件目录。',
-  // ⭐⭐ 0.9.8 第 11 轮（老大）：授权改成「在设置里做一次」—— 那句「到飞牛 设置 → 应用 → 访问权限」
-  //    是**授权在哪做**的旧说法，现在唯一的入口是 设置 → 账号设置 → 个人授权目录。
-  //    ⚠️ 两句仍要分开：有网关身份时人能自己走过去；没有时（局域网直连 / 独立客户端）
-  //    设置里那颗按钮也弹不出选择器，得回飞牛桌面或 App。
+  // 是**授权在哪做**的旧说法，现在唯一的入口是 设置 → 账号设置 → 个人授权目录。
+  // 两句仍要分开：有网关身份时人能自己走过去；没有时（局域网直连 / 独立客户端）
+  // 设置里那颗按钮也弹不出选择器，得回飞牛桌面或 App。
   NO_ROOT_GW: '先到 设置 → 账号设置 → 个人授权目录 里授权一个目录，回来点「选择目录」。',
   NO_ROOT_APP: '这里读不到飞牛身份，授权要在飞牛桌面或 App 里做：设置 → 账号设置 → 个人授权目录。',
   CLOSE: '关闭',
@@ -151,9 +128,8 @@ export function isInline(mime) {
  * 功能：一个附件的访问地址（同源，带会话 Cookie）。
  *
  * 说明：⚠️ 用 `BASE` 而不是裸 `/api/...`：网关前缀部署时裸路径会 404（`core/api.js` 的
- *      `BASE` 就是为这件事存在的）。
+ * `BASE` 就是为这件事存在的）。
  * @param {number} fid - 附件 id
- * @returns {string} 可直接放进 `<img src>` / `<a href>` 的地址
  */
 export const fileUrl = (fid) => `${BASE}/api/secrets/files/${Number(fid)}`;
 
@@ -187,21 +163,14 @@ export function rootSettings() {
 /**
  * 功能：改附件位置（服务端校验六条，非法就 400 ＋ 中文原因）。
  *
- * 说明：⭐⭐ 0.9.8：换目录时界面会问两件事 —— 要不要把已有附件**迁移**过去、
- *      迁移后要不要**删掉旧目录里的文件**。两个答案走同一个请求，服务端按顺序执行
- *      「搬文件 → 改每行的 root → 落库设置」；`deleteOld` 只在 `migrate` 成立时有效
- *      （服务端也会再拦一次，⛔ 不靠这边记得连传两个 true）。
- *      ⚠️ `timeout` 单独放宽到 10 分钟：跨盘复制几百 MB 的附件，默认那点超时会中途断掉，
- *      而断在半路的结果是「一部分搬了、一部分没搬」—— 服务端能自洽（每行各自指向真实位置），
- *      但用户看到的是「失败」。给足时间比让他重试一遍安全。
- * @param {string} root - 绝对路径
- * @param {{migrate?: boolean, deleteOld?: boolean}} [opts] - 两个问题的答案
- * @returns {Promise.<Object>} `{ok, root, current, move}`（`move` 为 null 表示没迁移）
+ * 迁移后要不要**删掉旧目录里的文件**。两个答案走同一个请求，服务端按顺序执行
+ * 「搬文件 → 改每行的 root → 落库设置」；`deleteOld` 只在 `migrate` 成立时有效
+ * （服务端也会再拦一次，⛔ 不靠这边记得连传两个 true）。
  */
 export function setRoot(root, opts) {
   const o = opts && typeof opts === 'object' ? opts : {};
   const migrate = o.migrate === true;
-  // ⭐ 0.9.8：改走授权接口 —— 服务端会**自己再查一遍**授权列表（⛔ 不信前端传的路径）
+  // 改走授权接口 —— 服务端会**自己再查一遍**授权列表（⛔ 不信前端传的路径）
   return api(
     'PUT',
     '/api/secrets/root',
@@ -214,19 +183,16 @@ export function setRoot(root, opts) {
  * 功能：把选择器给回来的路径**补一次显式授权**（宿主的 `authorizeUserFile`）。
  *
  * 说明：⭐ 正常的 `pickUserFile` 已经包含「选择即授权」，这里只做**补救**：
- *      `setRoot()` 被判「不在授权范围内」时再走一次 —— 少数环境下选择器只完成了「选」，
- *      授权那一步没落地（老版本宿主 / 中途刷新过页面）。
- *      ⚠️ 失败**不抛**：它只是补救，真正的判据是随后的那次 `setRoot()`。
- * @param {string} path - 目录绝对路径
- * @returns {Promise.<boolean>} 平台说授权成功了为 true
+ * `setRoot()` 被判「不在授权范围内」时再走一次 —— 少数环境下选择器只完成了「选」，
+ * 授权那一步没落地（老版本宿主 / 中途刷新过页面）。
  */
 async function authorizeDir(path) {
   const sdk = await loadTrimSdk();
   if (!sdk) return false;
   const abs = String(path);
-  // ⚠️ 两个入口都试：选择器的「共享给我的」那一栏选出来的目录属于**共享域**
-  //    （`authorizeSharedFile`），与「我的文件」域（`authorizeUserFile`）是两条通道。
-  //    用户不知道自己选的是哪一域，我们也不该让他知道 —— 两条都补一次就行。
+  // 两个入口都试：选择器的「共享给我的」那一栏选出来的目录属于**共享域**
+  // （`authorizeSharedFile`），与「我的文件」域（`authorizeUserFile`）是两条通道。
+  // 用户不知道自己选的是哪一域，我们也不该让他知道 —— 两条都补一次就行。
   for (const fn of ['authorizeUserFile', 'authorizeSharedFile']) {
     if (typeof sdk[fn] !== 'function') continue;
     try {
@@ -242,16 +208,9 @@ async function authorizeDir(path) {
 /**
  * 功能：**选定并落地**附件目录 —— 选了就算授权，失败自动补一次授权再试。
  *
- * 说明：⭐⭐ 这是 2026-11-08 定下的「自动授权」：用户不该在选完目录之后再看到
- *      「这个目录还没有授权」。所以这里比 `setRoot()` 多两层：
- *      ① 服务端先**作废 30 秒授权缓存**再判（刚授权完立刻提交，缓存必然是旧的）；
- *      ② 仍被判「不在授权范围内」⇒ 补一次显式授权，再提交一次。
- *      ⚠️ 只重试**一次**：重试循环会把「确实没权限」变成一个永远转不完的按钮。
- *      ⚠️ 400（不在授权范围 / 路径非法）与 409（读不到授权信息）才重试；
- *      其它错误（401 掉线、507 磁盘）原样抛给调用方。
- * @param {string} path - 选择器给回来的目录
- * @returns {Promise.<Object>} 与 `setRoot()` 同形（`{root, root_uid, root_username}`）
- * @throws {Error} 两次都不行时抛第二次的错误（带 `status`）
+ * 「这个目录还没有授权」。所以这里比 `setRoot()` 多两层：
+ * ① 服务端先**作废 30 秒授权缓存**再判（刚授权完立刻提交，缓存必然是旧的）；
+ * ② 仍被判「不在授权范围内」⇒ 补一次显式授权，再提交一次。
  */
 export async function setRootAuthorized(path, opts) {
   const abs = String(path || '');
@@ -260,7 +219,7 @@ export async function setRootAuthorized(path, opts) {
   } catch (e) {
     const st = Number(e && e.status);
     if (st !== 400 && st !== 409) throw e;
-    // ⭐ 补一次显式授权（成功与否都不影响下一次判定 —— 判据永远是服务端的授权列表）
+    // 补一次显式授权（成功与否都不影响下一次判定 —— 判据永远是服务端的授权列表）
     await authorizeDir(abs);
     return setRoot(abs, opts);
   }
@@ -283,22 +242,15 @@ export function revokeRoot() {
 }
 
 // ==========================================================================================
-// 钥匙文件（.zxkey）—— 0.9.8 第 6 轮
 //
-// ⚠️⭐ 这一组**必须用裸 `fetch`**（不能走 `core/api.js` 的 `api()`）：
-//    导出接口回的是**文件**（`Content-Disposition: attachment`），而 `api()` 会 `r.json()`
-//    把它当 JSON 解析 ⇒ 拿到 `null` 并抛「HTTP 200」。同理，钥匙材料与列表也不该进
-//    `api()` 的离线快照（那会写进 `localStorage`）。
-// ==========================================================================================
+// 这一组**必须用裸 `fetch`**（不能走 `core/api.js` 的 `api()`）：
 
 /**
  * 功能：导出钥匙文件并**直接触发浏览器下载**。
  *
  * 说明：⭐⭐ 这是「全套数据的总钥匙」：拿到它 ＋ 主密码 = 那个账号的全部加密数据。
- *      所以界面上必须写清「与附件分开保管」（文案在面板里），而且**不自动往附件目录写一份**。
+ * 所以界面上必须写清「与附件分开保管」（文案在面板里），而且**不自动往附件目录写一份**。
  * @param {string} password - 主密码（服务端会再验一次；防「有人趁你开着页面导走钥匙」）
- * @returns {Promise.<string>} 下载到的文件名
- * @throws {Error} 主密码不对（403）、未解锁（403）、未初始化（400）
  */
 export async function exportVaultKey(password) {
   const r = await fetch(`${BASE}/api/vault/key/export`, {
@@ -331,7 +283,6 @@ export async function exportVaultKey(password) {
   document.body.appendChild(a);
   a.click();
   a.remove();
-  // ⚠️ 立即 revoke 会让部分浏览器（含旧版 Safari）下载到 0 字节 ⇒ 给 5 秒
   setTimeout(() => URL.revokeObjectURL(url), 5000);
   return name;
 }
@@ -339,7 +290,7 @@ export async function exportVaultKey(password) {
 /**
  * 功能：列出本机已导入的钥匙（**只有编号与来源，没有密钥材料**）。
  * @returns {Promise.<{keys: Array.<{kid: string, owner_uid: ?number, owner_name: string, created_at: ?string, last_used_at: ?string}>}>}
- *      钥匙列表
+ * 钥匙列表
  */
 export function listVaultKeys() {
   return api('GET', '/api/vault/keys');
@@ -356,8 +307,8 @@ export function removeVaultKey(kid) {
 }
 
 /**
- * ⭐ 选择器已搬到 `core/host-pick.js`（跨模块共用：数据位置、恢复引导页都要它）。
- *    本文件只保留「加密信息」自己的那层包装，⛔ 不再自己实现握手。
+ * 选择器已搬到 `core/host-pick.js`（跨模块共用）。
+ * 本文件只保留「加密信息」自己的那层包装，⛔ 不再自己实现握手。
  */
 import { loadTrimSdk, primePicker, probePicker, pickAuthorizedDir, buildAuthPageUrl } from '../../core/host-pick.js';
 
@@ -367,10 +318,8 @@ export { primePicker, probePicker, pickAuthorizedDir, buildAuthPageUrl };
  * 功能：列一层授权目录（子目录 ＋ `.zxdesk` 文件）—— 阅读器的**自有选择器**。
  *
  * 说明：⭐⭐ 阅读器不再借飞牛宿主选择器：那条通道只在宿主内嵌页里存在，
- *      安卓 / Windows / 局域网直连一律打不开。改成「服务端列目录」之后四个端走同一条路，
- *      判据仍是服务端的授权范围（⛔ 不因为「是界面自己列出来的」就放行）。
+ * 安卓 / Windows / 局域网直连一律打不开。改成「服务端列目录」之后四个端走同一条路，
  * @param {string} [dir] - 要列的目录（绝对路径；空串 ＝ 从用户登记的根开始）
- * @returns {Promise.<{root: string, dir: string, parent: ?string, atRoot: boolean, dirs: Array.<Object>, files: Array.<Object>, truncated: boolean}>} 目录内容
  */
 export function listSecretDir(dir) {
   const q = dir ? `?dir=${encodeURIComponent(String(dir))}` : '';
@@ -439,8 +388,8 @@ export function secretBrowseHtml(data) {
 export function bindSecretBrowse(rootEl, handlers) {
   if (!rootEl) return;
   const h = handlers || {};
-  // ⚠️ 用 `onclick` 而不是 `addEventListener`：弹层容器是**复用的同一个节点**，
-  //    每次重新打开都 addEventListener 会叠出一串监听（点一次文件跳转好几次）。
+  // 用 `onclick` 而不是 `addEventListener`：弹层容器是**复用的同一个节点**，
+  // 每次重新打开都 addEventListener 会叠出一串监听（点一次文件跳转好几次）。
   rootEl.onclick = (ev) => {
     const t = ev.target;
     if (!t || !t.closest) return;
@@ -459,11 +408,9 @@ export function bindSecretBrowse(rootEl, handlers) {
 /**
  * 功能：选择器失败后那两条兜底路的 HTML（**两端同一份**）。
  *
- * 说明：⭐ 0.9.8 第 8 轮（方案 §2.6 P3 / P4）：宿主不应答时不能只留一句「打不开」——
- *      ① 「用系统授权页选择」：不经过宿主握手，开新窗口选目录，回来通过 `message` 落库；
- *      ② 「手动填写路径」：最后一条，永远能用（服务端照旧校验「已授权 + 存在 + 可读写」）。
- *      ⚠️ 默认隐藏，只在第一次失败后由 `show()` 放出来（⛔ 不做成主入口）。
- * @returns {string} 容器 HTML（含提示语与两个按钮）
+ * ① 「用系统授权页选择」：不经过宿主握手，开新窗口选目录，回来通过 `message` 落库；
+ * ② 「手动填写路径」：最后一条，永远能用（服务端照旧校验「已授权 + 存在 + 可读写」）。
+ * 默认隐藏，只在第一次失败后由 `show()` 放出来（⛔ 不做成主入口）。
  */
 export function pickFallbackHtml() {
   return `<div id="sec-pick-fallback" class="sec-pick-fb" hidden>
@@ -573,7 +520,7 @@ export function takeAuthResult(data) {
  * 功能：读「授权页把结果写进 `localStorage`」的那一份（新标签页里 `opener` 丢了的情况）。
  *
  * 说明：⭐ 回调页在没有 `opener` 时会写 `zxdesk:auth-result`（带时间戳）——
- *      原页面打开面板时读一次，**读完即删**，只认 10 分钟内的。
+ * 原页面打开面板时读一次，**读完即删**，只认 10 分钟内的。
  * @returns {?string} 认下的目录路径；没有 / 过期就 `null`
  */
 export function takeStoredAuthResult() {
@@ -600,13 +547,8 @@ export function takeStoredAuthResult() {
  * 功能：换目录时要问的那两件事（**两端同一份** HTML 与文案）。
  *
  * 说明：⭐⭐ 以前换目录只改去向，老附件留在老目录 —— 备份要备两个目录，用户也说不清
- *      「东西到底存在哪」。所以换之前必须问清：① 已有附件要不要搬过去；② 搬完旧目录要不要清空。
- *      ⚠️ 两个问题是**有依赖**的：不迁移就没有「旧目录里的文件已经搬走」这回事，②里那项「删除」
- *      等于把附件删掉（库里那几行会指向一个空目录）⇒ ② 的删除项只在 ① 选「迁移」时才可选。
- *      这个联动由 `bindRootChoice()` 挂上，⛔ 不要只在服务端拦（用户点得下去、点了才报错，最糟）。
- * @param {string} path - 新目录（绝对路径）
- * @param {number} count - 当前根下现有附件条数（0 时只显示一句「只影响以后上传的」）
- * @returns {string} 弹层正文 HTML
+ * 「东西到底存在哪」。所以换之前必须问清：① 已有附件要不要搬过去；② 搬完旧目录要不要清空。
+ * 两个问题是**有依赖**的：不迁移就没有「旧目录里的文件已经搬走」这回事，②里那项「删除」
  */
 export function changeRootFormHtml(path, count) {
   const n = Number(count) || 0;
@@ -684,19 +626,16 @@ export function readRootChoice(rootEl) {
  * 功能：把迁移结果拼成**一句人话**（两端共用）。
  *
  * 说明：⭐ 四个数都要说，少一个用户就会得出错误结论：
- *      `moved` 搬了几个、`missing` 旧目录里本来就没有、`failed` 出错几个、
- *      `purged` 旧目录清没清空。⚠️ `failed > 0` 时**必须**说明「旧目录还在、附件还能打开」——
- *      否则用户会以为数据没了。
- * @param {?Object} move - 接口回的 `move`
- * @returns {string} 一句话；没迁移时为空串
+ * `moved` 搬了几个、`missing` 旧目录里本来就没有、`failed` 出错几个、
+ * `purged` 旧目录清没清空。⚠️ `failed > 0` 时**必须**说明「旧目录还在、附件还能打开」——
  */
 export function moveSummary(move) {
   if (!move || typeof move !== 'object') return '';
   const parts = [`迁移 ${Number(move.moved) || 0} 个`];
   if (Number(move.missing) > 0) parts.push(`旧目录里找不到 ${Number(move.missing)} 个`);
   if (Number(move.failed) > 0) parts.push(`失败 ${Number(move.failed)} 个（仍在旧目录，照旧能打开）`);
-  // ⚠️ 「位置上的文件不是这一条」（头里的账号/编号对不上）要单独说：它既不是缺失也不是失败，
-  //    而用户最想知道的是「那个文件我没动」—— 动了就等于把别人的东西搬进自己目录。
+  // 「位置上的文件不是这一条」（头里的账号/编号对不上）要单独说：它既不是缺失也不是失败，
+  // 而用户最想知道的是「那个文件我没动」—— 动了就等于把别人的东西搬进自己目录。
   if (Number(move.foreign) > 0) parts.push(`${Number(move.foreign)} 个位置上的文件不是这条（没动它）`);
   parts.push(move.purged ? '旧目录已清空' : '旧目录保留');
   return parts.join('，');
@@ -706,15 +645,13 @@ export function moveSummary(move) {
  * 功能：**重新关联** —— 把挪走的附件目录认回来。
  *
  * 说明：⚠️ 服务端只 `stat` ＋ 读 24 字节头，**不解密**，所以这个动作在密码库解锁后立刻可用、
- *      几百 MB 的目录也是秒级（它不读文件内容）。
+ * 几百 MB 的目录也是秒级（它不读文件内容）。
  * @param {string} root - 要拿去找的目录（绝对路径；服务端会再过一遍六条校验）
- * @returns {Promise.<Object>} `{ok, found, relinked, damaged, missing, actualRoot}`
  */
 export function relink(root, opts) {
   const body = { root: String(root) };
-  // ⭐ 2026-11-09：`adopt` ＝「认回来之后，把账号记录里的目录也改成这个」——
-  //    「重新关联」现在是**手动定位**（文件夹被挪走了），不带着改设置的话
-  //    面板会永远停在「路径缺失」（行的 root 已是新目录、设置还指着那个不在了的旧路径）。
+  // 「重新关联」现在是**手动定位**（文件夹被挪走了），不带着改设置的话
+  // 面板会永远停在「路径缺失」（行的 root 已是新目录、设置还指着那个不在了的旧路径）。
   if (opts && opts.adopt === true) body.adopt = true;
   return api('POST', '/api/secrets/roots/relink', body);
 }
@@ -723,13 +660,8 @@ export function relink(root, opts) {
  * 功能：把重新关联的计数拼成**一句人话**（两端共用，⛔ 别再各写一套）。
  *
  * 说明：⭐ 四种情况都要说出来，少说一句用户就会以为「已经全好了」或者「全丢了」：
- *      · `found / relinked` —— 主句「找到 N 个附件，已关联 M 个」；
- *      · `damaged` —— 文件在但对不上（截断 / 被别的文件顶了名）；
- *      · `missing` —— 连文件都没找到；
- *      · `actualRoot` —— 用户选到了上一层，实际用的是那个子目录。
- *      ⚠️ 计数全 0 时返回**空串**：那种情况（文件都还在原位置）说什么都是噪音。
- * @param {Object} r - 接口返回（或 `setRoot()` 的返回）
- * @returns {string} 一句中文；没什么可说时为空串
+ * `found / relinked` —— 主句「找到 N 个附件，已关联 M 个」；
+ * `damaged` —— 文件在但对不上（截断 / 被别的文件顶了名）；
  */
 export function relinkSummary(r) {
   const src = r && typeof r === 'object' ? r : {};
@@ -749,11 +681,8 @@ export function relinkSummary(r) {
  * 功能：阅读器页面的地址（`public/open/index.html`，路径走 `?path=`）。
  *
  * 说明：⭐ 加密信息工具条上那颗「阅读器」选完文件就跳到这里；没有文件时也跳（`path` 为空），
- *      页面自己会给一个「粘贴路径」的入口 —— 选择器坏掉时那是唯一能走的路。
- *      ⚠️ 必须带 `BASE`：局域网直连时它是空串，走飞牛网关时是 `/app/zxdesk` 那一段，
- *      ⛔ 硬写 `/open/index.html` 会在网关下 404。
- * @param {string} [path] - 文件的绝对路径（空串 = 不带路径，进页面再选）
- * @returns {string} 可直接 `location.href` 的相对地址
+ * 页面自己会给一个「粘贴路径」的入口 —— 选择器坏掉时那是唯一能走的路。
+ * 必须带 `BASE`：局域网直连时它是空串，走飞牛网关时是 `/app/zxdesk` 那一段，
  */
 export function readerUrl(path, back) {
   const p = String(path == null ? '' : path).trim();
@@ -767,11 +696,6 @@ export function readerUrl(path, back) {
 /**
  * 阅读器关掉之后回哪里 —— 两端各自的应用入口 ＋ `goto` 参数。
  *
- * ⭐ 为什么必须显式带：阅读器是**整页跳转**（不是弹层），关掉时页面栈里那条记录
- *   只是应用首页的 URL（没有视图状态）⇒ 以前的 `location.replace(BASE + '/')`
- *   会把人送回**工作台首页**，而不是他刚才在看的那一屏。
- * ⚠️ 值是「相对 BASE 的路径」，阅读器直接 `BASE + back` 即可，不需要知道自己是哪一端。
- * @type {{desktop: string, mobile: string}}
  */
 export const READER_BACK = {
   desktop: '/?goto=lab:secrets',
@@ -782,11 +706,8 @@ export const READER_BACK = {
  * 功能：一条内容都没有时那句空状态（**一行**，两端逐字一致）。
  *
  * 说明：⚠️ 以前那句写成「存一条只有你自己能看的文字 ＋ 证件号、密钥这类长文本」，
- *      把能力说成**长文本专用** —— 而这一版已经能放图片 / 视频 / 文件，
- *      照着那句话看，用户只会想到证件号。⇒ 改成把能放的东西一次说完。
- *      ⚠️ 图标（🔑）由两端各自画在 `.es-ico` / `.empty-ico` 里，⛔ 不并进这句
- *      （并进来就会与图块重复成两个钥匙）。
- * @type {string}
+ * 把能力说成**长文本专用** —— 而这一版已经能放图片 / 视频 / 文件，
+ * 照着那句话看，用户只会想到证件号。⇒ 改成把能放的东西一次说完。
  */
 export const EMPTY_TIP = '在这里提供：长文本、图片、视频、文件等的加密，与密码库共用一个主密码';
 
@@ -794,10 +715,8 @@ export const EMPTY_TIP = '在这里提供：长文本、图片、视频、文件
  * 功能：把列表接口回的**附件计数**拼成一行概要（两端**同一份**文案，⛔ 不各写一套）。
  *
  * 说明：⭐ 只拼**非零**项（⛔ 不写「音频 0」）；一项都没有就返回空串 —— 界面据此**整段不显示**
- *      （不是显示「0 个」）。解不开的元信息单独算「读不出 N」，⛔ 不静默丢掉：
- *      那条附件确实在，「名字读不出来」和「没有附件」是两件事。
- * @param {?{image?: number, video?: number, audio?: number, file?: number, broken?: number}} files - 计数
- * @returns {string} 形如 `图片 2 · 视频 1`；没有附件时为空串
+ * （不是显示「0 个」）。解不开的元信息单独算「读不出 N」，⛔ 不静默丢掉：
+ * 那条附件确实在，「名字读不出来」和「没有附件」是两件事。
  */
 export function attSummary(files) {
   const f = files && typeof files === 'object' ? files : null;
@@ -820,15 +739,8 @@ export function attSummary(files) {
  * 功能：上传一个文件（**原始字节体 ＋ 进度回调**）。
  *
  * 说明：⭐⭐ 三个刻意的选择：
- *   ① 用 `XMLHttpRequest` —— `fetch` 没有上传进度，200 MB 的文件没有进度条等于「点了没反应」；
- *   ② `xhr.send(file)` 直接发 `File` 对象 —— ⛔ 不读进 JS 再 base64（那是多一次全量拷贝 + 33% 膨胀），
- *      ⛔ 也不用 `FormData`（服务端不解析 multipart）；
- *   ③ 失败时把**服务端那句话原样抛出来**（413 / 507 / 403 的话术都是给人看的），
- *      前端不自己编「上传失败」四个字盖掉它。
- * @param {number} itemId - 挂到哪条加密信息下
- * @param {File} file - 浏览器给的文件对象
- * @param {Function} [onProgress] - `(ratio: number) => void`，0~1
- * @returns {Promise.<Object>} `{id, name, mime, size, created_at}`
+ * ① 用 `XMLHttpRequest` —— `fetch` 没有上传进度，200 MB 的文件没有进度条等于「点了没反应」；
+ * ② `xhr.send(file)` 直接发 `File` 对象 —— ⛔ 不读进 JS 再 base64（那是多一次全量拷贝 + 33% 膨胀），
  */
 export function uploadFile(itemId, file, onProgress) {
   return new Promise((resolve, reject) => {

@@ -1,28 +1,13 @@
 'use strict';
 
 /**
- * modules/teamwork/lib/chat-image.js —— 聊天里**发图片**的落盘口径（⭐ 0.8.54）
- *
+ * modules/teamwork/lib/chat-image.js —— 聊天里**发图片**的落盘口径（）
  * 功能：给「聊天发图片」这一件事提供**唯一一份**落盘口径 ——
- *      · `IMAGE_KIND`：图片消息的 `kind`（与前端 `public/modules/teamwork/shared.js` 的同名常量对账）；
- *      · `IMAGE_EXT_WHITELIST` / `IMAGE_MIME`：只收位图，MIME 由**服务端**按扩展名派生；
- *      · `IMAGE_MAX_BYTES`：单张上限；
- *      · `imageDirOf()` / `imageFileName()` / `parseImageFileName()`：**内容寻址**的目录、文件名与反解；
- *      · `imageExtOf()` / `sha256OfFile()`：上传侧取扩展名、算摘要。
- *      三处要用同一条口径：上传路由、读取路由、前端渲染（前端另写一份常量，由测试对账）。
- *
- * ⭐⭐ 为什么**不建表**：一条图片消息就是它自己的登记簿 —— 消息行有 `id` / `conversation_id`，
- *   文件按 `<会话 id>/<sha256>.<扩展名>` 落盘，权限判据是「你是不是这个会话的成员」
- *   （`teamworkConversationOr404()`，与读消息同一个口）。⛔ 再加一张表只是给同一件事存第二份事实。
- *   ⚠️ 代价（如实写在缺陷索引里）：**聊天图片不进备份 / 导出**（对话本身也不进个人导入）；
- *   删消息的「只清我这一侧」不会删文件（对话是跨账号数据，文件同理）。
- *
- * ⚠️ 文件名**内容寻址**（sha256）：同一张图发两次只占一份磁盘；也省掉「先入库拿 id 再改名」
- *   那套两步逻辑 —— 字节先落到临时名，算完 sha 再 `rename` 成最终名（失败方向安全）。
- *
+ * `IMAGE_KIND`：图片消息的 `kind`（与前端 `public/modules/teamwork/shared.js` 的同名常量对账）；
+ * `IMAGE_EXT_WHITELIST` / `IMAGE_MIME`：只收位图，MIME 由**服务端**按扩展名派生；
  * @author zx
  * @date   2026-10-25
- * @since 0.8.54
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/17-对话.md（§12.14）、13-决策记录.md（决策 139）
  */
 
@@ -35,7 +20,6 @@ const IMAGE_KIND = 'image';
 
 /**
  * 允许的图片扩展名 —— ⛔ 只收位图，⛔ **不收** `svg`（可内联执行脚本 ⇒ XSS 面；
- * 与协作附件的 `FILE_EXT_WHITELIST` 同一条理由）。
  * @type {Array.<string>}
  */
 const IMAGE_EXT_WHITELIST = ['png', 'jpg', 'jpeg', 'webp', 'gif'];

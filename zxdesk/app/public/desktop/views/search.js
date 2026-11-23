@@ -2,14 +2,13 @@
  * desktop/views/search.js —— 全局搜索
  *
  * 功能：侧栏搜索框与搜索结果区。
- *      `onSearchInput()` 做 220ms 防抖后触发搜索；`doSearch()` 请求 `GET /api/search` 并渲染结果，
- *      查询串为空时回到搜索前的视图；`renderSearch()` 把命中项按来源（日常 / 各项目）分组画出清单，
- *      并把每条任务放进 `state.itemMap` 以便就地操作；`clearSearch()` 清空输入框与结果。
- *      另导出模块级的防抖定时器 `searchTimer`。
+ * `onSearchInput()` 做 220ms 防抖后触发搜索；`doSearch()` 请求 `GET /api/search` 并渲染结果，
+ * 查询串为空时回到搜索前的视图；`renderSearch()` 把命中项按来源（日常 / 各项目）分组画出清单，
+ * 并把每条任务放进 `state.itemMap` 以便就地操作；`clearSearch()` 清空输入框与结果。
  *
  * @author zx
  * @date   2026-09-11
- * @since 0.5.3
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/05-任务板.md
  */
 
@@ -37,7 +36,7 @@ export function onSearchInput() {
 
 /**
  * 功能：执行全局搜索 —— 记住搜索前的视图，请求 `GET /api/search` 后渲染结果分组；
- *      查询串为空时视为「退出搜索」，清掉结果并回到搜索前的视图；请求失败时在结果区显示错误。
+ * 查询串为空时视为「退出搜索」，清掉结果并回到搜索前的视图；请求失败时在结果区显示错误。
  * @param {string} q - 搜索关键词（调用方已 trim；空串表示清空搜索）
  * @returns {Promise.<void>}
  */
@@ -67,8 +66,8 @@ export async function doSearch(q) {
 
 /**
  * 功能：渲染搜索结果 —— 把命中项按来源（日常 / 各项目）分组画成清单，更新顶部的条数摘要，
- *      并把每条命中的任务按 `itemKey` 放进 `state.itemMap`，使跨项目的条目也能就地操作；
- *      没有任何命中时改画空态。
+ * 并把每条命中的任务按 `itemKey` 放进 `state.itemMap`，使跨项目的条目也能就地操作；
+ * 没有任何命中时改画空态。
  * @param {{ q: string, total: number, truncated: boolean, hits: Array.<Object> }} r - 搜索接口返回的结果对象
  * @returns {void}
  */

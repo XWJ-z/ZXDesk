@@ -1,20 +1,13 @@
 /**
  * sw.js —— Service Worker 入口（消息路由 / 会话感知 / 收藏动作 / 版本检测）
- *
  * 功能：`conn:*` / `bm:*` / `vault:*` / `update:*` 消息都在这里路由；收藏动作三个入口
  *      共用 `quickSave()`；SW 启动时恢复右键菜单与工具栏打开方式。
  *
  * 分层纪律：
  * 1. 全插件**只有这里经 `lib/*` 发网络请求**；UI 一律 `chrome.runtime.sendMessage`；
- * 2. 只有 `lib/store.js` 碰 `chrome.storage`；
- * 3. 消息名与文案只在 `lib/messages.js`。
- *
- * ⚠️ 右键菜单只在连接成功后创建（`page` / `link`，有 `linkUrl` 时收链接）。
- * ⚠️ MV3 的 SW 会被回收：内存态（`loginWait`）丢了不会自己恢复，
- *    靠 UI 下一次 `conn:status` 真握手纠正，⛔ 不能指望它常驻。
- *
+ * 2. 只有 `lib/store.js` 碰 `chrome.storage`…
  * @author zx
- * @since 0.1.0
+ * @since
  * 相关：Project/Edge/README.md
  */
 import { MSG, BM_TEXT } from './lib/messages.js';
@@ -27,7 +20,6 @@ import { getConn, getEula, clearCache, getCache, setCache, getLastConn, setLastC
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // `bm:highlight` 是 UI↔UI 的消息（popup 让侧边栏滚到那一条）—— SW **不接**。
-  // ⚠️ 一旦这里回了 `unknown_message`，发送方会当成「已送达并收到回执」，那 4 次重试永远只跑第一发。
   if (msg && msg.type === 'bm:highlight') return false;
   route(msg)
     .then(sendResponse)
@@ -93,7 +85,7 @@ async function afterStart(st) {
 
 /**
  * 功能：`conn:detect` —— 只读 activeTab 那一瞬的地址。
- * ⛔ 不扫全部标签、不碰历史；`activeTab` 已授予这一瞬的 url 可见性。
+ * 不扫全部标签、不碰历史；`activeTab` 已授予这一瞬的 url 可见性。
  */
 async function detect() {
   try {
@@ -262,7 +254,6 @@ chrome.cookies.onChanged.addListener(({ cookie }) => {
 
 /**
  * 功能：拿到新 host 权限 ⇒ 有 pendingConnect 就自动续跑连接——**与任何页面是否还活着无关**
- * （popup 被授权弹窗关掉也不影响，这正是根因 B 的根治点）。结果写 `edge:last-conn` 供 UI 收割。
  */
 chrome.permissions.onAdded.addListener(async () => {
   try {
@@ -271,7 +262,7 @@ chrome.permissions.onAdded.addListener(async () => {
     const st = await afterStart(await connect(pc));
     await setLastConn({ status: st });
   } catch (e) {
-    // ⭐ 不静默：失败也要落一条结果，UI 收割时才有落点（真机「一直连接中」就死在这里无声无息）
+    // 不静默：失败也要落一条结果，UI 收割时才有落点
     console.warn('[zxdesk] 授权后续跑失败', e);
     try {
       await setLastConn({ status: { state: 'failed', error: 'network', detail: String((e && e.message) || e) } });
@@ -285,8 +276,8 @@ chrome.permissions.onAdded.addListener(async () => {
 
 /**
  * 功能：按 `pref:openMode` 切换点图标的动作（弹窗 ↔ 侧边栏）。
- * ⚠️ `setPopup({popup:''})` 后点图标触发 `action.onClicked`，此时已被 sidePanel 拦截，二者不冲突；
- * ⚠️ Edge 版本不支持 `sidePanel.setPanelBehavior` 时降级为只开弹窗（不报错）。
+ * `setPopup({popup:''})` 后点图标触发 `action.onClicked`，此时已被 sidePanel 拦截，二者不冲突；
+ * Edge 版本不支持 `sidePanel.setPanelBehavior` 时降级为只开弹窗（不报错）。
  */
 async function applyOpenMode(mode) {
   try {
@@ -346,8 +337,8 @@ async function updateInfo() {
 
 /**
  * 功能：设置里手动点「检查更新」—— 真查一次（与启动时同一条路径），把这一次的结果直接交回界面。
- * ⚠️ 不能用 `readUpdate()` 的结论：它会把「用户关掉过的那一版」藏起来，而手动检查必须如实回答；
- *    查不到要把 **断在哪一步**（`code`）一并带回，界面才能说人话，而不是一句「连不上」。
+ * 不能用 `readUpdate()` 的结论：它会把「用户关掉过的那一版」藏起来，而手动检查必须如实回答；
+ * 查不到要把 **断在哪一步**（`code`）一并带回，界面才能说人话，而不是一句「连不上」。
  * @returns {Promise<{ok:boolean, fresh:boolean, code?:string, newer?:boolean, update?:object, api?:string}>}
  */
 async function updateCheckNow() {

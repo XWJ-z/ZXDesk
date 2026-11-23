@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：ReleasesScreen.kt
- * 职责：更新日志页，按版本倒序列出本端每个版本做了什么
  */
 
 package com.zxdesk.app.ui
@@ -38,14 +36,6 @@ import androidx.compose.ui.unit.sp
 /**
  * 更新日志（整屏，从抽屉「更多」进）。
  *
- * 数据在 [ANDROID_RELEASES]，⛔ 页面里不写死条目 —— 每次发版只改那一份数据。
- *
- * ⭐ 0.2.18：服务端下发的**最新版说明**也显示在这一页顶部（原先是抽屉升级卡下面的
- * 「查看更新说明」小字，老大要求移出）。[latestNotes] 为空时这块不出现。
- *
- * @param version 本机装着的版本；与某条对上时挂「当前版本」，让人一眼知道自己停在哪
- * @param latest 服务端最新版号（`updateState.latest`），可与 [latestNotes] 一起为空
- * @param latestNotes 服务端清单里的 `notes`（本版更新说明原文）
  */
 @Composable
 internal fun ReleasesScreen(

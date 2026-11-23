@@ -1,45 +1,24 @@
 'use strict';
 /**
  * modules/teamwork/mobile-teamwork-page.js —— 协作项目**登记器 ＋ 添加弹层**（手机版）
- *
  * 功能：`teamwork-page` 槽的手机版实现 —— ⭐ 本轮（2h · 排版）起它**不再画整块界面**：
- *      ① **登记器**：把「已加进协作的项目」登记进对话列表页的「协作项目」组 ——
- *         宿主每次重画列表页都派一次 `zx:teamwork-collab-entries`（留白事件），本片段往里
- *         `push({ key, name, sub })`（`key` ＝ 项目 id 字符串）；行与分组头由**宿主统一画**
- *         （这样它才与「内置助手」「好友」两组同款）。
- *      ② **添加共享项目弹层**：宿主点「＋ 添加共享项目」那一行时派 `zx:teamwork-collab-add`，
- *         本片段监听并打开弹层 —— 挑一个还没进协作的项目加进来，或就地新建一个直接加进来。
- *
- * ⭐ 谁负责哪一半（与 `mobile-teamwork-board.js` 分工，别搞混）：
- *      · **本文件**只画「项目列表这条线」的登记与添加弹层，⛔ 不画看板；
- *      · 「点开一个共享项目 ⇒ 进第二屏显示看板」由**宿主**接手（`renderCollabBoard()` 挂 `teamwork-board` 槽）。
- *
- * ⚠️ 本片段的容器是**列表页里的一个零高度盒子**（宿主动态建、`height:0`）：它本身不占位置，
- *    弹层是 `position: fixed`（不受列表页裁剪）。⛔ 别在这里画任何常驻可见内容 ——
- *    那会把列表页往下推，正是本轮要修掉的「上下太丑」。
- *
- * ⚠️ **判权全在服务端**：非成员 / 项目没共享 / 项目不存在，服务端一律 404 —— 前端按「看不到」处理，
- *    ⛔ 不去猜原因。⛔ 界面只做可见性，真动到越界的动作时**照常把服务端那句话弹出来**。
- *
- * ⚠️ 本文件**自包含**（只 import core 与宿主 ui），不依赖任务板别的片段。
- *
+ * ① **登记器**：把「已加进协作的项目」登记进对话列表页的「协作项目」组 ——
  * @author zx
  * @date   2026-10-04
- * @since 0.8.54
+ * @since 0.9.7
  * 相关：docs/公共/开发方案/32-团队协作.md §丁 · §丙-2、core/slots.js、modules/teamwork/mobile-teamwork-board.js
  */
 
 import { api } from '../../core/api.js';
 import { esc } from '../../core/dom.js';
-// ⭐ 0.8.54（「弹窗弹不出来，统一改为走宿主的 opensheet」）：这个弹层也不自绘了 ——
-//    一律交给宿主底部弹层（openSheet / closeSheet / isSheetOpen 三个口）。
+// ：这个弹层也不自绘了 ——
+// 一律交给宿主底部弹层（openSheet / closeSheet / isSheetOpen 三个口）。
 import { closeSheet, isSheetOpen, openSheet, toast } from '../../mobile/ui.js';
 
 /** 颜色写得像十六进制才认（用户内容不进 style，防拼出奇怪样式）。 @type {RegExp} */
 const HEX_COLOR = /^#[0-9a-fA-F]{3,8}$/;
 
 /**
- * 功能：取一个安全的颜色值 —— 像十六进制就用它，否则回落品牌色（写进 style 用）。
  * @param {*} c - 服务端给的颜色
  * @returns {string} 可直接写进 style 的颜色
  */
@@ -69,10 +48,8 @@ function msgOf(e) {
 // ================================================================ 本片段的私有状态
 
 /**
- * ⭐ 已加进协作的项目（登记用的数据源）。**刻意住在模块级**：宿主每次重画列表页都会派
+ * 已加进协作的项目（登记用的数据源）。**刻意住在模块级**：宿主每次重画列表页都会派
  * `zx:teamwork-collab-entries`，那时必须**同步**把条目填进去 —— 现去 `await` 一个接口来不及。
- * 只在进页面时、以及增删之后重取一次。
- * @type {Array.<Object>}
  */
 let projects = [];
 
@@ -125,7 +102,6 @@ async function loadAddables() {
  * 功能：请宿主重画列表页（`zx:teamwork-collab-changed` 留白事件）。
  *
  * 说明：⭐ 本片段只认「条目数据」，行与分组头由宿主画；数据一变就得让宿主那一拍重跑，
- *      否则列表页会停在旧条目上（宿主不认识本模块，也没法自己知道数据变了）。
  * @returns {void}
  */
 function requestHostRepaint() {
@@ -148,9 +124,8 @@ async function addProject(pid) {
     st.newProjOpen = false;
     st.addables = null;
     toast('已加入协作');
-    // ⚠️⭐ 2026-10-20（本版质检）：成功后必须自己把弹层重画掉（与电脑端同一条）。
-    //    原先只置 `st.addProjOpen = false` 就去 `loadProjects()` —— 而那条路只请宿主重画**列表页**，
-    //    宿主从不碰本片段的根节点⇒ 弹层不关、内容还是加之前那份清单。
+    // 原先只置 `st.addProjOpen = false` 就去 `loadProjects()` —— 而那条路只请宿主重画**列表页**，
+    // 宿主从不碰本片段的根节点⇒ 弹层不关、内容还是加之前那份清单。
     paint();
     await loadProjects();
   } catch (e) {
@@ -165,9 +140,8 @@ async function addProject(pid) {
  * 功能：在添加弹层里就地新建一个项目，建完**直接**加进协作。
  *
  * 说明：⚠️ 复用任务板既有的 `POST /api/projects`（⛔ 不在协作里另写一份建项目逻辑）；
- *      拿不到新项目编号时按失败处理，不静默。
+ * 拿不到新项目编号时按失败处理，不静默。
  *
- * @returns {Promise.<void>}
  */
 async function createAndShare() {
   if (st.busy) return;
@@ -187,7 +161,6 @@ async function createAndShare() {
     st.newProjOpen = false;
     st.addables = null;
     toast('已加入协作');
-    // ⚠️⭐ 2026-10-20：与 `addProject()` 同一条 —— 成功后**自己**把弹层重画掉（宿主不认识它）。
     paint();
     await loadProjects();
   } catch (e) {
@@ -222,10 +195,8 @@ function newProjHtml() {
  * 功能：添加共享项目弹层 —— 列出「还没进协作的项目」逐个可点，末尾固定一行「新建一个项目」。
  *
  * 说明：⚠️ 复用**手机版既有的**弹层写法（`.collab-mask` / `.collab-modal` 一族，见 `mobile/app.css`），
- *      弹层节点挂在**本片段根节点内** —— 交互由本片段挂在 root 上的委托处理，
- *      ⛔ 不借用宿主的动作表。
- *
- * @returns {string} 弹层 HTML
+ * 弹层节点挂在**本片段根节点内** —— 交互由本片段挂在 root 上的委托处理，
+ * 不借用宿主的动作表。
  */
 function addModalHtml() {
   let list;
@@ -252,8 +223,8 @@ function addModalHtml() {
       )
       .join('');
   }
-  // ⭐⭐ 0.8.54：只回**标题 + 正文**，外壳交给宿主 `openSheet()`（见 `syncSheet()`）。
-  //    ⚠️ 关闭键不再自己画 —— 宿主底部弹层自带右上角那颗 ✕（与其它几十个弹层同一颗）。
+  // 只回**标题 + 正文**，外壳交给宿主 `openSheet()`（见 `syncSheet()`）。
+  // 关闭键不再自己画 —— 宿主底部弹层自带右上角那颗 ✕（与其它几十个弹层同一颗）。
   return {
     title: '添加共享项目',
     body: '<div class="collab-addlist">' + list + '</div>' + newProjHtml(),
@@ -266,8 +237,8 @@ function addModalHtml() {
  */
 function paint() {
   if (!root) return;
-  // ⭐ 0.8.54：本片段没有「自己的一屏」，唯一的可见内容就是那个弹层 ⇒ 现在它住 `#sheet` 里，
-  //    根节点固定为空；弹层的开/关/换内容全交给 `syncSheet()`。
+  // 本片段没有「自己的一屏」，唯一的可见内容就是那个弹层 ⇒ 现在它住 `#sheet` 里，
+  // 根节点固定为空；弹层的开/关/换内容全交给 `syncSheet()`。
   root.innerHTML = '';
   syncSheet();
 }
@@ -279,13 +250,8 @@ function paint() {
 let sheetKey = '';
 
 /**
- * 功能：把「该开的弹层」同步到**宿主底部弹层**（⭐ 0.8.54）。
  *
  * 说明：与 `mobile-teamwork-board.js` 的同名函数同一套规矩（该开就 `openSheet()`、
- *      同一个弹层只换 `#sheet-body` 的内容、不该开就 `closeSheet()`）。
- *      ⚠️ 两份之所以没合并：两个片段各有各的 `st`，而「当前该开哪个弹层」是**各自的状态**
- *      —— 合并只会得到一个要传 st 的空壳（跨片段共享状态才是真坏事）。
- * @returns {void}
  */
 function syncSheet() {
   const want = st.addProjOpen ? addModalHtml() : null;
@@ -304,9 +270,7 @@ function syncSheet() {
 }
 
 /**
- * 功能：听「宿主弹层关了」—— 把「添加共享项目」的开关一起清掉（⭐ 0.8.54）。
  * 说明：⚠️ 用户点 ✕ / 遮罩 / 按返回都是宿主层关的，本片段收不到动作；不听这一声，
- *      下一次 `paint()` 会把弹层又弹回来。
  * @returns {void}
  */
 function bindSheetClosed() {
@@ -342,12 +306,8 @@ function openAddModal() {
 }
 
 /**
- * 功能：给**宿主弹层里的动作**接线（⭐ 0.8.54）—— 文档级委托，只挂一次。
  *
  * 说明：⚠️ 只认 `#sheet-body` 里、且动作名以 `collab-add-` / `collab-new-` 开头的节点 ——
- *      宿主的 ✕ 与别的模块的动作一律放行（宿主自己那条 document 委托按动作表查，
- *      查不到 `collab-*` 就什么都不做，不会重复执行）。
- * @returns {void}
  */
 function bindSheetActs() {
   if (bindSheetActs._bound) return;
@@ -376,13 +336,8 @@ function onClick(e) {
 }
 
 /**
- * 功能：动作分派本体（⭐ 0.8.54 从 `onClick()` 里拆出来，供两条入口共用）。
  *
  * 说明：⚠️ 为什么要拆：弹层住宿主的 `#sheet`（片段根节点之外），root 上的委托收不到它里面的点击；
- *      文档级入口见 `render()` 里那条 `bindSheetActs()`。
- * @param {string} act - 动作名
- * @param {HTMLElement} t - 触发节点
- * @returns {void}
  */
 function runAct(act, t) {
   if (act === 'collab-add-close') {
@@ -402,9 +357,8 @@ function runAct(act, t) {
  * 功能：收到宿主的「重画列表页 ⇒ 登记条目」留白事件 —— 从 `projects` 缓存同步填条目。
  *
  * 说明：⭐ 事件是**同步派发**的，所以必须就地填；`key` ＝ 项目 id 字符串，`name` / `sub`
- *      是宿主画行时用的两个字（名字 + 「我发起的 / 我参与的」）。
+ * 是宿主画行时用的两个字（名字 + 「我发起的 / 我参与的」）。
  * @param {Event} e - `zx:teamwork-collab-entries`
- * @returns {void}
  */
 function onEntries(e) {
   const detail = e && e.detail;
@@ -429,8 +383,7 @@ function onAdd() {
 /**
  * 功能：收到别的片段（看板）的「项目数据变了」事件 ⇒ 重取列表并刷新列表页。
  *
- * 说明：转让 / 移出协作会让角色的副标题、甚至这一条是否还在协作里发生变化 ——
- *      看板那边改完就派一次 `zx:teamwork-collab-refresh`，这里重取后请宿主重画。
+ * 看板那边改完就派一次 `zx:teamwork-collab-refresh`，这里重取后请宿主重画。
  * @returns {void}
  */
 function onRefresh() {
@@ -453,14 +406,12 @@ function bind() {
  * 功能：渲染手机版协作页的插槽片段（`core/slots.js` 的挂载入口）。
  *
  * 说明：⚠️ 本片段**没有常驻可见界面** —— 返回一个空根节点（宿主把容器做成零高度）；
- *      它存在的意义是「把 `document` 级监听挂上」，条目登记与添加弹层都靠那几条监听。
+ * 它存在的意义是「把 `document` 级监听挂上」，条目登记与添加弹层都靠那几条监听。
  *
- * @param {Object} _ctx - 挂载上下文（`{ end, modules, uiOf, me }`；本片段用不到）
- * @returns {HTMLElement} 空根节点
  */
 export function render(_ctx) {
   bind();
-  // ⚠️ 每次挂载都从「弹层全关」开始：上一轮离开这一屏时若还开着弹层，重进不该又自己弹出来
+  // 每次挂载都从「弹层全关」开始：上一轮离开这一屏时若还开着弹层，重进不该又自己弹出来
   closeAll();
   st.addables = null;
   st.addableErr = '';
@@ -468,8 +419,8 @@ export function render(_ctx) {
   root = document.createElement('div');
   root.className = 'collab-registrar';
   root.addEventListener('click', onClick);
-  // ⭐ 0.8.54：弹层在宿主 `#sheet` 里（root 之外）⇒ 它的点击走文档级委托；
-  //    用户关掉弹层时由 `zx:sheet-closed` 通知（见 `bindSheetClosed()`）。
+  // 弹层在宿主 `#sheet` 里（root 之外）⇒ 它的点击走文档级委托；
+  // 用户关掉弹层时由 `zx:sheet-closed` 通知（见 `bindSheetClosed()`）。
   bindSheetActs();
   bindSheetClosed();
   paint();

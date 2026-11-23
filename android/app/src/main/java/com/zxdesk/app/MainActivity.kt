@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：MainActivity.kt
- * 职责：应用入口，edge-to-edge 系统栏、启动日志、挂载根界面
  */
 
 package com.zxdesk.app
@@ -40,12 +38,9 @@ class MainActivity : ComponentActivity() {
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.isNavigationBarContrastEnforced = false
-            // 左边缘 40dp 排除系统返回手势（0.2.18 随可见把手一起加宽：把手连同热区都是 40dp）：
             // 手势导航机型上屏幕左边缘那条是系统返回的地盘，不排除的话触摸被系统先吃掉，
             // WebViewScreen 的抽屉热区永远收不到事件。⚠️ 部分 ROM（MIUI/HyperOS）不认这个声明，
             // 所以抽屉另有常驻可见的页签把手兜底（WebViewScreen.EdgeHandle），不能只押这一条。
-            // 高度要等布局完成才知道 ⇒ doOnLayout 里设；旋转会重建 Activity，不用自己监听尺寸变化。
-            // 排除区上限单边约 200dp，40dp 远低于上限；3 键导航机型无返回手势，这段不生效也不报错。
             window.decorView.doOnLayout { decor ->
                 val w = (40 * decor.resources.displayMetrics.density).toInt()
                 decor.systemGestureExclusionRects = listOf(Rect(0, 0, w, decor.height))

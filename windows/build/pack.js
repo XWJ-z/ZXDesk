@@ -20,11 +20,8 @@ import process from 'node:process';
 const IGNORE_CODES = new Set(['EPERM', 'EACCES', 'ENOTSUP']);
 
 /**
- * Electron 官方安装包的 sha256（来源：v45.0.0 的官方 SHASUMS256.txt，2026-10-25 核对过一次）。
- *
+ * Electron 官方安装包的 sha256（来源：的官方 SHASUMS256.txt，2026-10-25 核对过一次）。
  * 为什么要写死：`@electron/get` 在缓存命中 zip 之后，**还会去下一个 SHASUMS256.txt 来校验**；
- * 本机到 github releases 时通时不通（今天下午直接 socket hang up / 卡 4 分钟）。
- * 把校验和直接交给它 ⇒ 校验照做（不是关校验），但**完全不联网**。
  */
 const ELECTRON_CHECKSUMS = {
   '45.0.0': { 'electron-v45.0.0-win32-x64.zip': 'ae53887a23bb640369c93dbd38c408a2af5c0deb86f2fa76c6c244cb444b7f47' },
@@ -164,7 +161,7 @@ async function main() {
 
   for (const appPath of appPaths) console.log(`PACKAGED ${appPath}`);
 
-  // ⚠️ 图标**必须**在打包之后写（0.1.6 丢图标的真因：图标写完了又跑了一次 pack，exe 被覆盖回默认图标）。
+  // ⚠️ 图标**必须**在打包之后写（丢图标的真因：图标写完了又跑了一次 pack，exe 被覆盖回默认图标）。
   // 这里把它接进同一条链，脚本自己会「写完再解析核对」，失败直接非零退出 —— 不许静默出无图标的包。
   const exe = path.join(appPaths[0], 'ZXDesk.exe');
   const iconScript = path.join(root, 'build', 'apply-icon.js');

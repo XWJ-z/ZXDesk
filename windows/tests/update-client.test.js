@@ -1,7 +1,5 @@
 /**
  * 版本接口客户端：URL 规则、响应校验、失败分类。
- *
- * 用的都是假 fetch —— 这层不该联网；真实 HTTP 由下载测试那套本地服务覆盖。
  */
 
 import assert from 'node:assert/strict';

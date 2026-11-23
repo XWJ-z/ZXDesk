@@ -1,88 +1,10 @@
 /**
- * desktop/views/settings.js —— 设置（0.2.1；⭐ 0.4.1 改成左右结构）
+ * desktop/views/settings.js —— 设置
  *
  * 功能：电脑版「设置」页的全部渲染与交互 ——
- *      `openSettings()` / `renderSettings()` 画出设置页：**左边一列菜单、右边一块内容**，
- *      一次只画当前那一栏（`state.setPane`）；分栏清单在 `PANES`，内容在 `paneHtml()` 里分派；
- *      `selectPane()` 切换分栏（切到「数据来源」时按需拉一次管理员数据）；
- *      ⭐ 0.5.0 起「模块功能」栏的开关**由清单生成**：`toggleModule()` 一个函数管全部模块
- *      （提交走 `applyPref()`，五项显示开关仍是每账号各管各的偏好）；
- *      `exportBackup()` / `importBackup()` 是**个人数据**的导出与导入（导入可选合并或替换）；
- *      `exportOrgBackup()` / `restoreOrgBackup()` 是**整体备份**的导出与恢复（仅管理员，危险操作）；
- *      ⭐ 0.8.1 起 `migrateLedger()` / `doMigrate()` 是**记账数据迁移**（`POST /api/migrate-ledger`，
- *      仅管理员、危险操作，手打「迁移」二字才放行）。
- *
- * 为什么要有这一页（指令）：侧栏底部原本并排着「导出备份 / 账号 / 成员」三个按钮，
- * 它们**都不是主功能**，却和「课表 / 刷新」挤在同一条最显眼的位置；而且「成员」只对管理员出现，
- * 让那条按钮排的宽度还会随身份变化。现在这一排只剩「课表 / 刷新 / 设置」，
- * 设置里的各项各自归位 —— 加新设置项也不必再动侧栏。
- *
- * ⭐ **0.4.1 为什么改成左右结构**（指令：「设置界面分为左右结构」＋
- *    「在功能菜单中，应该对各个模块功能做具体介绍和开关」）：设置项已从 3 项长到 11 行，
- *    纵向堆叠一屏铺不下 —— 想找「导入我的数据」得先滚过五个开关。而纵向堆叠的容量是**有限**的
- *    （区块数与区块内行数同时增长），唯一解法是把「同一时刻只需要看一块」的内容收进分栏。
- *    分栏清单：**数据来源 / 模块功能 / 账号设置 / 备份与恢复 / 整体备份（仅管理员）**；
- *    判据是「这件事是干什么的」—— ⚠️ 个人备份与整体备份**刻意分成两栏**（一个只碰自己、一个动整库，
- *    并排时太容易点错，而点错的代价是全库被替换）。完整论证见 `docs/公共/开发方案/08`。
- *
- * ⭐ **模块功能介绍卡**（本次的核心）：每块写清「它是做什么的」，开关就在同一块里。
- *    ⚠️ 开关走的仍是 `PUT /api/auth/prefs` 的**单一键**，模块卡只是**排版**。
- *    ⭐ **0.5.0 起「有哪几个模块」不再写在这个文件里**：介绍卡按
- *      「服务端 `GET /api/bootstrap` 的 `modules` 清单 × 本端接线表 `desktop/modules.js`」生成
- *      （见 `modulesPaneHtml()`）—— 删掉 `app/modules/<模块>/` 那个目录，这一栏就少一块卡。
- *
- * ⭐ **「数据来源」把「数据位置」从成员管理搬了过来**：那一面板与成员列表本无关系，
- *    只是当年「管理员专属信息」都堆在成员页；现在它就是「我的数据存在哪」这一问的答案。
- *    ⚠️ 浏览器**打不开** NAS 上的文件夹，所以这里能做的仍然只是「把路径摆清楚 + 一键复制」。
- *
- * ⭐ **0.4.1（第四轮）的文案返工**（指令，逐条对着截图改）：
- *    ① 这一栏改叫「**数据来源**」（原「数据源」），并**去掉标题旁那句「这里只是看看，没有能改的东西」**
- *      与底部整段「复制路径后…」—— 只读这件事由「没有按钮可点」自己说明，不需要两段话解释；
- *    ② 三行字段改名换词：「删除时自动清理」→「**自动清理**」、「升级前的自动备份」→「**升级自动备份**」、
- *      读写方式的取值从口语化的「正常（一边读一边写，互不等）」改成「**正常（读写并行，互不阻塞）**」；
- *    ③ 模块介绍卡固定两段：**功能行**（`desc`，写它能做什么）+ **数据行**（五个模块逐字相同，
- *      只写一份在 `moduleCardHtml()` 里）；真正的**安全提醒**（主密码忘了打不开 / 聊天内容在 NAS 上能看到原文）
- *      另占一行 `tip` —— ⚠️ 课表与收藏夹**没有**这一行（它们没有安全提醒要写），所以 `tip` 允许是空串。
- *      卡片只讲「这个功能是什么、别人看不到你的东西」；⚠️ **「关掉会怎样」卡片不写、界面别处也不写**
- *      （见 ④）—— 别再加一个字段把它塞回来。
- *    ⚠️ ②③ 两端**必须逐字一致**：改文案时 `desktop/modules.js` 的 `MODULES_UI`
- *      与 `mobile/modules.js` 的 `MODULES_UI` 要一起改，`ttt/test/module-ui.test.js` 会逐字比对。
- *    ④ ⭐ **开关点了就生效：不弹确认框，也不弹轻提示**（「为什么还是有弹窗和提示语」）——
- *      每个开关一律直连 `applyPref()`，卡片里那行「已开启 / 已关闭」就是唯一反馈。
- *      ⚠️ 这条把前两轮的东西整套撤掉了：常驻的说明行 → 点下去弹的确认框 → 连确认框和「已关掉 X」的
- *      轻提示都不留。**「关闭不会删除数据：…」这句话随之从界面上消失**（在两个候选中明确选了
- *      「弹窗和提示语都去掉」，并知道那句话会没有）—— 关掉本来就没有任何删除动作。
- *      ⚠️ 危险操作不受影响：恢复整体备份 / 删成员仍然照旧弹框、照旧一左一右两颗按钮（`confirmAction()`）。
- *
- * ⭐ **「账号设置」就地显示**（0.4.0 及更早是独立的 `#account-view` + 「返回设置」按钮）：
- *    左右结构下「点左侧菜单却整页跳走」是自相矛盾的。账号资料由 `account.js` 的 `accountPaneHtml()`
- *    给出一段 HTML，改用户名 / 改密码 / 退出登录的弹窗与请求函数**原样复用**。
- *
- * ⭐ **「成员管理」0.4.1（第二轮）起也独立成一栏，紧跟在「账号设置」后面**（指令）：
- *    它原来是「账号设置」栏里一行「›」入口，点了会**整页跳到** `#admin-view` ——
- *    与上一条自相矛盾（别的栏都是就地换屏，只有它跳走），而且跳走之后左菜单还停在高亮「账号设置」。
- *    现在它就是一栏：右栏里直接是成员列表、自主注册开关与「添加成员」；
- *    ⚠️ 内容是 `views/admin.js` 画的（成员管理只有一个家），本文件只提供容器 `#admin-body`
- *    与 `adminPaneInto()` 这一次「按需取数 + 重画」的编排；`#admin-view` / `VIEW_NODES.admin` 已整段撤掉。
- *    ⚠️ 手机版**早已是**「账号设置」块后面紧跟「成员管理」块，所以这一条只动电脑版。
- *
- * ⭐ **页面上不摆任何提示**（指令）：每一行的说明只留一句**副标题**（`<small>`）——
- *    常驻的提示段落占着版面却没人读。⚠️ 0.4.1 第四轮起，模块开关连「点下去那一刻」的确认框也不弹了
- *    （见上面 ④），所以**页面本身上**除了行内 `small` 与页头「设置」旁那一行版本状态，没有任何 `.set-note` ——
- *    残留的那些 `.set-note` 全在弹窗的 HTML 里（个人导入 / 整体恢复那两处，它们才是真会动数据的操作）。
- *
- * ⚠️ 两端（电脑版 / 手机版）各自实现自己的设置页，共用的是**同一套 REST 契约**
- *    （`PUT /api/auth/prefs`、`GET /api/admin/storage`、`GET /api/export`、`POST /api/import`、
- *    `GET /api/backup`、`POST /api/restore`）。⚠️ **手机版 0.4.1 一行未改**：手机屏宽放不下左右两栏，
- *    它维持 0.3.3 起的可折叠分组。
- *
- * ⭐ **0.8.1：记账数据迁移的入口挂在这一栏**（而不是新开一栏）—— 两条理由：
- *    ① 它和「恢复整体备份」是**同一类**操作（都动整库级别的文件、都不可逆、都要手打两个字确认），
- *       并排放在同一栏里，用户认的就是那一栏的「⚠️ 危险操作都在这儿」；
- *       ⚠️ 而且左菜单的分栏清单被 `ttt/test/settings-ui.test.js` **逐项钉住**（六个、顺序固定）——
- *       为一个入口改左菜单，等于把那条护栏连同的顺序一起改掉，不值当。
- *    ② 迁移**只跟这一个功能有关**（1 期记账数据换库），它不是「备份」也不是「恢复」，
- *       所以它是一行**独立**的按钮，⛔ 不并进上面两颗，也不自己另开一套确认框。
+ * `openSettings()` / `renderSettings()` 画出设置页：**左边一列菜单、右边一块内容**，
+ * 一次只画当前那一栏（`state.setPane`）；分栏清单在 `PANES`，内容在 `paneHtml()` 里分派；
+ * `selectPane()` 切换分栏（切到「数据来源」时按需拉一次管理员数据）…
  *
  * @author zx
  * @date   2026-09-12
@@ -94,9 +16,7 @@ import { api, BASE } from '../../core/api.js';
 import { isBackupZip, orgCounts, readZipManifest } from '../../core/backup.js';
 import { $, copyText, esc, formatBytes } from '../../core/dom.js';
 // ⭐ 数据位置那一块：文案与排版与手机端**同源**（`core/data-location.js`），⛔ 别各写一份
-import { LOC_TEXT, archivesLineHtml, dbRowsHtml, mountBusy, redNoteHtml, walNoteHtml } from '../../core/data-location.js';
-// ⭐ 已授权目录的**逐层浏览**（数据位置与加密信息附件位置共用一处渲染与判据）
-import { DIR_TEXT, mountDirTree } from '../../core/dir-tree.js';
+import { LOC_TEXT, dbRowsHtml, walNoteHtml } from '../../core/data-location.js';
 import { moduleItems } from '../../core/modules.js';
 // ⭐ 0.8.51：切栏（三级）那一枚淡入 —— 判据只住 `core/transition.js`。
 import { swapIn } from '../../core/transition.js';
@@ -125,32 +45,11 @@ export function openSettings() {
 }
 
 /**
- * 功能：分栏清单 —— ⭐ **左菜单就是按这个数组的顺序画的**，加一栏 = 这里加一条 + `paneHtml()` 加一个分支。
- *
- * 说明：⭐⭐ 0.8.30（「全局设置改造」）：左菜单从「按功能分栏」改成
- *      **「前面四栏是应用级的、后面每一栏就是一个模块」** ——
- *      ① 原来的「模块功能」那一栏**整块撤掉**，各模块的开关**下放到它自己那一栏**里
- *         （开关就长在接线表的 `card` 上，`moduleCardHtml()` 一个字没改，只是换成按组取）；
- *      ② 原来散着的「成员管理 / 整体备份 / 日志」并成**一项**「管理员设置」，
- *         「快捷键」并进「账号设置」，「数据来源」改名「版本数据」；
- *      ③ 模块贡献的那些设置分栏（日历视图 / 生活记账 / 密码库 / AI 设置）**不再各占一栏**，
- *         而是并进它所属模块那一栏里（见每条的 `mods`）。
- *      ⚠️ `mods` 是**这一端的界面配置**（这一栏要装哪些模块的开关与设置分栏），
- *      ⛔ 不是判据 —— 卡本身仍然由 `moduleItems()` 从服务端清单算出来（`moduleCards()`）。
- *      ⚠️ `navId` 是侧栏那颗入口按钮的 id：「进入模块」**直接点它**（⛔ 不新造第二条切屏通路）。
- *      留空 = 这个模块没有自己的屏（AI 就是），那一栏也就不画「进入」那颗键。
+ * 功能：设置页左菜单的分栏清单 —— 左菜单按这个数组的顺序画。
  * @type {Array.<{id: string, label: string, adminOnly?: boolean, desc?: string, mods?: Array.<string>, navId?: string}>}>}
  */
 const PANES = [
-  // ⭐ 设置页质检：前四栏也补上 `desc` —— 右栏统一是「标题 ＋ 一句话 ＋ 内容」，
-  //    否则只有模块栏有那句说明，应用级四栏一进去就是一张裸卡片，节奏对不上。
-  // ⭐⭐ 第四轮（「提示语是面向用户的，只简单介绍这个设置是干啥的即可
-  //    （一句话介绍），不是讲解这个功能」）：
-  //    ① `desc` **一律压成一句话**，只说「这一栏管什么」，⛔ 不再写「只有管理员看得到」
-  //      「只碰这个账号、不影响别人」这类**解释**（那是讲解，不是介绍）；
-  //    ② `ico` 全部删掉 —— 另一条要求是「移除除了设置的齿轮图标外的所有图标」。
-  //      ⚠️ `ico` 曾经同时喂给左菜单 `.sni-ico` 与栏头 `.sph-ico`，删掉它两处一起消失；
-  //      ⛔ 别只删一处（那会留下一个空 span 占着 20px 的位）。
+  // 每栏都带 `desc`：右栏统一是「标题 ＋ 一句话 ＋ 内容」，只说这一栏管什么。
   {
     id: 'version',
     label: '版本数据',
@@ -514,17 +413,7 @@ const groupCards = (p) => moduleCards().filter((it) => (p.mods || []).includes(i
 const groupPanes = (p) => slotPanes().filter((d) => (p.mods || []).includes(d.name));
 
 /**
- * 功能：渲染**一个模块那一栏** —— 「进入」＋ 它的开关卡 ＋ 它的设置分栏。
- *
- * 说明：⭐⭐ 0.8.30（「全局设置改造」）—— 从前这套东西**散在三处**：开关在
- *      「模块功能」那一栏、设置分栏各占一栏、模块本体在侧栏，想用一个功能要跨三处跳。
- *      现在**同一个模块的东西都在同一栏里**：看它是什么 → 开 / 关 → 改它的设置 → 进去用。
- *      ⚠️ 开关卡仍然走 `moduleCardHtml()`：它画「名称 ＋ 一句话 ＋ 开关」，只是从前把**全部**
- *      带卡的模块堆进一栏，现在按组取。
- *      ⚠️⭐ 「进入」那颗键**点的是侧栏那颗入口按钮**（`PANES` 的 `navId`）—— ⛔ 不新造第二条
- *      切屏通路：侧栏那一下本来就要走「取数 ＋ 切屏 ＋ 记住从哪来」一整套，自己再写一遍必然漂移。
- *      没写 `navId` 的（AI 没有自己的屏）⇒ 这一栏不画那颗键。
- *
+ * 功能：渲染一个模块那一栏 —— 「进入」＋ 它的开关卡 ＋ 它的设置分栏。
  * @param {Object} p - `PANES` 里带 `mods` 的那一条
  * @returns {string} 该栏的 HTML
  */
@@ -888,10 +777,8 @@ function dataPaneHtml(isAdmin) {
           <code id="storage-path" class="path-text" title="数据位置（NAS 上的文件夹）">${esc(s.dataDir || '—')}</code>
           ${s.location && s.location.custom ? `<span class="loc-badge">${esc(LOC_TEXT.CUSTOM)}</span>` : ''}
           <button id="btn-copy-path" class="btn btn-subtle btn-sm" type="button">复制路径</button>
-          <button id="btn-move-data" class="btn btn-subtle btn-sm" type="button">${esc(LOC_TEXT.MOVE)}</button>
         </div>
-        ${redNoteHtml(s.location && s.location.custom)}
-        ${archivesLineHtml(s.location)}
+        <div class="loc-note">${esc(LOC_TEXT.MOVE_DISABLED)}</div>
         <div class="loc-lead">${esc(LOC_TEXT.LEAD)}</div>
         ${dbRowsHtml(s.databases)}
         ${walNoteHtml()}
@@ -1212,8 +1099,6 @@ function bindPane(id) {
   }
   if (id === 'version') {
     on('btn-copy-path', copyDataPath);
-    // ⭐ 数据位置：低频、高风险的动作，入口只放这里，进去先预检、再确认
-    on('btn-move-data', openMoveDataModal);
     // ⭐ 0.9.1：唯一会对外联网的那颗按钮（见 `checkVersions()` 的说明）
     on('btn-check-version', checkVersions);
     return;
@@ -1299,213 +1184,12 @@ function gotoGrantPane() {
 //    所以走 `core/grants.js` 的钩子。（模块作用域注册一次，设置页只要加载过就生效。）
 setGotoAuthHandler(gotoGrantPane);
 
-/**
- * 功能：把一条路径折成末段（⛔ 页面上不出现完整路径之外的任何东西）。
- * @param {string} p - 路径
- * @returns {string} 末段
+/*
+ * 应用内**不再提供**修改数据位置（入口与整条搬迁流程都在这一版下线）。
+ * 判据与文案的唯一出处是 `core/data-location.js` 的 `LOC_TEXT.MOVE_DISABLED`；
+ * 后端 `/api/admin/data-location/{dirs,check,apply,mkdir}` 一并拒绝，所以即便有人绕过界面
+ * 那是数据已经不可用时的救援通道，**不受影响**。
  */
-function locTail(p) {
-  const parts = String(p || '')
-    .split('/')
-    .filter(Boolean);
-  return parts.length ? parts[parts.length - 1] : String(p || '');
-}
-
-/**
- * 功能：把预检结果画成一段说明（文件数 / 字节数 / 两个位置各自的可用空间）。
- * @param {Object} info - `/api/admin/data-location/check` 的 `info`
- * @returns {string} HTML
- */
-function precheckHtml(info) {
-  if (!info) return '';
-  return (
-    `<div class="loc-pre-ok">预检通过：要搬 ${info.files} 个文件，共 ${esc(formatBytes(info.bytes))}。</div>` +
-    `<div class="loc-pre-dim">目标位置可用 ${esc(info.freeTarget == null ? '—' : formatBytes(info.freeTarget))}` +
-    ` ｜ 安装位置可用 ${esc(info.freeDefault == null ? '—' : formatBytes(info.freeDefault))}` +
-    (info.fstype ? ` ｜ ${esc(info.fstype)}` : '') +
-    `</div>`
-  );
-}
-
-/**
- * 功能：打开「修改数据位置」弹窗 —— 选目录 → 预检 → 确认 → 搬迁 → 轮询进度。
- *
- * 说明：⚠️ 候选**只能从已授权目录里挑**（`GET /api/admin/data-location/dirs`，来源与预检同一处）：
- *      数据位置必须已经授权给本应用，否则应用账号连读都读不了。⛔ 不再弹飞牛选择器 ——
- *      选择器是「新授权」的通道，而这里要的是「在已授权的里面挑」。
- *      ⚠️ 搬迁完成后**必须到应用中心重启**：本进程不会热切换数据库（那会让三个连接与全部状态重建）。
- * @returns {Promise.<void>} 无返回值
- */
-async function openMoveDataModal() {
-  openModal(
-    LOC_TEXT.DIALOG_TITLE,
-    `<div class="loc-move">
-      <p class="loc-move-step">从<b>已经授权给本应用</b>的目录里选一个<b>空</b>文件夹 —— 点箭头逐级展开，点名字就选中它。</p>
-      <div id="loc-browse" class="loc-browse"></div>
-      <div id="loc-picked" class="loc-picked"></div>
-      <div id="loc-pre" class="loc-pre"></div>
-      <ul class="loc-move-lines">
-        <li>${esc(LOC_TEXT.LINE_READONLY)}</li>
-        <li>${esc(LOC_TEXT.LINE_ARCHIVE)}</li>
-        <li class="loc-red">⚠️ ${esc(LOC_TEXT.RED)}</li>
-      </ul>
-    </div>`,
-    { mid: true },
-  );
-  // ⭐⭐ 「开始搬迁」用的是弹窗底下那颗**共用主按钮** —— 那里本来就有「取消」，两颗天然同一排。
-  //    ⚠️ 也正因为它全弹窗共用：进这一屏先复位 `disabled`，并且**不用 `disabled` 表达
-  //    「预检还没过」**（那个灰态会遗留给下一个弹窗），改成点下去给一句人话（见 `doApply()`）。
-  setModalSave(LOC_TEXT.DIALOG_APPLY);
-  const saveBtn = document.getElementById('modal-save');
-  if (saveBtn) saveBtn.disabled = false;
-
-  const browse = document.getElementById('loc-browse');
-  const picked = document.getElementById('loc-picked');
-  const pre = document.getElementById('loc-pre');
-  /** 当前所在目录 ＝ 要搬去的目录（根层还没进去时是空串） */
-  let target = '';
-  /** 这个目录**预检通过了**吗 */
-  let ready = false;
-  /** 已经在搬了 —— 防连点 */
-  let applying = false;
-  /** 预检序号：同上 */
-  let checkSeq = 0;
-
-  /**
-   * 功能：按选中的目录刷新「当前选择」那一行并跑预检。
-   *
-   * 说明：⭐⭐ 树上的每一次选中都会走到这里 —— 选中即预检，用户不用再点一次「检查」
-   *      就知道这个文件夹能不能用（空 / 非空、空间够不够、应用账号能不能写）。
-   * @param {string} p - 选中的目录（绝对路径）
-   * @returns {Promise.<void>} 完成
-   */
-  async function onPick(p) {
-    target = String(p || '');
-    pre.innerHTML = '';
-    ready = false;
-    picked.innerHTML = target
-      ? `<span class="loc-picked-k">${esc(DIR_TEXT.PICKED)}</span><code>${esc(target)}</code>`
-      : '';
-    if (target) await runCheck();
-  }
-
-  /**
-   * 功能：把已授权目录画成一棵可逐级展开的树（＋新建文件夹）。
-   *
-   * 说明：⚠️ 判据与子目录清单都由服务端给（`core/grant-tree.js`），这里只挂状态与事件；
-   *      ⛔ 前端不拼路径、不缓存授权结论 —— 展开时才问一次，回来什么画什么。
-   * @returns {Object} 树控制器
-   */
-  function mountBrowser() {
-    return mountDirTree(browse, {
-      // 展开某一级时取它的子目录（`dir` 为空 ＝ 授权根那一层）
-      fetchDirs: (dir) => api('GET', `/api/admin/data-location/dirs?dir=${encodeURIComponent(dir || '')}`),
-      // ⭐ 直接在选中的文件夹里建一个空目录：授权给你的目录常常已经有东西了，
-      //    而数据位置要求**空目录** —— 没有这一步就得先切到飞牛里建好再回来。
-      mkdir: (parent, name) => api('POST', '/api/admin/data-location/mkdir', { parent, name }),
-      onSelect: (p) => void onPick(p),
-      onGoto: () => {
-        closeModal();
-        gotoGrantPane();
-      },
-    });
-  }
-
-  /**
-   * 功能：对当前目录跑一次服务端预检，并把结果画成一块（失败是红底加粗那一块）。
-   * @returns {Promise.<void>} 完成
-   */
-  async function runCheck() {
-    const my = (checkSeq += 1);
-    pre.innerHTML = '<div class="loc-pre-dim">正在预检…</div>';
-    ready = false;
-    try {
-      const r = await api('POST', '/api/admin/data-location/check', { path: target });
-      if (my !== checkSeq) return;
-      pre.innerHTML = precheckHtml(r && r.info);
-      ready = true;
-    } catch (e) {
-      if (my !== checkSeq) return;
-      // ⚠️ 标题与原因**分两行**：整块加粗反而没有层次（`.loc-pre-bad > b` 是 800、正文 600）
-      pre.innerHTML = `<div class="loc-pre-bad"><b>预检没通过</b><span>${esc(e.message || '原因未知')}</span></div>`;
-    }
-  }
-
-  /**
-   * 功能：点「开始搬迁」—— 上遮罩、等相位、完成后给「去重启」的明确指引。
-   *
-   * 说明：⭐⭐ 这个动作在服务端**几十毫秒**就走完了，原来只在弹窗底部改一行 12px 的小字，
-   *      用户什么都没看见，于是报「点了没反应（实际已经迁移完成）」。现在：
-   *      ① 立刻挂全屏遮罩（旋转环 ＋ 相位 ＋ 进度），**先让用户看到"在跑"**；
-   *      ② 轮询用递归 `setTimeout`（首次 0ms），不依赖「500ms 后第一次」那个空窗；
-   *      ③ 完成态**不可关闭**，一直提示「请重新启动应用」—— 重启前应用只读，关掉它只会让人
-   *        以为「搬完了但好像又不对」（2026-11-10 老大：重启之前不能关闭这个弹窗）。
-   * @returns {Promise.<void>} 完成
-   */
-  async function doApply() {
-    // ⚠️⭐ 三道守卫（都不是形式主义）：
-    //    ① `#modal-save` 是共用节点，`onclick` 会留着上一次的闭包 ⇒ 先确认**这一层**还开着
-    //      （标题是「修改数据位置」），否则会在别的弹窗里凭空发一次搬迁请求；
-    //    ② 没选目录 / 预检没过 ⇒ 给一句人话，别发一个必然 409 的请求；
-    //    ③ `applying` 防连点。
-    const titleEl = document.getElementById('modal-title');
-    if (!titleEl || titleEl.textContent !== LOC_TEXT.DIALOG_TITLE) return;
-    if (applying) return;
-    if (!target) {
-      toast('请先点进一个要放数据的文件夹（根目录不能直接用）');
-      return;
-    }
-    if (!ready) {
-      toast('这个目录还没通过预检 —— 请看上面那句红字，或者换一个空文件夹', true);
-      return;
-    }
-    applying = true;
-    const busy = mountBusy();
-    busy.update('preparing');
-    try {
-      await api('POST', '/api/admin/data-location/apply', { path: target });
-    } catch (e) {
-      busy.fail((e && e.message) || '原因未知');
-      applying = false;
-      return;
-    }
-    const ACTIVE = ['preparing', 'dumping', 'copying', 'verifying', 'deploying', 'packaging', 'index'];
-    let tries = 0;
-    const poll = async () => {
-      let st;
-      try {
-        st = await api('GET', '/api/admin/data-location/status');
-      } catch (_e) {
-        // 迁移中的请求偶尔会被冻结闸门挡回来（都是 503）⇒ 继续问，别把遮罩卡死
-        if (tries < 600) {
-          tries += 1;
-          setTimeout(() => void poll(), 400);
-        } else {
-          busy.fail('等不到搬迁结果（状态接口一直失败），请刷新页面确认');
-        }
-        return;
-      }
-      const job = st && st.job;
-      if (job && ACTIVE.includes(String(job.phase))) {
-        busy.update(job.phase, job.bytesDone, job.bytesTotal);
-        tries += 1;
-        if (tries < 900) setTimeout(() => void poll(), 400);
-        else busy.fail('搬迁时间过长，请刷新页面确认');
-        return;
-      }
-      if (job && job.phase === 'pendingRestart') {
-        busy.done(locTail(target));
-        return;
-      }
-      busy.fail((job && job.error) || '原因未知');
-    };
-    void poll();
-  }
-
-  mountBrowser();
-
-  if (saveBtn) saveBtn.onclick = () => void doApply();
-}
 
 /**
  * 功能：复制数据目录路径 —— 复制成功给提示；环境不允许自动复制时退而求其次，
@@ -1916,6 +1600,8 @@ export async function restoreOrgBackup() {
          · 换掉之前，系统会自动把现在的数据另存一份（文件名会在做完后告诉你）。
        </div>
        <label class="imp-confirm">确认请输入「恢复」二字：<input id="rst-word" type="text" autocomplete="off" /></label>`,
+      // ⚠️ 确认词要用户亲手打 —— 存草稿等于下次打开自动替他打好，护栏就白设了
+      { draft: false },
     );
     setModalSave('确认恢复（危险）', true);
     $('#modal-save').onclick = async () => {

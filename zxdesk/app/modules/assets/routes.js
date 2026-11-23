@@ -2,30 +2,11 @@
  * modules/assets/routes.js —— 个人资产管理路由（分组树 / 通用条目）
  *
  * 功能：`handleAssets` 一处收全部接口 —— 分组树的列表 / 新增 / 详情 / 编辑 / 删除，
- *      以及通用条目的列表 / 新增 / 详情 / 编辑 / 删除。
- *
- * 说明：⭐ **分组与条目都只属于账号本人**（设计要求），所以每一条带 id 的写操作都先过归属校验，
- *      越权与「不存在」统一 404（403 等于告诉对方「这条记录存在、只是不归你」）。
- *
- * ⚠️ **没有 `/api/assets/summary` 这类接口**：分组计数随树的列表一起返回（`store.listAssetGroups`
- *    的 `counts`）—— 少一次请求、少一处 401 分支，而且切分组时数字不会闪烁。
- *
- * ⭐ 路由表（`parts = ['api','assets', …]`）——
- *      · `GET    /api/assets/groups?`               分组树（展平、父在前、带条目计数）
- *      · `POST   /api/assets/groups`                新增 `{ name, parent_id?, icon? }`
- *      · `POST   /api/assets/groups/merge`          ⭐ 0.8.10：合并 `{ ids: [...], into }`
- *      · `GET    /api/assets/groups/:id`            一个分组
- *      · `PUT    /api/assets/groups/:id`            改名 / 图标 / 顺序
- *      · `DELETE /api/assets/groups/:id`            删除（子树一起、条目只解绑）
- *      · `GET    /api/assets/items?group_id=`       条目列表（不带 `group_id` = 全部）
- *      · `POST   /api/assets/items`                 新增 `{ name, group_id?, amount_fen?, date?, note? }`
- *      · `GET    /api/assets/items/:id`             一条条目
- *      · `PUT    /api/assets/items/:id`             编辑（`group_id` 传空 = 解绑）
- *      · `DELETE /api/assets/items/:id`             删除
+ * 以及通用条目的列表 / 新增 / 详情 / 编辑 / 删除。
  *
  * @author zx
  * @date   2026-10-02
- * @since 0.8.10
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/26-个人资产管理.md、docs/公共/开发方案/30-个人资产管理.md
  */
 'use strict';
@@ -40,11 +21,6 @@ const { store } = require('../../core/context.js');
  * @param {Object} ctx - 分派上下文
  * @param {Object} ctx.req - HTTP 请求对象
  * @param {Object} ctx.res - HTTP 响应对象
- * @param {Array.<string>} ctx.parts - URL 路径按 `/` 切开后的片段
- * @param {Object} ctx.url - 解析好的 URL 对象（取查询参数）
- * @param {string} ctx.method - HTTP 方法
- * @param {number} ctx.uid - 当前账号 id
- * @returns {void}
  */
 function handleAssets({ req, res, parts, url, method, uid }) {
   const kind = parts[2];
@@ -57,19 +33,17 @@ function handleAssets({ req, res, parts, url, method, uid }) {
         return readBody(req, res, (b) => {
           if (!b) throw httpError(400, 'bad body');
           const fields = checkAssetGroup(b);
-          // ⚠️ 名称是唯一的必填项，且**在这里**查（校验层只管「带了就校验」，
-          //    这样编辑时「只改图标」不会被要求重发名称）
+          // 名称是唯一的必填项，且**在这里**查（校验层只管「带了就校验」，
+          // 这样编辑时「只改图标」不会被要求重发名称）
           if (!fields.name) throw httpError(400, '名称不能为空');
           json(res, 201, store.createAssetGroup(uid, fields));
         });
       }
       return notFound(res);
     }
-    // ⭐⭐ 0.8.10：「把几个子类别合并到其中一个子类别中」——
-    //    ⚠️⭐ 这条**必须排在下面那句 `idParam(parts[3])` 之前**：`merge` 不是数字，
-    //    `idParam('merge')` 回 `null` ⇒ 会被当成「这个分组不存在」直接 404（而且看着像产品坏了）。
-    //    ⚠️ 写完把**最新那棵树**给回去（`{groups, counts}`，同 `GET` 的形状）——
-    //    界面那一步本来就要重画左栏与下拉，一个来回就够。
+    // 「把几个子类别合并到其中一个子类别中」——
+    // 这条**必须排在下面那句 `idParam(parts[3])` 之前**：`merge` 不是数字，
+    // `idParam('merge')` 回 `null` ⇒ 会被当成「这个分组不存在」直接 404（而且看着像产品坏了）。
     if (parts.length === 4 && parts[3] === 'merge' && method === 'POST') {
       return readBody(req, res, (b) => {
         if (!b) throw httpError(400, 'bad body');
@@ -90,7 +64,6 @@ function handleAssets({ req, res, parts, url, method, uid }) {
     if (method === 'PUT' && parts.length === 4) {
       return readBody(req, res, (b) => {
         if (!b) throw httpError(400, 'bad body');
-        // ⚠️ 名称**带了就不许清空**：它是界面上唯一显示的东西
         const fields = checkAssetGroup(b);
         if (Object.prototype.hasOwnProperty.call(fields, 'name') && !fields.name) {
           throw httpError(400, '名称不能为空');
@@ -145,5 +118,5 @@ function handleAssets({ req, res, parts, url, method, uid }) {
   return notFound(res);
 }
 
-// ⭐ 导出键 = `module.json` 的 `apiPrefix`：`server.js` 扫目录聚合时按它挂到 `/api/assets` 上
+// 导出键 = `module.json` 的 `apiPrefix`：`server.js` 扫目录聚合时按它挂到 `/api/assets` 上
 module.exports = { assets: handleAssets };

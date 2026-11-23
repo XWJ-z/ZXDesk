@@ -1,12 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：planner.js
- * 职责：选路（移植自 `Project/Android/core/connection/ConnectionPlanner.kt`）
- *
- * 三条硬规则：
- * 1. **8990 永远明文**：用户写 `https://ip:8990` 也按 http 走（它是局域网救援端口）；
- * 2. **明文只允许私网**：公网地址给 `http://` 一律拒；
- * 3. **不写 scheme 时**：勾了 HTTPS 用 https，没勾用 `http://IP:8990`。
  */
 
 import { isIpv4, isIpv6, TARGET_KIND } from './input.js';
@@ -16,7 +9,7 @@ export const DEFAULT_GATEWAY_PATH = '/app/zxdesk';
 
 /**
  * @returns {{ok:true, plan:{baseUrl:string, gatewayPath:string, cleartext:boolean, direct:boolean}}
- *          |{ok:false, reason:string}}
+ * |{ok:false, reason:string}}
  */
 export function planConnection(target, preferHttps = true) {
   if (!target || target.kind === 'invalid') return { ok: false, reason: target?.reason || '地址格式不正确' };

@@ -1,31 +1,20 @@
 /**
- * modules/timetable/mobile-edit.js —— 手机版课表**编辑**弹层（课程管理 / 课次 / 调课 · 0.2.3）
+ * modules/timetable/mobile-edit.js —— 手机版课表**编辑**弹层（课程管理 / 课次 / 调课 ）
  *
  * 功能：手机版手动维护课表所需的弹层与动作处理 —— `ttCoursesSheet()`（课程管理）、
- *      `ttCourseFormSheet()` / `ttSessionFormSheet()`（两张表单）、`ttAdjustSheet()`（调课 / 停课），
- *      以及把上面这些动作接到 `data-act` 上的 `handleTtEditAct()`。
- *
- * ⭐ 为什么单独一个模块：`mobile/views/timetable.js` 已经 700+ 行，再塞进这一套就会越过
- *    「JS >800 行该拆」的线（08-工程规范）。这几块是**新功能**、边界清楚（都是「改数据」的弹层）。
- *
- * ⚠️ 手机版与电脑版是**两套实现**：这里刻意不复用桌面版的 `desktop-edit.js` ——
- *    版式、弹层机制（底部抽屉 vs 居中弹窗）都不同，共享的只有 REST 契约与 `core/`。
- *
- * ⚠️ 三件事刻意不在这里做：① 不在前端算「这周有没有课 / 撞不撞车」（服务端判，原话转给用户）；
- *    ② 不自己抄一份调色板（`GET /schedule` 随响应下发 `palette`）；③ 不碰作息（只读它决定节次范围）。
- *
- * ⭐ 0.5.0 模块化重构：本文件从 `public/mobile/views/timetable-edit.js` **原样搬进模块目录**
- *    （方案 `09-模块化重构` §七，纯搬运不改逻辑）。只改了 import 的相对路径与静态依赖的
- *    目标（`./timetable.js` → `./timetable-mobile.js`）。
+ * `ttCourseFormSheet()` / `ttSessionFormSheet()`（两张表单）、`ttAdjustSheet()`（调课 / 停课），
+ * 以及把上面这些动作接到 `data-act` 上的 `handleTtEditAct()`。
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.8.52
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/06-课表.md、07-前端-电脑版与手机版.md、docs/公共/开发方案/09-模块化重构.md
  */
 
 import { api } from '../../core/api.js';
 import { $, esc, skeletonHtml } from '../../core/dom.js';
+// 自动草稿：课程 / 课次表单按实体分开存，重载后靠登记表把同一张表单再打开
+import { registerResume } from '../../core/draft.js';
 import { render } from '../../mobile/app.js';
 import { state } from '../../mobile/state.js';
 import { askConfirm, closeSheet, openSheet, toast } from '../../mobile/ui.js';
@@ -86,14 +75,9 @@ function colorRow(selected) {
 /**
  * 功能：拉取当前学期的课程与课次。
  *
- * ⚠️ 0.5.5（「课程管理设置：点击加载延迟太大」）：课次原先只能**逐门课**调
- *    `/courses/:id/sessions` ⇒ 打开一次是 **1 + N 次串行请求**（一门课等一次往返），
- *    课一多就要等好几秒。现在服务端补了「按学期整份取课次」的接口
- *    （`GET /api/timetable/sessions?term_id=`），这里降到 **2 次**；
- *    这两次**互不依赖**，所以一起发（要的是「减请求数」——
- *    两次并发的服务端排队代价可忽略，但能省掉一整个往返）。
- *
- * @returns {Promise.<void>} 结果写进模块级的 `lastCourses` / `lastSessions`
+ * ：课次原先只能**逐门课**调
+ * `/courses/:id/sessions` ⇒ 打开一次是 **1 + N 次串行请求**（一门课等一次往返），
+ * 课一多就要等好几秒。现在服务端补了「按学期整份取课次」的接口
  */
 async function loadCourses() {
   const [courses, sessions] = await Promise.all([
@@ -115,13 +99,9 @@ const COURSES_FOOT =
 /**
  * 功能：打开「课程管理」弹层 —— 课程与课次的列表 + 增删改入口。
  *
- * 说明：⭐ 这是**没导入过教务文件的人唯一能填进课表的地方**（0.2.3 之前手机版同样只能靠导入）。
- *      ⭐ 0.5.5（「点击加载延迟太大」）：现在**先开弹层再取数** ——
- *      取数要跨好几条请求，原先「等全部回来才开弹层」的表现是**点了没反应**，
- *      比「等一会儿」难受得多。先摆骨架，取完用同一套渲染重画（与导入向导
- *      `ttLoadTemplates().then(() => ttImportSheet())` 同一个手法）。
- *
- * @returns {Promise.<void>}
+ * ：现在**先开弹层再取数** ——
+ * 取数要跨好几条请求，原先「等全部回来才开弹层」的表现是**点了没反应**，
+ * 比「等一会儿」难受得多。先摆骨架，取完用同一套渲染重画（与导入向导
  */
 export async function ttCoursesSheet() {
   if (!state.ttTermId) return toast('先建一个学期', true);
@@ -176,8 +156,7 @@ export async function ttCoursesSheet() {
  * @returns {void}
  */
 export function ttCourseFormSheet(course) {
-  // ⚠️ 新建课程必须挂在某个学期下（课次也按学期走）—— 0.4.4 第二版起「新建」菜单里
-  //    可以直接点进来，所以这里也要挡一道，别让用户填完一圈再收到一个 400
+  // 可以直接点进来，所以这里也要挡一道，别让用户填完一圈再收到一个 400
   if (!course && !state.ttTermId) return toast('先建一个学期', true);
   const c = course || {};
   openSheet(
@@ -196,6 +175,11 @@ export function ttCourseFormSheet(course) {
     '<button class="btn primary" data-act="tt-c-save"' +
       (course ? ` data-id="${course.id}"` : '') +
       '>保存</button><button class="btn ghost" data-act="tt-courses">返回</button>',
+    {
+      // 同一张「课程表单」服务每一门课 —— 键里不带 id 就会把 A 课没保存的备注带到 B 课
+      draft: `tt-course:${course ? course.id : 'new'}`,
+      resume: { kind: 'tt-course', payload: { course: course || null } },
+    },
   );
 }
 
@@ -203,11 +187,8 @@ export function ttCourseFormSheet(course) {
  * 功能：打开「课次」表单（新建或编辑）—— 星期 / 起止节次 / 周次 / 教室 / 教师 / 课堂备注。
  *
  * 说明：⚠️ 节次只能从**作息里真实存在的节次**里选：写一个作息没有的节次，整周格子里没有那一行，
- *      课会「加进去了但看不见」。作息为空时明确拒绝并指路，而不是给空下拉。
+ * 课会「加进去了但看不见」。作息为空时明确拒绝并指路，而不是给空下拉。
  *
- * @param {Object} course - 所属课程
- * @param {?Object} session - 传入为编辑，不传为新建
- * @returns {void}
  */
 export function ttSessionFormSheet(course, session) {
   const s = session || {};
@@ -249,6 +230,11 @@ export function ttSessionFormSheet(course, session) {
       '"' +
       (session ? ` data-id="${session.id}"` : '') +
       '>保存</button><button class="btn ghost" data-act="tt-courses">返回</button>',
+    {
+      // 新建课次按课程分开存（同一门课连加两条时，第二条不该顶着第一条的教室 / 周次）
+      draft: `tt-session:${session ? session.id : 'new:' + course.id}`,
+      resume: { kind: 'tt-session-form', payload: { course, session: session || null } },
+    },
   );
 }
 
@@ -256,11 +242,8 @@ export function ttSessionFormSheet(course, session) {
  * 功能：打开「调课 / 停课」弹层 —— 口径：范围要能选「本节 / 此后全部」。
  *
  * 说明：⭐ 两个范围的落法完全不同，界面上说清（用户要知道「此后全部会切开这条课次」）：
- *      · 本节 → 只影响第 N 周这一次，写一行调整（可撤销）；此后全部 → 把课次在第 N 周处劈成两条。
- *      ⚠️ 撞车 / 单双周 / 节次范围一律由服务端判，前端只把服务端的原话转给用户。
- *
- * @param {Object} cell - 课次（`/schedule` 的 cells 元素；被停掉的那一周由调整行合成等价对象）
- * @returns {void}
+ * 本节 → 只影响第 N 周这一次，写一行调整（可撤销）；此后全部 → 把课次在第 N 周处劈成两条。
+ * 撞车 / 单双周 / 节次范围一律由服务端判，前端只把服务端的原话转给用户。
  */
 export function ttAdjustSheet(cell) {
   if (!cell || !cell.session_id) return;
@@ -269,16 +252,15 @@ export function ttAdjustSheet(cell) {
   const totalWeeks = Number((state.tt && state.tt.term && state.tt.term.total_weeks) || 17);
   const cur = ((state.tt && state.tt.adjustments) || []).find((a) => Number(a.session_id) === Number(cell.session_id));
   const week = Number(cur && cur.week_no) || Number(state.tt && state.tt.week) || 1;
-  // ⭐ 跨周调课：目标周（没调过 / 同周调课 ⇒ 与源周相同）
+  // 跨周调课：目标周（没调过 / 同周调课 ⇒ 与源周相同）
   const toWeek = Number(cur && cur.to_week_no) || week;
   const isCancel = !!(cur && cur.kind === 'cancel');
   const lo = nums[0];
   const opts = (sel) =>
     nums.map((n) => `<option value="${n}"${n === sel ? ' selected' : ''}>第 ${n} 节</option>`).join('');
-  // ⚠️ 入参有两种来源：点课次卡片时是 `/schedule` 的 cell（有 weekday / period_start / room），
-  //    点**课表上方调整条的「改」**时是调整行本身（只有 origin_*）—— 后者尤其重要，因为
-  //    **被停课的那一周格子里什么都没有**，那条路是它唯一能改回来的入口。不回落 origin_* 的话，
-  //    弹层会预填成「星期一第 1 节」，用户一保存就把课挪到了完全不相干的地方。
+  // 入参有两种来源：点课次卡片时是 `/schedule` 的 cell（有 weekday / period_start / room），
+  // **被停课的那一周格子里什么都没有**，那条路是它唯一能改回来的入口。不回落 origin_* 的话，
+  // 弹层会预填成「星期一第 1 节」，用户一保存就把课挪到了完全不相干的地方。
   const curWd = Number(cell.weekday) || Number(cell.origin_weekday) || 1;
   const curPs = Number(cell.period_start) || Number(cell.origin_period_start) || lo;
   const curPe = Number(cell.period_end) || Number(cell.origin_period_end) || curPs;
@@ -339,8 +321,8 @@ export function ttAdjustSheet(cell) {
     const kind = root.querySelector('input[name="tt-a-kind"]:checked').value;
     const scope = root.querySelector('input[name="tt-a-scope"]:checked').value;
     const w = Number(($('#tt-a-week') || {}).value) || 1;
-    // ⭐ 「此后全部就不要显示调整到哪一周了」——
-    //    此后全部（劈周次）与停课都不谈目标周 ⇒ 那一格与它下面的说明一起收起来。
+    // 「此后全部就不要显示调整到哪一周了」——
+    // 此后全部（劈周次）与停课都不谈目标周 ⇒ 那一格与它下面的说明一起收起来。
     const showTo = kind === 'move' && scope === 'one';
     const toWrap = $('#tt-a-toweek-wrap');
     if (toWrap) toWrap.hidden = !showTo;
@@ -373,11 +355,8 @@ export function ttAdjustSheet(cell) {
  * 功能：手机版课表编辑相关的 `data-act` 派发 —— `onAction` 把这一批动作整包交给这里。
  *
  * 说明：⚠️ 集中一处派发（而不是在 `app.js` 里摊开十几个 case）：`app.js` 是全局指令表，
- *      课表编辑的这些分支只在维护课表时用到，摊开会把它撑爆（它已经 700+ 行）。
+ * 课表编辑的这些分支只在维护课表时用到，摊开会把它撑爆（它已经 700+ 行）。
  *
- * @param {string} act - 动作名
- * @param {HTMLElement} n - 触发节点（参数在它的 `dataset` 上）
- * @returns {void}
  */
 export function handleTtEditAct(act, n) {
   /** 功能：读出触发节点上的 id 并转数字。 @returns {number} */
@@ -488,7 +467,7 @@ export function handleTtEditAct(act, n) {
       }
       const body = { kind };
       if (kind === 'move') {
-        // ⭐ 跨周调课：只有「本节」才带目标周（此后全部那一格是收起的，见 `hint()`）
+        // 跨周调课：只有「本节」才带目标周（此后全部那一格是收起的，见 `hint()`）
         if (scope === 'one' && tw !== w) body.to_week_no = tw;
         body.to_weekday = Number(($('#tt-a-wd') || {}).value) || 1;
         body.to_period_start = Number(($('#tt-a-ps') || {}).value) || 1;
@@ -543,3 +522,7 @@ export function handleTtEditAct(act, n) {
       return;
   }
 }
+
+// 重载恢复：课程 / 课次表单各自登记再打开一次（草稿由 `openSheet()` 自动回填）
+registerResume('tt-course', (p) => ttCourseFormSheet((p && p.course) || undefined));
+registerResume('tt-session-form', (p) => ttSessionFormSheet(p && p.course, (p && p.session) || undefined));

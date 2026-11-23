@@ -1,7 +1,5 @@
 /*
  * ZXDesk工作台 Android 客户端
- * 文件：LocalProxyTest.kt
- * 职责：本机代理的隧道、转发、拒绝与复用回归测试
  */
 
 package com.zxdesk.core.connection
@@ -24,10 +22,6 @@ import org.junit.Test
 /**
  * [LocalProxy] 的传输正确性。
  *
- * 这一层没测住的话，页面不是「打不开」而是「打开一半」—— 那种故障最难从截图看出来，
- * 所以这里按「字节一致」验：发什么、收什么，一个字节都不能差。
- *
- * 目标地址用注入的解析器指到本机假服务，不依赖外网。
  */
 class LocalProxyTest {
 
@@ -87,7 +81,6 @@ class LocalProxyTest {
                 server.accept().use { socket ->
                     val input = BufferedInputStream(socket.getInputStream())
                     seen.set(readLine(input))
-                    // 把剩余头部读干净，否则客户端会觉得请求没发完
                     while (true) {
                         val line = readLine(input)
                         if (line.isEmpty()) break
@@ -264,8 +257,6 @@ class LocalProxyTest {
     /**
      * 等 CONNECT 的应答，并且把**头部整块**读完。
      *
-     * ⚠️ 只读一行会把结尾那个空行留在流里 —— 之后任何「读 N 个字节」都会先吃到它的 `\r\n`，
-     * 断言就变成「少一个字节、多一个换行」，看着像代理漏字节，其实是用例自己没读干净。
      */
     private fun awaitEstablished(input: InputStream): Boolean {
         val status = readLine(input)

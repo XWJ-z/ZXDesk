@@ -1,53 +1,10 @@
 /**
- * modules/ai/routes.js —— ai辅助任务路由（0.6.0）
+ * modules/ai/routes.js —— ai辅助任务路由
  *
  * 功能：`handleAi` 一处收全部 AI 接口 ——
- *      · `GET  /api/ai/config`            配置视图（**永不含 key 的任何投影**）
- *      · `PUT  /api/ai/config`            保存（只写请求里真带了的字段；key 明文现场封装；
- *                                         ⭐ 2 期多认 3 个键：`ctx_max_turns` / `mem_enabled` / `mem_max`）
- *      · `POST /api/ai/config/clear-key`  显式清除 key（幂等）
- *      · `POST /api/ai/test`              测连通（GET {base}/models，省额度）
- *      · `POST /api/ai/chat`              聊天（**流式 SSE**：delta → done；错误走 error 帧不落库）
- *                                         ⭐ 2 期：带上「本段的上下文 + 记忆」，`done` 帧回 `used` 用量
- *      · `POST /api/ai/chat/new`          ⭐ 2 期：开启新对话（返回新段号；幂等；**不删任何消息**）
- *      · `GET  /api/ai/memories`          ⭐ 2 期：记忆列表
- *      · `POST /api/ai/memories`          ⭐ 2 期：新增一条记忆（201）
- *      · `PUT  /api/ai/memories/<id>`     ⭐ 2 期：改一条（越权 / 不存在统一 404）
- *      · `DELETE /api/ai/memories/<id>`   ⭐ 2 期：删一条（幂等；越权 / 不存在统一 404）；
- *                                                            ⚠️ 0.7.7-⑱：预设三条（用户名称 / AI助手名称 / 约定）
- *                                                            删不掉 ⇒ 400 说人话
- *      · `POST /api/ai/memories/clear`    ⭐ 2 期：清空（返回删掉的条数）；
- *                                                            ⚠️ 0.7.7-⑱：预设三条不删，只清空内容
- *      · `POST /api/ai/proposals/<id>`    ⭐ 0.7.7-⑲：对一张任务确认卡表态
- *                                                            `{ action: 'agree'|'reject', added?, failed? }`
- *      · `POST /api/ai/extract`           指挥 AI 建任务（**只提议**，返回结构化草稿，落库由前端调既有任务接口）
- *      · `GET  /api/ai/messages`          AI 会话历史（游标翻页；⭐ 2 期：每项带 `segment`、
- *                                         可选 `?segment=N` 过滤；**不带 = 返回全部**，见下面说明）
- *      · ⭐ 3 期：
- *        `GET  /api/ai/tools`             当前可用工具清单（含**用途**与**出网面说明**，给人看的）
- *        `GET  /api/ai/audit`             审计列表（本次运行期间的最近 N 条；⛔ 不含内容与 key）
- *
- * ⭐ **本文件是全项目第一个「出网」的接口层**，三条硬规矩（方案 §八）：
- *      ① 节流 —— 出网动作（test / chat / extract）共用一个**每账号滑动窗口**（10 次/分钟），
- *         超限 429 直接 `json()`（鉴权类出口），绝不静默丢；
- *      ② 上游错误**不透传** —— 带给前端的每个错误文案都来自 `lib/openai-client.js` 的转译表，
- *         上游错误体 / key / 消息原文一个字都不进响应、不进日志；
- *      ③ **没有任何写任务表的接口** —— 确认卡落库由前端调既有 `POST /api/daily` /
- *         `POST /api/projects/:id/tasks`（`from_message_id` 口径），任务模块一行不改。
- *
- * ⭐ **异步出网的错误要自己接住**：`readBody` 的回调只兜**同步** throw；出网是异步的，
- *      所以每个出网分支都包 `(async () => { … })().catch((e) => fail(res, e))` ——
- *      不接住的话请求会挂到前端超时，页面上一句错误都没有。
- *
- * ⭐ **KEK 的来源**：`core/context.js` 的 `AUTH_SECRET`（实例密钥）经 `lib/seal.js` 的 `deriveKek()`
- *      派生，每次 handler 调用时现派（HKDF 微秒级）；⚠️ KEK 不进日志、不进任何错误信息、不进返回值。
- *
- * ⭐ **2 期往这里加的三件事**：① 记忆的 5 个接口与「开启新对话」（都**不出网**，
- *      所以**不进节流窗口** —— 节流只管 `test` / `chat` / `extract` 那三个真会发请求的）；
- *      ② `chat` 的 system 提示词里追加**记忆段落**（用现成注入点，不新建链路）；
- *      ③ `done` 帧带上 `used{msgs,chars,mems,seg}` —— 数字**必须来自实际拼进请求的那一组消息**，
- *      界面上那句「本次带了 N 条历史 · M 条记忆」才是实话（⛔ 不是估算、不是配置值）。
- *      ⚠️ 记忆内容与 key 一样**不进日志、不进错误信息**（方案 §八-2）。
+ * `GET  /api/ai/config`            配置视图（**永不含 key 的任何投影**）
+ * `PUT  /api/ai/config`            保存（只写请求里真带了的字段；key 明文现场封装；
+ * 2 期多认 3 个键：`ctx_max_turns` / `mem_enabled` / `mem_max`）
  *
  * @author zx
  * @date   2026-09-15
@@ -103,27 +60,20 @@ const RATE_MSG = `操作太频繁了（每分钟最多 ${AI_RATE_LIMIT} 次）�
 const AI_AUDIT_MAX = 200;
 
 /**
- * 未授权就调用工具时的 403 文案 —— ⭐ 必须是**人话且说清去哪儿开**（方案 §4.5 第 6 条：失败要响）。
- *
  * 说明：⚠️ 403 走 `json()`（鉴权类出口），不是 `fail()`。
- *      ⚠️ 文案里**不许**出现硬边界的名字（那是「报错文案泄露探测通道」）。
  * @type {string}
  */
 const TOOL_DENIED_MSG =
   '这个工具还没有授权给 AI。请到「AI 辅助任务」的「AI 能力」里打开总开关，并勾上对应的模块。';
 
 /**
- * 一轮对话里最多执行几次工具（方案 §4.5 第 4 条：限次）。
- *
  * 说明：⚠️ 这是「读工具」的轮次上限 —— 模型每轮只许输出一个意图（协议如此），
- *      超过就停手把已有信息交给它收尾，⛔ 不让它无限读下去（那是在烧上游额度）。
  * @type {number}
  */
 const TOOL_ROUND_MAX = 3;
 
 /**
  * 功能：把工具入参压成一段**能进审计的摘要** —— ⛔ 不含用户内容。
- *
  * 说明：⭐ 判据是「**短**且是标量」：本期的读工具入参全是枚举（`range=week`），所以这一条
  *      天然只留下枚举值；而的写工具入参里有**任务标题**（那是用户内容）——
  *      它长度超过 20 就会被这里整条丢掉（§13.7 第 10 条：审计里不许记内容）。
@@ -151,15 +101,11 @@ function briefToolArgs(args) {
 const AI_CTX_TURNS_MIN = 20;
 /**
  * 带多少条历史：上限（含） @type {number}
- *
- * ⭐ 0.7.7-⑰：**50 → 200**（下限 20 不动）。⚠️ 它必须与 `store.js` 的 `AI_CTX_MAX_CHARS`
- * （字符兜底，20000 → 60000）**一起抬** —— `aiContextWindow()` 是双上限，只抬条数会被字符上限
- * 悄悄截住（「设了 200、实际带 60 条」，且不报错）。
- * ⚠️ 前端 `public/modules/ai/shared.js` 的 `CTX_TURNS_MAX` 是**另一份**（两端各写一份），必须同值。
+ * -⑰：**50 → 200**（下限 20 不动）。⚠️ 它必须与 `store.js` 的 `AI_CTX_MAX_CHARS`
  */
 const AI_CTX_TURNS_MAX = 200;
 /** 最多带几条记忆：下限（含） @type {number} */
-// ⚠️⭐ 0.7.6：界面上的「每次最多带几条记忆」已撤（记忆改为**全量注入**，见 `store.aiReadMemoriesForPrompt`），
+// 界面上的「每次最多带几条记忆」已撤（记忆改为**全量注入**，见 `store.aiReadMemoriesForPrompt`），
 //    但**这两个常量与 `checkMemMax` 都保留** —— 理由三条：① 删列 / 删键 = 结构迁移，本轮不碰；
 //    ② 老备份恢复路径还要认 `mem_max` 这个键；③ 配置视图（`GET /api/ai/config`）仍如实回它。
 //    ⛔ 别再让「注入条数」看它 —— 那个口径已经作废。
@@ -173,7 +119,6 @@ const AI_MEM_CONTENT_MAX = 2000;
  * 功能：校验一条**记忆正文** —— 去首尾空白后非空、≤ 2000 字。
  * @param {*} b - 请求体
  * @returns {string} 归一化后的正文
- * @throws {Error} 非文本 / 为空 / 超长时抛 400（⛔ 不静默截断，决策 36）
  */
 function checkMemoryContent(b) {
   const src = b && typeof b === 'object' ? b : {};
@@ -190,14 +135,12 @@ function checkMemoryContent(b) {
 const AI_MEM_LABEL_MAX = 20;
 
 /**
- * 功能：校验一条记忆的**名称**（0.7.1，**可选**）—— 缺省 / 空串都表示「这条没有名称」。
- *
- * 说明：⭐ 名称是 0.7.1 加的：界面上每条记忆变成「名称 + 内容」两栏（给的那张参考图），
+ * 功能：校验一条记忆的**名称**—— 缺省 / 空串都表示「这条没有名称」。
+ * 说明：⭐ 名称是 加的：界面上每条记忆变成「名称 + 内容」两栏（给的那张参考图），
  *      AI 注入时按「名称：内容」拼。⚠️ **老数据没有名称**（`label` 是 NULL）⇒ 这里把
  *      「没给 / 空串」统一归一成 `null`（不是空串），让「没有名称」只有一种形状。
  * @param {*} b - 请求体
  * @returns {?string} 归一化后的名称；没给 / 空串 ⇒ `null`
- * @throws {Error} 非文本 / 超长时抛 400（⛔ 不静默截断，决策 36）
  */
 function checkMemoryLabel(b) {
   const src = b && typeof b === 'object' ? b : {};
@@ -224,8 +167,7 @@ function checkCtxTurns(v) {
 
 /**
  * 功能：校验「记忆条数上限」—— 整数且落在 5~50（含端点）。
- *
- * 说明：⚠️ 0.7.6 起界面**不再暴露**这个配置（记忆改为全量注入）⇒ 这个校验只为**兼容**留着：
+ * 说明：起界面**不再暴露**这个配置（记忆改为全量注入）⇒ 这个校验只为**兼容**留着：
  *      老的备份 / 老客户端仍可能带 `mem_max` 键，带着就得校验、不能 400 也不能静默丢。
  * @param {*} v - 入参值
  * @returns {number} 合法值
@@ -240,14 +182,6 @@ function checkMemMax(v) {
 
 /**
  * 功能：校验一份「模块清单」入参（3 期）—— 必须是数组，每一项都得是**白名单里的模块名**。
- *
- * 说明：⭐ 白名单来自 `lib/tools.js`（合法值的唯一出处，`vault` / `chat` 从来不在里面）——
- *      本函数**不自己维护第二份白名单**。
- *      ⚠️ 非法值一律 **400 且不静默丢弃**：把 `"vault"` 悄悄删掉再保存，用户会以为
- *      「授权成功了」，而实际上什么都没发生 —— 那是最坏的一种「错了不报错」。
- *      ⚠️ 报错文案里**只列合法名字**、不回显用户传进来的那个：响应里因此永远不会出现
- *      `vault` / `chat` 这类词（`ai.test.js` 的硬边界扫描会咬住这一点）。
- *
  * @param {*} v - 入参值
  * @param {'read'|'write'} mode - 授权方向（决定查哪一份白名单）
  * @param {string} label - 出错文案里对这份清单的称呼（前面要带引号，读起来像一句人话）
@@ -269,16 +203,10 @@ function checkToolModules(v, mode, label) {
 
 /**
  * 功能：校验 `PUT /api/ai/config` 的请求体 —— 1 期的四个键交给 `core/validate.js` 的
- *      `checkAiConfig()`，2 期（含 0.7.0 的 `allow_private`）的键在**本文件**校验，最后合成一份 patch。
- *
+ *      `checkAiConfig()`，2 期的键在**本文件**校验，最后合成一份 patch。
  * 说明：⚠️ 为什么要拆这一步：`checkAiConfig()` 有一条「一个键都没认出来 ⇒ 400」的规矩，
- *      而 2 期的请求体完全可能**只带** `ctx_max_turns` —— 整份丢给它会被那条规矩误杀。
- *      所以先按 1 期的四个键**取子集**交给它（行为与 1 期逐字一致），再校验 2 期的那些键。
- *      ⚠️ 归属判权与 key 的封装都不在这里 —— 本函数只回答「这次到底要改哪几个字段」。
- *
  * @param {*} b - 请求体
  * @returns {Object} patch（`base_url` / `model` / `enabled` / `apiKey` / `ctx_max_turns` /
- *      `mem_enabled` / `mem_max` / `allow_private`）
  * @throws {Error} 任何一项不合法、或一个合法键都没带时抛 400
  */
 function checkAiConfigPatch(b) {
@@ -292,14 +220,14 @@ function checkAiConfigPatch(b) {
     patch.ctx_max_turns = checkCtxTurns(src.ctx_max_turns);
   }
   if (src.mem_max !== undefined && src.mem_max !== null) {
-    // ⚠️ 0.7.6：界面已撤掉这个配置，这个键**只为兼容**（老备份 / 老客户端）继续接住并校验
+    // 界面已撤掉这个配置，这个键**只为兼容**（老备份 / 老客户端）继续接住并校验
     patch.mem_max = checkMemMax(src.mem_max);
   }
   if (src.mem_enabled !== undefined && src.mem_enabled !== null) {
     if (typeof src.mem_enabled !== 'boolean') throw httpError(400, '记忆开关必须是布尔值');
     patch.mem_enabled = src.mem_enabled;
   }
-  // ⭐ 0.7.0（009 报告 R1）：内网地址开关 —— 与 `mem_enabled` 同一个布尔口径。
+  // （009 报告 R1）：内网地址开关 —— 与 `mem_enabled` 同一个布尔口径。
   //    （真正的「私网地址 + 没开开关」拦截在 `store.aiSaveConfig` / `aiOutboundConfig` 里，
   //     因为那两处才看得到「库里现存的地址与开关」—— 本函数只管键与类型。）
   if (src.allow_private !== undefined && src.allow_private !== null) {
@@ -322,7 +250,7 @@ function checkAiConfigPatch(b) {
   if (src.tools_write !== undefined && src.tools_write !== null) {
     patch.tools_write = checkToolModules(src.tools_write, 'write', '「让 AI 写」的授权清单');
   }
-  // ⭐ 0.8.6（行程 1 期 ·）：能不能收图片 —— 与上面几个布尔同一个口径。
+  // （行程 1 期 ·）：能不能收图片 —— 与上面几个布尔同一个口径。
   if (src.vision !== undefined && src.vision !== null) {
     if (typeof src.vision !== 'boolean') throw httpError(400, '「支持图片输入」开关必须是布尔值');
     patch.vision = src.vision;
@@ -333,11 +261,9 @@ function checkAiConfigPatch(b) {
 
 /**
  * 功能：出网失败的错误归一 —— 客户端的转译错误（带 `kind`）按 **400** 出口（不是 500）。
- *
  * 说明：⚠️ 「用户填错了 key / 上游限流」不是本服务器的内部错误：回 500 会把这类
  *      可自愈的配置问题记成 error 级日志（污染可观测性），也会让前端把它当「服务器坏了」。
  *      错误文案不变（已由 `lib/openai-client.js` 的转译表翻成人话）。
- *
  * @param {Error} e - 捕获到的错误
  * @returns {Error} 归一过 status 的错误（交给 `fail()` 收口）
  */
@@ -349,10 +275,8 @@ function upstreamFail(e) {
 // ---- SSE 帧格式（与 chat 模块同源：`data: {json}\n\n`）----
 /**
  * 功能：把 SSE 响应头写下去（POST 流式响应，客户端用 fetch 读流，不需要 `retry:` 行）。
- *
  * 说明：⚠️ `X-Accel-Buffering: no` 必须带 —— 飞牛网关 / 反代不加它会缓冲整段响应，
  *      流式打字机就变成「转圈 30 秒后一次性出全文」（chat 模块同一教训）。
- *
  * @param {Object} res - HTTP 响应对象
  * @returns {void}
  */
@@ -378,7 +302,6 @@ function sseFrame(payload) {
 // ---- 指挥建任务：提示词与产物归一（只提议、三层兜底解析）----
 /**
  * 指挥 AI 建任务的 system 提示词。
- * ⚠️ 只押「只输出 JSON」的约定 + 服务端三层兜底解析，**不押** `response_format`（各家支持不一）。
  * @type {string}
  */
 const EXTRACT_SYSTEM = [
@@ -389,27 +312,7 @@ const EXTRACT_SYSTEM = [
 ].join('\n');
 
 /**
- * 聊天（POST /api/ai/chat）的 system 提示词 —— ⭐ 0.6.1：**每次调用前注入**。
- *
- * 说明：⚠️ 会话是**无状态**的（上游每次只收到这一条 user 消息、不带历史），所以提示词
- *      必须每调一次带一次；⚠️ 提示词只描述**本产品的功能边界与助手的角色**，
- *      不含任何用户数据 —— 出网的只有用户亲手发的那句话（key 六不的同一条红线）；
- *      「今天是哪天」由 `chatSystemPrompt()` 在调用那一刻现拼（模块加载时常量会跨零点变旧）。
- *
- * ⭐ 0.7.7-⑳：按现在的能力重写了两句（按现有内容优化）。改动的**界线**：
- *      · 说的仍是「角色与边界」，⛔ 不含任何用户数据 / 密钥 / 接口地址 / 账号名；
- *      · ⛔ 不写 `meta` 的结构、字段名、内部函数名（那是内部约定，不该教给模型）；
- *      · ⛔ 不把代码里的护栏（一次最多几条、最多几轮工具调用）写成提示词里的承诺 ——
- *        护栏在代码里，写进提示词只会被模型当成「必须复述的规则」；
- *      · ⛔ 协议约定（「只输出一个 JSON」）一个字不动。
- *
- * ⭐⭐ **0.7.8 修**：把**只有写工具被授权时才成立**的那两句**挪出这个常量** —— 它是个恒定的常量，
- *      却承诺了一件「看授权才有」的事，于是没开写工具的账号也被这样承诺，模型只好**用文字模仿**
- *      一张卡、再编一句「已经发出去了」（就是那条「确认卡从上线起就不可达」的缺陷）。
- *      ⇒ 现在这里只留**任何情况下都对**的那半句（你不能创建、别假装建好了）；
- *      「会变成一张待确认的卡片」与「被拒绝之后怎么办」搬进 `openai-client.js` 的 `toolsPrompt()`
- *      写工具段（授权时才出现），而没授权时那段会**明说「这项能力没开」**。
- *
+ * 聊天（POST /api/ai/chat）的 system 提示词 —— **每次调用前注入**。
  * @type {string}
  */
 const CHAT_SYSTEM = [
@@ -427,18 +330,18 @@ const CHAT_SYSTEM = [
   '你的职责：回答用户的提问；帮用户把一段话、一条消息整理成待办任务的建议（给出任务标题、截止日期、' +
     '重要/紧急程度、负责人、补充说明）；用户问起自己的任务、课表、账目、预算、资产、日程、专注时长、' +
     '收藏、随手记、设备、行程或协作项目时，如实回答。',
-  // ⭐ 0.7.8：只留「任何情况下都对」的那半句 —— 「你不能创建、别假装建好了」。
+  // 只留「任何情况下都对」的那半句 —— 「你不能创建、别假装建好了」。
   //    ⚠️ 「会变成一张待确认的卡片」那半句挪走了（它只在写工具被授权时才成立，见上面的说明）。
   '关于整理任务：你不能直接创建任务，也不要假装已经创建成功；在用户表态之前，别说任务已经建好。',
-  // ⭐ 0.8.4：记账那一条 —— 与上面任务那条**同一条界线**（只写「任何情况下都对」的那半句）
+  // 记账那一条 —— 与上面任务那条**同一条界线**（只写「任何情况下都对」的那半句）
   '关于记账：你不能直接记账，也不要假装已经记好；在用户表态之前，别说哪笔账已经记下。',
-  // ⭐ 0.8.5：收藏 / 随手记 / 硬件那三条 —— 与上面两条**同一条界线**
+  // 收藏 / 随手记 / 硬件那三条 —— 与上面两条**同一条界线**
   '关于收藏网址、随手记与设备台账：你同样不能直接新建它们，也不要假装已经加好了；在用户表态之前，别说哪一条已经存进去。',
-  // ⭐ 0.8.55：资产与日程那两条 —— 同一条界线（只写「任何情况下都对」的半句）
+  // 资产与日程那两条 —— 同一条界线（只写「任何情况下都对」的半句）
   '关于资产台账与日历日程：你同样不能直接新建，也不要假装已经加好了；在用户表态之前，别说哪一条已经写进去。',
   // ⚠️ 这一句是**任何情况下都对**的事实（他拿到的是分就按分说话）—— ⛔ 不是「承诺某个能力」。
   '涉及金钱的数字：如果工具给你的数是「分」，说给用户听之前要换算成元（除以 100），别把 3500 分说成 3500 元。',
-  // ⭐ 0.8.55：存量与流量别混（资产台账 vs 记账）—— 这是本轮体检里最容易答错的一处
+  // 存量与流量别混（资产台账 vs 记账）—— 这是本轮体检里最容易答错的一处
   '个人资产台账记的是「这些东西值多少」（存量），生活记账记的是「这段时间花了多少」（流量）—— 两者不要相加。',
   '用户提到的日期若相对今天，请按下面给的今天日期推算成 YYYY-MM-DD。',
   '用简体中文回答，简洁直接，不要编造不确定的信息。',
@@ -446,17 +349,10 @@ const CHAT_SYSTEM = [
 
 /**
  * 功能：拼聊天这一次调用用的 system 消息内容 —— 固定角色描述 + 调用那一刻的今天日期 + **记忆段落**。
- *
  * 说明：⭐ 2 期：记忆就走**这个现成的注入点**，不新建链路 ——
  *      `mems` 为空（没存过 / 总开关关着 / 上限为 0）时**一个字都不加**，
- *      于是「没记忆」与「有记忆」的提示词不会长得像两种东西。
- *      ⚠️ 记忆是**用户自己写的**、会过时，所以开场那句要说清「与用户当次说的冲突时以后者为准」——
- *      否则模型会拿三天前的一条记忆当铁律，把用户刚说的话顶回去。
- *
  * @param {Array.<string>} [mems] - 本次要带的记忆正文（`store.aiReadMemoriesForPrompt()` 的产物）
  * @param {string} [toolText] - 3 期：本次**已授权工具**的说明（`client.toolsPrompt()` 的产物）。
- *      ⚠️ 没开工具 / 一条读工具都没授权时是**空串** —— 此时拼出来的提示词与 2 期逐字相同，
- *      出网请求体里因此一条工具说明都不带（用例 1）。
  * @returns {string} system 消息内容
  */
 function chatSystemPrompt(mems, toolText, vision) {
@@ -464,7 +360,7 @@ function chatSystemPrompt(mems, toolText, vision) {
   const p = (n) => String(n).padStart(2, '0');
   const wk = '日一二三四五六'.charAt(d.getDay());
   const head = `${CHAT_SYSTEM}\n今天是 ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}（星期${wk}）。`;
-  // ⭐ 0.8.6（行程 1 期 ·）：图片能力声明。
+  // （行程 1 期 ·）：图片能力声明。
   //    ⚠️⭐ **为什么放在这里、而不是 `toolsPrompt()` 里**：后者在「一条工具都没授权」时
   //    会**早退成空串**，而图片能力与工具授权是两回事（用户完全可能只开图片、不开任何工具）
   //    ⇒ 放进去会让这句话根本到不了模型耳朵里，表现是「模型收到了图却只会说我看不到图」。
@@ -504,10 +400,8 @@ function capText(v, cap) {
 
 /**
  * 功能：把模型回复解析出的值归一成任务草稿数组 —— **解析不出来返回 null**（调用方报 400 format，绝不猜）。
- *
  * 说明：认两种形状：裸数组、`{"tasks":[…]}`；条目没有标题就丢掉；日期不合法就清空；
  *      优先级只认 高/中/低；最多收 8 条。
- *
  * @param {*} v - `parseLooseJson()` 的产物
  * @returns {?Array.<{title: string, assignee: string, due: string, priority: string, note: string}>} 草稿数组；解析不出为 null
  */
@@ -547,13 +441,6 @@ function extractUserContent(sourceBody, supplement) {
 }
 
 /**
- * 功能：处理 `/api/ai` 及其子路径 —— 配置读写 / 测连通 / 聊天 / 指挥建任务 / 历史。
- *
- * 说明：路由表（`parts = ['api','ai', …]`；顶层键 `ai` 由 `module.json` 的 `apiPrefix` 声明，
- *      本模块所有接口都在 `/api/ai/<子路径>` 上，从 parts[2] 判起）——
- *      见文件头那张清单。⚠️ `chat` 是流式响应：一旦 `sseHead()` 写下去，后续错误只能走
- *      **error 帧**（HTTP 状态码已经发出去了，改不了了）—— 所以所有**前置**校验都必须在它之前完成。
- *
  * @param {Object} ctx - 分派上下文
  * @param {Object} ctx.req - HTTP 请求对象
  * @param {Object} ctx.res - HTTP 响应对象
@@ -608,7 +495,7 @@ function handleAi({ req, res, parts, url, method, uid }) {
   if (parts.length === 3 && p2 === 'memories' && method === 'POST') {
     return readBody(req, res, (b) => {
       const content = checkMemoryContent(b);
-      // ⭐ 0.7.1：名称**可选**（不给 = `null`，就是老数据那种「没有名称的自由文本」）
+      // 名称**可选**（不给 = `null`，就是老数据那种「没有名称的自由文本」）
       return json(res, 201, store.aiAddMemory(uid, content, 0, checkMemoryLabel(b)));
     });
   }
@@ -620,18 +507,18 @@ function handleAi({ req, res, parts, url, method, uid }) {
     const run = (b) => {
       try {
         if (method === 'DELETE') {
-          // ⭐ 0.7.7-⑱：预设三条删不掉 —— 由存储层抛 400（护栏在那一层，这里不重复判一遍；
+          // -⑱：预设三条删不掉 —— 由存储层抛 400（护栏在那一层，这里不重复判一遍；
           //    判据只准一处，见 `store.MEM_PRESET_LABELS`）
           const ok = store.aiDeleteMemory(uid, id);
           return ok ? json(res, 200, { ok: true }) : notFound(res);
         }
-        // ⭐ 0.7.1：PUT 同时认 `content` 与 `label`，但**只写请求里真带了的键**（/ 36 的
+        // PUT 同时认 `content` 与 `label`，但**只写请求里真带了的键**（/ 36 的
         //    「带哪个键写哪个键」）。⚠️ 名称是唯一**允许被清空**的那个（`label: null` / `''` =
         //    去掉名称）⇒ 必须用 `'label' in b` 判「带没带」，不能判它是不是空值 —— 否则
         //    「把名称删掉」这个动作永远做不到（会被当成"没带这个键"而跳过）。
         const patch = {};
         if (b && typeof b === 'object' && 'content' in b) {
-          // ⭐ 0.7.7-⑱：**预设三条放行空内容** —— 它们删不掉，所以「清空内容」是它们唯一能被抹掉的方式；
+          // -⑱：**预设三条放行空内容** —— 它们删不掉，所以「清空内容」是它们唯一能被抹掉的方式；
           //    若这里同样按 `checkMemoryContent` 拦空串，用户把预设内容清掉再保存就会吃一个 400
           //    （界面上一句话都留不下来）。⚠️ 只对预设放行，其余行照旧「空内容 = 那一行不要它」。
           const blank = typeof b.content === 'string' && b.content.trim() === '';
@@ -648,7 +535,7 @@ function handleAi({ req, res, parts, url, method, uid }) {
     return method === 'PUT' ? readBody(req, res, run) : run();
   }
 
-  // ---- ⭐ 0.7.7-⑲：POST /api/ai/proposals/<id> —— 对一张确认卡表态（同意 / 拒绝）----
+  // ---- -⑲：POST /api/ai/proposals/<id> —— 对一张确认卡表态（同意 / 拒绝）----
   // ⚠️ 用 POST 而不是 PUT：它不是「改一条记录」，是一个**动作**（会顺带追加一条助手消息）。
   // ⚠️ `agree` 的条目**由前端逐条建好**（走 `core/task-create.js` 这个唯一入口）——
   //    服务端只改状态 + 记一句结果，⛔ 不自己建任务（那会变成第二条创建路径）。
@@ -734,7 +621,6 @@ function handleAi({ req, res, parts, url, method, uid }) {
   // ⭐ 2 期：每项多一个 `segment`；可选 `?segment=N` 只取那一段。
   //    ⚠️⭐ **不带 `segment` = 返回全部**（不是「只返回当前段」）—— 理由：前端 `loadHistory()`
   //    不带参数，若默认只回当前段，用户刷新之后就**再也滚不到上一段历史**，
-  //    与「开启新对话 → 上一段历史仍在（能滚到）」这条验收直接冲突（方案 §15.2 步骤 2-4）。
   if (parts.length === 3 && p2 === 'messages' && method === 'GET') {
     const sp = url.searchParams;
     let before = null;
@@ -764,7 +650,7 @@ function handleAi({ req, res, parts, url, method, uid }) {
     }
   }
 
-  // ---- GET /api/ai/messages/<id>/image —— 一条消息带的图片（⭐ 0.8.6 显示专用）----
+  // ---- GET /api/ai/messages/<id>/image —— 一条消息带的图片（显示专用）----
   //    ⚠️⭐ **越权 / 不存在 / 这条没有图，一律 404 同体**（403 是探测通道）。
   //    ⚠️ 历史列表那条路由**永远不拖 base64**（它只回 `has_image`），图片一律走这一条。
   //    ⚠️ `Cache-Control: no-store`：图本身不会变，但**归属是每账号的** ——
@@ -816,12 +702,9 @@ function handleAi({ req, res, parts, url, method, uid }) {
 
 /**
  * 功能：判断「已经收到的这一段」**还可能是一条工具指令**吗？（决定要不要继续压着不发）
- *
  * 说明：⚠️ 这是一个**前缀判定**，不是判定「它是指令」—— 拿不准一律返回真（继续压着），
  *      判定权交给轮末的 `client.parseToolIntent()`（那一步才严格）。
  *      理由是两头都要安全：早放出去 ⇒ 用户屏幕上闪过一段 JSON；晚放出去 ⇒ 顶多晚几十毫秒。
- *      ⭐ `0.7.6`：`<|` 开头的也压住 —— 那是**原生调用标记泄漏**的形状（真机实测），
- *      一样要等轮末判定，别让机器语法闪上屏（`client.nativeCallShaped()` 同一款特征）。
  * @param {string} s - 本轮已收到的文本
  * @returns {boolean} 还可能是指令为 true
  */
@@ -830,13 +713,12 @@ function looksLikeIntentPrefix(s) {
   if (!t) return true; // 还一个字都没有（有些上游第一帧是空串）：继续等
   const c = t.charAt(0);
   if (c === '{' || c === '`') return true;
-  // ⭐⭐ 0.8.55：**单个 `<` 也先压住**。原生调用标记（`<|DSML|` / DeepSeek 的 `<｜｜DSML｜｜`）
+  // **单个 `<` 也先压住**。原生调用标记（`<|DSML|` / DeepSeek 的 `<｜｜DSML｜｜`）
   //    以它开头；只在认到两字符 `<|` 时才压，第一个 `<` 早就发出去了 —— 用户会看到气泡里
-  //    先冒一个尖角、随后整坨机器语法（真机截图就是这样）。
+  //    先冒一个尖角、随后整坨机器语法。
   //    ⚠️ 压住**只是一拍**：下一帧若不是竖线（正文里的 `<` 通常后面跟字母），`flushing`
   //    立刻置真并把攒下的整段一次发出去 —— 正常回答不受影响，只多等一帧。
   if (c === '<') return true;
-  // ⭐⭐ 2026-11-05（真机截图：气泡里整段「命令 {json} / [工具结果] {json}」）：
   //    模型有时把一次调用写成「命令 {"tool":…}」—— 首字符是中文，上面三条一条都拦不住，
   //    于是整坨机器语法边流边显示。判据放在 `client.toolEchoPrefixish()`（与清洗用的
   //    前缀词表**同一份**，⛔ 别在这里另抄一份）。
@@ -846,17 +728,7 @@ function looksLikeIntentPrefix(s) {
 
 /**
  * 功能：执行一条**模型提出的**工具意图，并把它压成一段能续接给模型的结果文本（3 期）。
- *
  * 说明：⭐ 与 `handleToolRun()` 的关键差别：**接口层的失败在这里不打断整轮对话** ——
- *      工具循环是在用户已经等着的 SSE 流里跑的，把整轮掐掉等于「问一句话，回一个报错」。
- *      所以这里把失败也当成**一条结果**发回模型（让它换个说法或如实说读不到），
- *      前端因此总会拿到一段回答（方案 §4.5 第 6 条：失败要响 —— 响在回答里，不是响在断连里）。
- *      ⚠️ `auth` 由调用方**传进来**（chat 那一次调用开头算好的那一份），这里**不重算** ——
- *      重算就多了一处判据，而判据只允许有一处（`store.aiAuthorizedTools()`）。
- *      ⚠️ 写工具走到这里也**只生成提议**：产物通过返回值里的 `proposal` 交给调用方收进
- *      `done` 帧，⛔ 本函数（以及它调用的执行器）一条都不落库。
- *      ⚠️ 审计只记工具名 / 入参摘要 / 成败 / 拒绝原因；⛔ 结果与入参内容都不进审计、不进日志。
- *
  * @param {number} uid - 账号 id
  * @param {{enabled: boolean, read: Array.<string>, write: Array.<string>}} auth - 本次的授权
  * @param {{tool: string, args: Object}} intent - 解析出来的意图
@@ -900,15 +772,6 @@ function runIntentForChat(uid, auth, intent) {
 }
 
 /**
- * 功能：执行一次工具（3 期，方案 §六）—— ⭐ 判据只有一处（`store.aiAuthorizedTools()`）。
- *
- * 说明：⚠️ 本文件**绝不**自己去读 `tools_read` / `tools_write` 那两列拼条件（方案 §5.2：
- *      「两份口径」是本项目最贵的病）。
- *      ⚠️ 出口分流：目录外的名字 → `notFound()`；未授权 → `json(403)`；
- *      超限 → `json(429)`；入参错 / 执行失败 → 按 `status` 走 `json()`。
- *      ⚠️ 审计**只记工具名 / 入参摘要 / 成败 / 拒绝原因**（`briefToolArgs` 保证不进用户内容）；
- *      工具结果**不进审计、不进日志**（负向清单第 7 / 10 条）。
- *
  * @param {{req: Object, res: Object, uid: number}} c - 上下文（req / res / uid）
  * @returns {void}
  */
@@ -953,21 +816,14 @@ function handleToolRun({ req, res, uid }) {
 }
 
 /**
- * 聊天请求体的字节上限 —— ⭐ 0.8.6 起**从 2 MB 提到 3 MB**。
- * 依据：一张压缩后的图（目标 ≤ 700 KB）base64 之后会涨约 1/3，再套上 JSON 与文字，2 MB 不够。
+ * 聊天请求体的字节上限 —— 起**从 2 MB 提到 3 MB**。
  * @type {number}
  */
 const CHAT_BODY_MAX = 3 * 1024 * 1024;
 
 /**
- * 功能：读聊天请求体 —— ⭐ 0.8.6 起改读**原始字节**再自己 `JSON.parse`。
- *
+ * 功能：读聊天请求体 —— 起改读**原始字节**再自己 `JSON.parse`。
  * 说明：⭐⭐ **为什么必须换**：`readBody` 用**字符串拼接**且上限写死 `2e6`，超限直接 `req.destroy()`
- *      ⇒ 带图时前端只看到「网络错误」，而不是一句能读懂的话。换成本函数之后超限得到的是
- *      **礼貌的 413**（⛔ 其余接口一个字不动 —— 那 2e6 是它们既有的约定）。
- *      ⚠️ 解析失败给 `null`，与 `readBody` 的既有行为**逐字一致**（随后 `checkAiChat(null)`
- *      抛 400「聊天内容必须是文本」）。
- *
  * @param {Object} req - HTTP 请求对象
  * @param {Object} res - HTTP 响应对象（超限时回 413）
  * @param {function(?*)} cb - 解析完成后的回调
@@ -994,15 +850,9 @@ function readChatBody(req, res, cb) {
 
 /**
  * 功能：把「这一次的用户输入」拼成发给上游的那一条 —— ⭐ 带图时 `content` 由字符串换成**数组**。
- *
  * 说明：⭐⭐ **只有最后这一条会带图，而且图片永远来自本次请求体**（⛔ 不从库里读）——
  *      这就是
  *      （走 `GET /api/ai/messages/<id>/image`），而 `listAiContextMessages()` 的列清单里
- *      根本没有 `image` ⇒ 图**天然不会**被重发。
- *      ⚠️ 纯文本消息**仍然用字符串**形式（⛔ 别顺手统一成数组）—— 只有这样
- *      「没用图片时的请求体与 2 期逐字相同」这条既有承诺才继续成立。
- *      ⚠️ 只带图不带字时**不塞空的 text 段**（部分上游对空 text 段会判参数错）。
- *
  * @param {{content: string, image: ?string}} input - `checkAiChat()` 的结果
  * @returns {{role: string, content: (string|Array.<Object>)}} 发给上游的那一条
  */
@@ -1018,25 +868,14 @@ function lastUserMessage(input) {
 
 /**
  * 功能：聊天接口的流式实现 —— 用户消息在上游接受后落库，增量逐帧转发，错误走 error 帧（不落库）。
- *
  * 说明：帧序列 —— `{type:'start', chatId, userMessageId}` → `N × {type:'delta', text}` →
  *      `{type:'done', id, used}`（id = 已落库的 assistant 消息 id；`used` 见下）；失败 → `{type:'error', message}`。
  *      ⭐ 用户消息**只在 `onOpen`（上游回 200）之后落库**：没被上游收到的东西不进会话历史，
- *      前端「重发」也不会在历史里留重复的两条；中途停止 / 上游断掉则只留 user 消息
- *      （assistant 残段不落库 —— 那不是一句完整的话）。
- *      ⭐ 客户端断开（关页面 / 点「停止」）→ `req 'close'` → `shouldAbort` 轮询把上游请求一并掐掉
- *      —— 人走了还继续烧上游的额度是最坏的静默浪费。
- *      ⭐ **2 期**：出网内容从「只有这一句话」变成「**本段上下文 + 记忆 + 这一句话**」——
- *      上下文由 `aiContextWindow()` 按「条数 + 字符」双上限裁出来（`cfg.ctxMaxTurns`），
- *      记忆由 `aiReadMemoriesForPrompt()` **全量**取（0.7.6 起不再按 `mem_max` 截断；总开关关着 ⇒ 一条不带）。
- *      `done` 帧的 `used{msgs,chars,mems,seg}` **全部来自实际拼进请求的那一组消息**
- *      （⛔ 不是估算、不是配置值）—— 界面上那句「本次带了 N 条历史 · M 条记忆」才是实话。
- *
  * @param {{req: Object, res: Object, uid: number}} c - 上下文（req / res / uid）
  * @returns {void}
  */
 function handleChat({ req, res, uid }) {
-  // ⭐ 0.8.6：改走 `readChatBody`（原始字节 + 3 MB 上限）—— 带图时 `readBody` 会直接把连接掐掉
+  // 改走 `readChatBody`（原始字节 + 3 MB 上限）—— 带图时 `readBody` 会直接把连接掐掉
   readChatBody(req, res, (b) => {
     const input = checkAiChat(b); // 同步 throw 由 readChatBody → fail() 收口成 400
     if (!aiAllow(uid)) return json(res, 429, { error: RATE_MSG });
@@ -1075,17 +914,16 @@ function handleChat({ req, res, uid }) {
         const auth = store.aiAuthorizedTools(uid);
         const toolText = client.toolsPrompt(auth);
         const messages = [
-          // ⭐ 0.6.1：每次调用前注入适配本功能的 system 提示词（无状态会话，不带就等于没说）
+          // 每次调用前注入适配本功能的 system 提示词（无状态会话，不带就等于没说）
           // ⭐ 2 期：本段的历史 + 记忆一并带上（顺序：system → 历史（旧→新）→ 这一次的输入）
           { role: 'system', content: chatSystemPrompt(mems, toolText, cfg.vision) },
           ...ctx.msgs.map((m) => ({ role: m.role, content: m.content })),
-          // ⭐ 0.8.6：带图时**只有这一条**的 `content` 是数组（纯文本一个字节都不变）
+          // 带图时**只有这一条**的 `content` 是数组（纯文本一个字节都不变）
           lastUserMessage(input),
         ];
         let full = '';
         // ⭐ 3 期：这一轮攒下的**任务提议**（写工具的产物）—— 去重后随 `done` 帧回前端。
         //    ⚠️ 去重键 =「标题 + 截止日期」：模型换个说法把同一件事重复提议很常见，
-        //    而确认卡上出现两条一模一样的草稿，只会让人以为要建两条（方案 §4.5 第 4 条）。
         const proposals = [];
         const seenProposal = new Set();
         for (let round = 0; round <= TOOL_ROUND_MAX; round += 1) {
@@ -1108,10 +946,10 @@ function handleChat({ req, res, uid }) {
               onOpen: () => {
                 if (round !== 0) return; // 用户消息只在上游第一次接受后落库
                 const saved = store.aiAppendMessage(uid, chat.id, 'user', input.content, {
-                  // ⭐ 0.8.6：图片**跟着用户消息一起落**，而且时机与消息**完全一致** ——
+                  // 图片**跟着用户消息一起落**，而且时机与消息**完全一致** ——
                   //    都在「上游接受了这次请求」之后（⛔ 没被接受的图不进历史）
                   image: input.image,
-                  // ⭐⭐ 0.8.55：任务卡片（把任务发给 AI 时带）—— 与图片同一拍落库，
+                  // 任务卡片（把任务发给 AI 时带）—— 与图片同一拍落库，
                   //    刷新之后仍是那张卡片（`kind` / `meta` 由历史列表原样带回）。
                   kind: input.card ? input.card.kind : null,
                   meta: input.card ? JSON.stringify(input.card.meta) : null,
@@ -1133,7 +971,7 @@ function handleChat({ req, res, uid }) {
             { shouldAbort: () => closed },
           );
           // ⛔ 解析失败 / 不是意图 ⇒ 一律**不执行**（这是 R4 的锚点），按普通回答处理。
-          // ⭐ `0.7.6`（真机缺陷）：部分第三方部署不守上面的文本协议、把训练里的原生调用
+          // ⭐ ``：部分第三方部署不守上面的文本协议、把训练里的原生调用
           //    语法（`<|DSML|invoke …` 之类）当正文吐出来。分两路处理，触发都收窄在
           //    「整段以 <| 开头」（`nativeCallShaped`），正常回答不受影响：
           //    ① 抽得出工具名 ⇒ 照常走执行链（判权 / 目录 / 二次校验 / 审计一道不少）；
@@ -1155,7 +993,6 @@ function handleChat({ req, res, uid }) {
             break;
           }
           if (!intent) {
-            // ⭐⭐ 2026-11-05（真机）：模型有时把「我调用了什么 ＋ 拿到了什么」当成**正文**
             //    写出来（`命令 {"tool":"ledger.bill",…}` ＋ `[工具结果]` ＋ 一段 JSON ——
             //    字段名还是它自己简写的 `expense` / `amount`，不是我们回灌的 `expense_fen`）。
             //    这种输出走不到上面两条兜底（首字符是中文、也不是 DSML 标记），
@@ -1193,7 +1030,7 @@ function handleChat({ req, res, uid }) {
           messages.push({ role: 'user', content: r.text });
         }
         const saved = store.aiAppendMessage(uid, chat.id, 'assistant', full);
-        // ⭐ 0.7.7-⑲：有提议 ⇒ 把确认卡**落成一条消息**（不落库的话刷新就没了、两颗按钮也没了）。
+        // -⑲：有提议 ⇒ 把确认卡**落成一条消息**（不落库的话刷新就没了、两颗按钮也没了）。
         //    ⚠️ 它与上面那条助手回复是**两条消息**：回复是「AI 说的话」，卡片是「待你决定的东西」，
         //    合成一条会让「刷新之后卡还在不在」变成一个说不清的问题。
         const card = proposals.length ? store.aiAppendProposal(uid, chat.id, proposals) : null;
@@ -1204,7 +1041,7 @@ function handleChat({ req, res, uid }) {
           // ⚠️ **只在真有提议时才带这两个键** —— 没有提议时这一帧与 2 期**逐字相同**
           //    （老前端不认识它们也照旧工作， 两端共用同一份 shared.js）。
           //    ⭐ `card` 是**落库之后**的卡片（含 id 与快照），前端据此在会话流里画那张卡；
-          //    `proposals` 一起带着，只为兼容 0.7.7 之前的前端（它靠这个开模态确认卡）。
+          //    `proposals` 一起带着，只为兼容 之前的前端（它靠这个开模态确认卡）。
           ...(proposals.length ? { proposals } : {}),
           ...(card ? { card } : {}),
         });
@@ -1223,11 +1060,9 @@ function handleChat({ req, res, uid }) {
 
 /**
  * 功能：指挥 AI 建任务 —— 被点消息（判权后）+ 手填补充发给模型，返回结构化草稿与发送预览。
- *
  * 说明：⭐ `sentPreview` 与**实际发出的** user 消息逐字相同（前端弹预览时展示的就是它）；
  *      `messageId` 不是自己的 / 不存在 / 对话模块被删 → 一律 404（与不存在同体）；
  *      模型回复解析不出任务 → 400 `{reason:'format'}`；**不落任何库** —— 草稿只进前端确认卡。
- *
  * @param {{req: Object, res: Object, uid: number}} c - 上下文（req / res / uid）
  * @returns {void}
  */

@@ -2,21 +2,13 @@
  * modules/timetable/desktop-import.js —— 课表**导入向导**（三步：选文件 → 预览校对 → 确认入库）
  *
  * 功能：`openTtImport` 起流程并渲染第一步；`ttImportStep1` / `ttImportStep2` / `ttImportStep3`
- *      分别是选文件、预览校对、确认入库三屏；`ttPreview` 上传并解析、`ttReportHtml` 出体检报告、
- *      `ttDraftBlocksHtml` 渲染可编辑的时段块草稿、`ttReadBlockInputs` 把用户改动读回来、
- *      `ttShowReplaceWarn` 在覆盖导入前先告诉他「会删掉多少」。
- *
- * ⚠️ 0.2.0（002 报告 §5.1 ③）从课表主视图拆出，且**只在用户点「导入」时被动态加载**
- *    （`await import('./timetable-desktop-import.js')`）—— 首屏不请求本文件，模块清单里也**不放**它。
- * ⚠️ 覆盖导入前必须让人看到「会删掉多少」；体检报告里**没导进去的东西都要有一条带理由的记录**。
- *
- * ⭐ 0.5.0 模块化重构：本文件从 `public/desktop/views/timetable-import.js` **原样搬进模块目录**
- *    （方案 `09-模块化重构` §七，纯搬运不改逻辑）。只改了 import 的相对路径与静态依赖的
- *    目标（`./timetable.js` → `./timetable-desktop.js`）。**它仍然只在点「导入」时被动态加载**、不进 `modulepreload`。
+ * 分别是选文件、预览校对、确认入库三屏；`ttPreview` 上传并解析、`ttReportHtml` 出体检报告、
+ * `ttDraftBlocksHtml` 渲染可编辑的时段块草稿、`ttReadBlockInputs` 把用户改动读回来、
+ * `ttShowReplaceWarn` 在覆盖导入前先告诉他「会删掉多少」。
  *
  * @author zx
  * @date   2026-09-12
- * @since 0.8.33
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/06-课表.md、docs/公共/开发方案/09-模块化重构.md
  */
 import { api, backToLogin, BASE } from '../../core/api.js';
@@ -60,7 +52,6 @@ function ttTplSplit(key) {
 /**
  * 功能：按需拉一次**内置高校模板清单**（进导入向导时才拉，首屏不请求）。
  * 说明：失败只把清单留空并给一句提示，**绝不打断「上传课表文件」那条路** ——
- *      模板是锦上添花，文件导入才是主路径，不能因为一个可选功能把主路径一起弄挂。
  * @returns {Promise.<Array.<Object>>} 模板清单（取不到时为空数组）
  */
 async function ttLoadTemplates() {
@@ -94,7 +85,7 @@ function ttTemplateOptions(selected) {
 /**
  * 功能：把选中那条模板的出处与说明写进下方的提示框（并同步「几行 / 几节」）。
  * 说明：⚠️ 模板是内置数据，**必须把出处摊开给用户看** —— 作息是照着上课的东西，
- *      猜错一次就是一学期的事，用户有权知道这份数据是从哪来的。
+ * 猜错一次就是一学期的事，用户有权知道这份数据是从哪来的。
  * @returns {void}
  */
 function ttSyncTplNote() {
@@ -118,8 +109,8 @@ function ttSyncTplNote() {
 /**
  * 功能：初始化导入向导的暂存状态，并打开第 1 步弹窗。
  * 说明：已有学期时默认「覆盖本学期」，没有学期时默认「新建学期」；
- *      ⭐ 0.3.5 起第 1 步多了一个「来源」选择 —— **上传课表文件**（原来的唯一路径）或
- *      **选一所内置高校模板**（只给你这所学校的作息与课表版式，不含课程）。
+ * 起第 1 步多了一个「来源」选择 —— **上传课表文件**（原来的唯一路径）或
+ * **选一所内置高校模板**（只给你这所学校的作息与课表版式，不含课程）。
  * @returns {void}
  */
 export function openTtImport() {
@@ -147,7 +138,7 @@ export function openTtImport() {
 /**
  * 功能：渲染导入向导第 1 步：选来源（文件 / 高校模板）、选导入方式、选目标学期，并请求服务端预览。
  * 说明：确认前先在本地拦一次文件体积 —— 服务端的 413 是兜底，
- *      能在本地说清楚就别让用户白等一次往返。
+ * 能在本地说清楚就别让用户白等一次往返。
  * @returns {void}
  */
 export function ttImportStep1() {
@@ -218,7 +209,7 @@ export function ttImportStep1() {
   document.querySelectorAll('input[name=tt-src]').forEach((r) =>
     r.addEventListener('change', () => {
       w.source = r.value;
-      // ⚠️ 只切两块区域的显隐，**不整屏重画** —— 重画会把已经选好的文件清掉
+      // 只切两块区域的显隐，**不整屏重画** —— 重画会把已经选好的文件清掉
       $('#tt-file-wrap').style.display = w.source === 'file' ? 'block' : 'none';
       $('#tt-tpl-wrap').style.display = w.source === 'template' ? 'block' : 'none';
     }),
@@ -243,7 +234,7 @@ export function ttImportStep1() {
         );
       } else {
         if (!w.file) return toast('请先选择课表文件', true);
-        // ⚠️ 先在本地拦一次体积：服务端的 413 是兜底，能在本地说清楚就别让用户等一次往返
+        // 先在本地拦一次体积：服务端的 413 是兜底，能在本地说清楚就别让用户等一次往返
         if (w.file.size > TT_MAX_UPLOAD) {
           return toast('文件太大（上限 2MB）。课表文件一般只有几十 KB，请确认选对了文件。', true);
         }
@@ -267,7 +258,7 @@ export function ttImportStep1() {
 /**
  * 功能：统计指定学期现有的课程门数与课次条数，写进覆盖导入的警告框。
  * 说明：覆盖导入前必须让用户看到「会删掉多少」（不写数字的确认框等于没确认）；
- *      统计失败时清空提示，不阻断导入流程。
+ * 统计失败时清空提示，不阻断导入流程。
  * @param {number} termId - 要统计的学期 id
  * @returns {Promise.<void>}
  */
@@ -286,10 +277,9 @@ export async function ttShowReplaceWarn(termId) {
 /**
  * 功能：把课表文件直传服务端预览接口，取回解析草稿与体检报告（不写库）。
  * 说明：这里不走 `api()` —— 预览接口要发二进制请求体，只能用 `fetch()` 自己处理；
- *      遇到 401 直接回登录页，避免用户停在一个看起来「卡住」的页面上。
+ * 遇到 401 直接回登录页，避免用户停在一个看起来「卡住」的页面上。
  * @param {File} file - 用户选择的课表文件
  * @returns {Promise.<Object>} 服务端解析出的预览数据
- * @throws {Error} 登录过期或服务端返回非 2xx 时抛出；后者在错误对象上附带服务端返回的 `saw` 诊断信息
  */
 export async function ttPreview(file) {
   const res = await fetch(BASE + '/api/timetable/import/preview', {
@@ -312,8 +302,7 @@ export async function ttPreview(file) {
 
 /**
  * 功能：把导入解析的体检报告渲染成一串键值行：文件概况、作息总量、解析结果、作息判定，
- *      再按需追加教师职称归一化、备注里的网格外课程、未识别条目与各类提示。
- * 说明：凡是"没导进去的东西"都要有一条带理由的记录（见方案 §8.9）。
+ * 再按需追加教师职称归一化、备注里的网格外课程、未识别条目与各类提示。
  * @param {Object} g - 服务端返回的诊断数据
  * @returns {string} 体检报告区的 HTML
  */
@@ -352,9 +341,9 @@ export function ttReportHtml(g) {
 
 /**
  * 功能：渲染导入向导第 2 步：体检报告 + 学期名与开学日期 + 作息校对 + 课次勾选，
- *      并在确认时把用户的校对结果组装成载荷提交入库。
+ * 并在确认时把用户的校对结果组装成载荷提交入库。
  * 说明：用户改过作息就提交空的 periods，让服务端按块重排逐节时间（periods 是纯派生物）；
- *      课次按「课程名」归并，同一门课的多个课次收进同一个 courses 条目。
+ * 课次按「课程名」归并，同一门课的多个课次收进同一个 courses 条目。
  * @returns {void}
  */
 export function ttImportStep2() {
@@ -438,7 +427,7 @@ export function ttImportStep2() {
         }
         c.sessions.push(it.session);
       });
-      // ⭐ 模板来源**允许一条课次都没有**（它本来就只带作息）；文件来源仍然要求至少一条 ——
+      // 模板来源**允许一条课次都没有**（它本来就只带作息）；文件来源仍然要求至少一条 ——
       // 文件解析出 0 条课次说明这份文件不是课表，放它过去只会造出一个空学期。
       if (!courses.length && w.source !== 'template') return toast('至少要保留一条课次', true);
       const payload = {
@@ -450,9 +439,8 @@ export function ttImportStep2() {
           total_weeks: d.term.total_weeks,
           remark: d.term.remark,
           meta: d.term.meta,
-          // ⭐ 高校模板会带「节假日前一天下午提前」（人文科技学院就是提前 30 分钟）——
-          //    它在学期设置里可改，但**不在第 2 步的界面上**，所以必须原样透传，
-          //    否则「选了模板」与「这所学校的真实作息」会差这一条，而且不报错。
+          // 高校模板会带「节假日前一天下午提前」（人文科技学院就是提前 30 分钟）——
+          // 它在学期设置里可改，但**不在第 2 步的界面上**，所以必须原样透传，
           holiday_advance_minutes: d.term.holiday_advance_minutes || 0,
           holiday_pm_from: d.term.holiday_pm_from || '',
         },
@@ -478,7 +466,7 @@ export function ttImportStep2() {
 
 /**
  * 功能：渲染导入向导第 3 步：展示本次导入的结果（学期 / 课程 / 课次 / 时段块与小节），
- *      确认后关闭弹窗并跳到刚导入的学期。
+ * 确认后关闭弹窗并跳到刚导入的学期。
  * @param {Object} r - 服务端导入接口的返回结果
  * @param {number} kept - 用户在第 2 步实际勾选保留的课次条数
  * @returns {void}

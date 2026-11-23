@@ -1,21 +1,9 @@
 /**
- * core/grants.js —— **个人授权目录**的前端公用件（0.9.8 第 11 轮）
+ * core/grants.js —— **个人授权目录**的前端公用件
  *
  * 功能：`listGrants()` / `authorizeGrant()` / `setGrantPurpose()` / `removeGrant()` 四个接口封装；
- *      `mountGrants(host, opts)` 把「个人授权目录」这一块**整块画进**给它的容器里，并接管
- *      授权 / 改备注 / 移除 / 刷新四个动作。
- *
- * ⭐⭐ 为什么这一块在 `core/`（两端共用一个文件）：
- *      它同时出现在**电脑端设置页**与**手机端设置页**，而且两边必须**逐字一致**——
- *      分别写两份的话，改一次文案就要记得改两处，漏一处就是「两端说法不一样」。
- *      ⚠️ 两端**布局类名**不同（桌面 `set-row`、手机 `mrow`），所以这里用自己的一套 `.grant-*`
- *      类名，两边的 `app.css` 各自补几条规则 —— ⛔ 不硬套其中一边的类，那会在另一边变成没样式的一坨。
- *
- * ⚠️ 授权动作**必须由宿主选择器完成**（`pickAuthorizedDir`，注入进来）：
- *      那是**唯一**能让飞牛记下「这个用户授权了这个目录」的通道。所以：
- *      · 本文件**不提供**「手填路径授权」—— 手填的路径宿主没有记录，服务端一定会拒；
- *      · 选择器失败时只如实转述原因，⛔ 不在这里另造一条兜底路（那会造出「界面上授权了、
- *        实际没有」的假象）。
+ * `mountGrants(host, opts)` 把「个人授权目录」这一块**整块画进**给它的容器里，并接管
+ * 授权 / 改备注 / 移除 / 刷新四个动作。
  *
  * @author zx
  * @date   2026-11-09
@@ -63,7 +51,6 @@ export const GRANT_TEXT = {
   // ---- 「从已授权目录里挑一个」那个列表（加密信息这类要用目录的模块）----
   PICK_TITLE: '选择已授权的目录',
   PICK_CLOSE: '取消',
-  // ⭐ 0.9.8（2026-11-10）：选目录改成**逐层下钻** —— 点文件夹进下一层，底下的主按钮才是「用这一层」
   PICK_USE: '用这个目录',
   PICK_ROOT_NOTE: '上面是已授权的目录；点一个进去，可以一直往下选子目录。',
   // 目录列表里那条「找不到我要的」——点它就跳去授权（每一处选目录的地方都要有这条）
@@ -74,11 +61,6 @@ export const GRANT_TEXT = {
 
 /**
  * 「去授权」的跳转实现 —— 由**宿主**（电脑端 / 手机端的外壳）在加载时注册。
- *
- * 说明：⭐ 为什么用钩子而不是直接 import 外壳：`core/` 是两端共用件，
- *      而「怎么切到设置页」只有两端自己知道；`modules/secrets/*` 又是**可删**的模块，
- *      让它反过来 import 外壳会把「删模块」变成「页面打不开」。
- *      宿主没注册时（理论上不会）这里什么也不做，⛔ 不抛错。
  * @type {?Function}
  */
 let gotoAuthHook = null;
@@ -157,7 +139,6 @@ function stateOf(s) {
  * 功能：画出「个人授权目录」这一整块的 HTML。
  *
  * 说明：⚠️ 路径优先显示服务端给的语义路径（`display`），拿不到就显示原始路径 ——
- *      与加密信息那边**同一条口径**（0.9.8 第 8 轮：转不出来就显示原始的，⛔ 不自己截断）。
  * @param {?Object} data - `listGrants()` 的返回；为空时画「正在读取」
  * @returns {string} 这一块的 HTML
  */
@@ -202,7 +183,6 @@ export function grantsHtml(data) {
     .join('');
   const head = `<div class="grant-head">${esc(GRANT_TEXT.HEAD)}</div>
     <div class="grant-hint">${esc(GRANT_TEXT.HINT)}</div>`;
-  // ⚠️ 一条都没有时按钮就说「点击授权」（老大 2026-11-09 的原话：未授权则显示【点击授权】）——
   //    有目录之后它才变成「＋ 授权一个目录」（那时它是「再加一个」，不是「开始用」）。
   const addLabel = items.length ? `＋ ${GRANT_TEXT.ADD}` : GRANT_TEXT.AUTH;
   // ⚠️ 读不到授权列表时**必须先说这件事**：否则下面每一条都显示「读不到」，像是全丢了
@@ -221,15 +201,10 @@ export function grantsHtml(data) {
 
 /**
  * 功能：把「个人授权目录」这一块挂进容器 —— 自己拉数据、自己画、自己绑事件、动作后自己重画。
- *
  * 说明：⭐⭐ 用「重画整块」而不是「局部改一行」：这一块的真相在服务端（状态是每次现算的），
  *      任何一个动作都可能改变别的行（比如重新授权后另一条旧记录的状态也变了）。
- *      重画一次的代价是十几行 DOM，换来的是界面永远等于服务端的答案。
  * @param {HTMLElement} host - 容器（这一块的所有内容都归它）
  * @param {{pick?: Function, toast?: Function, confirm?: Function, notice?: Function}} [opts] - `pick` 是选择器（返回 `{ok, path, reason, message}`），
- *      `toast` 是提示函数 `(msg, isError)`，`confirm` 是二次确认 `(msg, path) => boolean`（不注入就用 `window.confirm`），
- *      `notice` 是**只有一颗「知道了」的弹窗** `(title, text)`（不注入就用 `window.alert`）。
- *      两端实现不同，所以都注入。
  * @returns {Promise.<void>} 首屏画完即返回
  */
 export async function mountGrants(host, opts) {
@@ -320,7 +295,6 @@ export async function mountGrants(host, opts) {
 
   /**
    * 功能：走一遍「选择器 → 登记」—— 授权一个新目录，或给 `lost` 那条重新授权。
-   *
    * 说明：⚠️ `lost` 那条点「重新授权」时，用户也可能选到**另一个**目录（原来的文件夹没了）。
    *      这时按「新增一条」处理，**不**偷偷把旧行的路径改掉 —— 旧行留着由用户决定是否移除，
    *      比我们替他猜「他是不是想换地方」安全（猜错就把一条真实记录改没了）。

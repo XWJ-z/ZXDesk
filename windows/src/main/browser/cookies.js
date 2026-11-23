@@ -1,13 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：cookies.js
- * 职责：Cookie 注入（移植自 `FnSession.cookies()`）
- *
- * 名字照 fnOS 前端 bundle：会话 `fnos-token`（SameSite=Strict、**不设过期**）、
- * 长期 `fnos-long-token`（30 天）、入口 `entry-token`（写到 `.<relayHost>` 域）、中继再加 `mode=relay`。
- * ⛔ 不是 `Trim-MC-token`（那个名字 bundle 里根本没有，社区文档写的）。
- *
- * `cookieSpecs()` 是纯函数（可单测），`applyCookies()` 才碰 Electron。
  */
 
 const LONG_TOKEN_MAX_AGE = 30 * 24 * 60 * 60;
@@ -86,12 +78,6 @@ export async function applyCookies(session, target, cookieStore, logger = () => 
 /**
  * 合并多份 Cookie 头（`name=value; …`），同名以后给的为准。
  *
- * 为什么需要：原生探测与 WS 握手要同时带「登录会话 Cookie」和「远程视图分区里的网关 Cookie」
- * （访问码过了之后网关种下的那份）。两份直接接起来会出现同名两条，服务端行为不可预期；
- * 而浏览器里的那份是服务端续期过的，应该覆盖登录时的快照（Android 0.2.17 的踩坑）。
- *
- * @param {...string} parts
- * @returns {string}
  */
 export function mergeCookieHeader(...parts) {
   const out = [];
@@ -117,11 +103,6 @@ export function mergeCookieHeader(...parts) {
 /**
  * 退出登录：清掉远程视图分区里的全部 Cookie（保留 TOFU 与偏好，与 Android 一致）。
  *
- * ⚠️ Electron 的 `Cookies` **没有 `clear()`**（0.1.4 调了，日志里是
- * `cookieStore.clear is not a function`，于是 Cookie 根本没清）。正确做法是在 **Session** 上
- * `clearStorageData({ storages: ['cookies'] })`；拿不到 Session 时退化成一條条 `cookies.remove`。
- *
- * @param {object} session - 传 **Session**（不是 session.cookies）；为兼容老调用也接受 `{ cookies }`
  */
 export async function clearCookies(session, logger = () => {}) {
   const target = session?.cookies ? session : { cookies: session };
@@ -150,8 +131,6 @@ export async function clearCookies(session, logger = () => {}) {
 /**
  * 这些名字属于「飞牛登录会话 / ZXDesk 网页会话」，各有各的落盘通道，⛔ 不进网关凭据。
  * - `fnos-token` / `fnos-long-token` / `entry-token` → `FnSession`（session.bin 里的 session 段）；
- * - `zxdesk_sid` → `webSession`（同样在 session.bin，但单独一段、带 host 校验）；
- * - `mode=relay` → 每次按 relayHost 重新算出来。
  */
 const NON_GATEWAY_NAMES = new Set(['fnos-token', 'fnos-long-token', 'entry-token', 'zxdesk_sid', 'mode']);
 
@@ -161,13 +140,6 @@ export const GATEWAY_COOKIE_LIMIT = 20;
 /**
  * 从分区 Cookie 里挑出**网关凭据**（访问码过完之后网关种下的那几条）。
  *
- * 为什么要落盘：Electron 的 `persist:` 分区只持久化**带有效期**的 Cookie，会话级 Cookie
- * 应用一关就没了。而飞牛网关的访问码 Cookie 正是会话级 —— 于「每次启动都要重新输一次访问码」。
- * 这里把它按 `session.bin`（safeStorage 加密）存起来，启动时回注；过期的由网关自己再拦一次。
- *
- * @param {Array<object>} cookieList - `session.cookies.get({url})` 的结果
- * @param {number} [now] - 当前秒级时间戳（测试注入）
- * @returns {Array<object>} 可直接交给 `cookies.set` 的规格
  */
 export function pickGatewayCookies(cookieList, now = Math.floor(Date.now() / 1000)) {
   const out = [];
@@ -196,14 +168,12 @@ export function pickGatewayCookies(cookieList, now = Math.floor(Date.now() / 100
 /**
  * 回注网关凭据。
  *
- * ⚠️ `url` 与 `domain` 的取舍：Electron 在 `url` 与 `domain` 冲突时会直接抛错，
- * 所以只有当 Cookie 的 domain 与当前主机**不完全相同**（带了父域 / 子域）时才显式给 domain。
  */
 export function gatewayCookieSpecs(list, { baseUrl } = {}) {
   const base = String(baseUrl || '').replace(/\/+$/, '');
   if (!base) return [];
-  // ⚠️ 不要写成 `let host = ''`：下面 try 里一定赋值、catch 里直接 return，
-  //    初始空串从没被读过（`no-useless-assignment` 会判它，零警告门禁会挡出包）。
+  // 不要写成 `let host = ''`：下面 try 里一定赋值、catch 里直接 return，
+  // 初始空串从没被读过（`no-useless-assignment` 会判它，零警告门禁会挡出包）。
   let host;
   try {
     host = new URL(base).hostname.toLowerCase();
@@ -282,7 +252,6 @@ export function pickWebSession(cookieList, url) {
 
 /**
  * 回注用的参数。**host 必须一致** —— LAN 与中继是不同 host，⛔ 不能把 A 地址的会话带到 B。
- * 会话级 Cookie ⇒ 不给 `expirationDate`。
  * @returns {null|object} 交给 `cookies.set`
  */
 export function webSessionSpec(webSession, { baseUrl } = {}) {

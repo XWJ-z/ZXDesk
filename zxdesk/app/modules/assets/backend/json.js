@@ -2,17 +2,11 @@
 
 /**
  * modules/assets/backend/json.js —— 个人资产管理（分组树 ＋ 通用条目）的 **JSON 版原语**
- *
  * 功能：本模块自己的存储原语（JSON 回退），与另一个后端**同名同参** ——
- *      「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，
- *      少一个 / 打错名 / 形参个数不一致 = 启动即抛。
- *
- * ⚠️ 与 SQLite 版**逐字同形**：同样的返回、同样的排序、同样的「只删一行 / 只解绑」语义。
- *     ⛔ 本文件里不许出现 `_` 开头的私有方法（`_bk` 门面不转发 ⇒ 真机 TypeError）。
- *
+ * 「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，
  * @author zx
  * @date   2026-10-02
- * @since 0.8.10
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/26-个人资产管理.md、02-存储层与数据模型.md
  */
 
@@ -142,12 +136,8 @@ const ops = {
    * 功能：把挂在某个分组上的条目**整批改挂到另一个分组**（合并分组用）。
    *
    * 说明：⚠️ 与 `unbindAssetItems()` 同形、只是写的是目标 id —— 合并要的是「一条都不丢」，
-   *      ⛔ 不能写成「先解绑再挂」两步（中途失败会留下一批孤儿）。
+   * 不能写成「先解绑再挂」两步（中途失败会留下一批孤儿）。
    *
-   * @param {(number|string)} uid - 用户 id
-   * @param {(number|string)} fromGroupId - 源分组 id
-   * @param {(number|string)} toGroupId - 目标分组 id
-   * @returns {number} 改挂的条数
    */
   reassignAssetItems(uid, fromGroupId, toGroupId) {
     let n = 0;
@@ -165,13 +155,8 @@ const ops = {
    * 功能：给一个分组**换父项**（合并分组用）。
    *
    * 说明：⚠️⭐ 它**刻意绕过** `_update()` 的列白名单（`schema.js` 明写 `parent_id` 不进白名单）——
-   *      成环那件事在合并这条路里**结构上不可能**（源与目标必须是同一个父项下的兄弟），
-   *      论证见 SQLite 版同一处与 `../store.js` 的 `mergeAssetGroups()`。
-   *
-   * @param {(number|string)} uid - 用户 id
-   * @param {(number|string)} id - 分组 id
-   * @param {?(number|string)} parentId - 新父项 id（`null` / 空串 = 挪回第一层）
-   * @returns {boolean} 改到一行则为 true
+   * 成环那件事在合并这条路里**结构上不可能**（源与目标必须是同一个父项下的兄弟），
+   * 论证见 SQLite 版同一处与 `../store.js` 的 `mergeAssetGroups()`。
    */
   reparentAssetGroup(uid, id, parentId) {
     const row = (this.data.asset_groups || []).find((g) => uidOf(g) === Number(uid) && Number(g.id) === Number(id));

@@ -1,13 +1,5 @@
 /**
  * ZXDesk工作台 Windows 客户端
- * 文件：client.js
- * 职责：版本接口客户端：拉取 `/api/version/windows` 并把响应校验成固定形状
- *
- * 传输层由调用方注入（生产用 Electron 的 `net.fetch`，测试传假的）——
- * 本文件不 import electron，所以能在没有显示器的机器上用 `node --test` 直接验。
- *
- * 接口契约见 `Project/server/update-api/README.md`：
- * `{ ok:true, data:{ platform, channel, version, hash, fileName, fileSize, downloadUrls, releaseNotes, force, minVersion, publishedAt } }`
  */
 
 import { checkUpdateUrl } from './urls.js';
@@ -26,7 +18,6 @@ export const CHANNELS = Object.freeze(['stable', 'beta']);
 const HASH_RE = /^[0-9a-f]{64}$/;
 
 /**
- * 拼出接口地址（含 channel 参数）。
  * @param {string} baseUrl
  * @param {string} [channel]
  */
@@ -42,9 +33,6 @@ export function buildApiUrl(baseUrl, channel = 'stable') {
 /**
  * 校验接口响应。任何一项不合格都整份拒收 —— 半份数据比没有数据更危险
  * （例如缺 hash 时若"宽容地"继续下载，就等于关掉了完整性校验）。
- *
- * @param {unknown} payload
- * @param {{platform?:string}} [options]
  */
 export function parseLatest(payload, options = {}) {
   const platform = options.platform || PLATFORM;
@@ -97,15 +85,7 @@ export function parseLatest(payload, options = {}) {
 
 /**
  * 拉取最新版本。
- *
  * @param {object} input
- * @param {string} input.url
- * @param {Function} input.fetchImpl - 与 `fetch` 同形（生产是 `net.fetch`）
- * @param {number} [input.timeoutMs]
- * @returns {Promise<
- *   {ok:true, info:object} |
- *   {ok:false, kind:'insecure'|'not-published'|'http'|'network'|'timeout'|'invalid', status?:number, message:string}
- * >}
  */
 export async function fetchLatest({ url, fetchImpl, timeoutMs = 8000 }) {
   if (typeof fetchImpl !== 'function') {

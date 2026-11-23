@@ -1,27 +1,12 @@
 'use strict';
 
 /**
- * modules/trip/backend/json.js —— 行程的**JSON 版原语**（0.8.6）
- *
+ * modules/trip/backend/json.js —— 行程的**JSON 版原语**
  * 功能：本模块自己的存储原语（JSON 回退），与另一个后端**同名同参** ——
- *      「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，
- *      少一个 / 打错名 / 形参个数不一致 = 启动即抛。
- *
- * 说明：⭐ 与 SQLite 那条**逐字同一语义**：区间查询跨天两端都算命中、排序口径一致
- *      （行程按开始日 / 票按出发时刻 / 点按测量时刻，末键都是 id）、偏好表**一人一行**。
- *
- * ⚠️ **不优化**（照 17 / 18 / 22 / 23 / 24 期的先例）：区间过滤与排序在这里走**内存**。
- *    但要点名一条：`time_trip_points` 是本项目**第一张可能上万行的用户表**（一段两小时的车程
- *    ≈ 数百到数千点），而 JSON 后端**每次写都会重写整个文件** ⇒ 数据量大时会明显变慢。
- *    ⇒ 处置：① 批量插入只 `_saveJson()` **一次**（⛔ 不许逐个点存）；
- *    ② 文档里写明「JSON 后端只服务降级 / 老备份 / 对拍，不建议长期承载大轨迹」。
- *
- * ⚠️ ops 里的 `this` 是 **Store 实例**。⚠️ 原语之间**不许互相调用**。
- * ⚠️ 模块 `backend/*.js` 里 ⛔ 不许写 `_` 开头的私有方法（`_bk` 门面不转发）。
- *
+ * 「同名同参」由 `store/backend/index.js` 的 `assertOpsContract()` 在**加载时**比对，
  * @author zx
  * @date   2026-09-28
- * @since 0.8.33
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/24-行程.md、docs/公共/架构文档/02-存储层与数据模型.md
  */
 
@@ -54,8 +39,7 @@ const POINT_EDIT_COLS = ['label', 'note', 'trip_id'];
 const PREF_KEYS = ['remind_d3', 'remind_d1', 'remind_h3'];
 
 /**
- * 「人生日历」两项设置允许写入的键 —— ⭐ 0.8.9：从日历模块**整体搬来**。
- * ⚠️ 与 SQLite 侧、`store.js` 的 `LIFE_KEYS` **逐字一致**，且与上面的 `PREF_KEYS` 分成两份
+ * 与 SQLite 侧、`store.js` 的 `LIFE_KEYS` **逐字一致**，且与上面的 `PREF_KEYS` 分成两份
  *（合并一份的下场是「改提醒开关把出生日期写成 `undefined`」= 静默清空）。
  */
 const LIFE_KEYS = ['birth_date', 'expect_years'];
@@ -107,12 +91,7 @@ const ops = {
    * 功能：取该账号**与 `[from, to]` 有交集**的行程，按开始日、id 升序。
    *
    * 说明：⭐ 判据与 SQLite 侧逐字一致 —— 「开始日 ≤ 区间终点」**且**「结束日 ≥ 区间起点」，
-   *      跨天行程两端都被取到；`end_date` 为空 ⇒ 用 `start_date` 顶上。
-   *
-   * @param {(number|string)} uid - 用户 id
-   * @param {string} from - 区间起点 `YYYY-MM-DD`
-   * @param {string} to - 区间终点 `YYYY-MM-DD`
-   * @returns {Array.<Object>} 命中的行程行数组
+   * 跨天行程两端都被取到；`end_date` 为空 ⇒ 用 `start_date` 顶上。
    */
   listTrips(uid, from, to) {
     const u = Number(uid);
@@ -145,7 +124,6 @@ const ops = {
    * @param {(number|string)} id - 行程 id
    * @param {Object} values - 恰好四个键
    * @param {number} stamp - 更新时间戳（epoch 毫秒）
-   * @returns {boolean} 是否真的改到了一行
    */
   setTrip(uid, id, values, stamp) {
     const row = (this.data.time_trips || []).find((r) => r.id === Number(id) && uidOf(r) === Number(uid));
@@ -162,12 +140,8 @@ const ops = {
    * 功能：删掉一条行程 —— ⭐ **先解绑、再删**（与 SQLite 侧那个事务逐字同一语义）。
    *
    * 说明：⭐⭐，行程只是一层分组 ⇒ 解绑不连删。
-   *      ⚠️ JSON 这边没有事务，但**顺序不变**、一次 `_saveJson()` 落盘（不会留下半截状态）。
-   *      ⚠️ 这里**不调用** `unbindTripTickets`：原语之间不许互相调用（只能经 `this._bk.xxx`）。
+   * JSON 这边没有事务，但**顺序不变**、一次 `_saveJson()` 落盘（不会留下半截状态）。
    *
-   * @param {(number|string)} uid - 用户 id
-   * @param {(number|string)} id - 行程 id
-   * @returns {boolean} 是否真的删掉了一行
    */
   deleteTrip(uid, id) {
     const u = Number(uid);
@@ -191,8 +165,6 @@ const ops = {
    * 说明：⭐  的落点（删行程 = 解绑，不级联删）—— 与 SQLite 侧逐字同一语义。
    *
    * @param {(number|string)} uid - 用户 id
-   * @param {(number|string)} tripId - 行程 id
-   * @returns {number} 被解绑的行数
    */
   unbindTripTickets(uid, tripId) {
     const u = Number(uid);
@@ -231,12 +203,7 @@ const ops = {
    * 功能：取该账号**与 `[from, to]`（日期）有交集**的车票，按出发时刻、id 升序。
    *
    * 说明：⭐ 与 SQLite 侧同一判据（跨天票两端都算命中）；⚠️ 只比**日期那一段**
-   *      （与 SQL 的 `substr(…,1,10)` 同义）—— 直接拿 16 字符与 10 字符比会整天差不到。
-   *
-   * @param {(number|string)} uid - 用户 id
-   * @param {string} from - 区间起点 `YYYY-MM-DD`
-   * @param {string} to - 区间终点 `YYYY-MM-DD`
-   * @returns {Array.<Object>} 命中的车票行数组
+   * （与 SQL 的 `substr(…,1,10)` 同义）—— 直接拿 16 字符与 10 字符比会整天差不到。
    */
   listTripTickets(uid, from, to) {
     const u = Number(uid);
@@ -269,7 +236,6 @@ const ops = {
    * @param {(number|string)} id - 车票 id
    * @param {Object} values - 键名见 `TICKET_COLS`
    * @param {number} stamp - 更新时间戳（epoch 毫秒）
-   * @returns {boolean} 是否真的改到了一行
    */
   setTripTicket(uid, id, values, stamp) {
     const row = (this.data.time_trip_tickets || []).find((r) => r.id === Number(id) && uidOf(r) === Number(uid));
@@ -303,8 +269,6 @@ const ops = {
    * @param {(number|string)} uid - 用户 id
    * @param {?(number|string)} tripId - 行程 id；**null = 不挂行程的那些点**
    * @param {?number} fromMs - 最早时刻（含）；null = 不限
-   * @param {?number} toMs - 最晚时刻（含）；null = 不限
-   * @returns {Array.<Object>} 点行数组
    */
   listTripPoints(uid, tripId, fromMs, toMs) {
     const u = Number(uid);
@@ -334,11 +298,9 @@ const ops = {
   },
 
   /**
-   * 功能：改一个点的归属 / 名字 / 备注三列 —— ⚠️ 坐标与测量时刻一个都不许改。
    * @param {(number|string)} uid - 用户 id
    * @param {(number|string)} id - 点 id
    * @param {Object} values - 恰好三个键：`label` / `note` / `trip_id`
-   * @returns {boolean} 是否真的改到了一行
    */
   setTripPoint(uid, id, values) {
     const row = (this.data.time_trip_points || []).find((r) => r.id === Number(id) && uidOf(r) === Number(uid));
@@ -376,8 +338,7 @@ const ops = {
     const rows = this.data.time_trip_points || [];
     const hit = (r) => uidOf(r) === u && pointInTrip(r, tripId);
     let n = 0;
-    // ⚠️ **原地** `splice`（⛔ 不换数组引用）：与 `deleteTripPoint` 同款 —— 换引用会让
-    //    「拿着旧引用的人」静默看不到删除，而本项目别处一律原地改（口径统一）。
+    // 「拿着旧引用的人」静默看不到删除，而本项目别处一律原地改（口径统一）。
     for (let i = rows.length - 1; i >= 0; i -= 1) {
       if (hit(rows[i])) {
         rows.splice(i, 1);
@@ -391,12 +352,9 @@ const ops = {
   /**
    * 功能：只数一个行程（或「不挂行程」）的**轨迹点**数 —— 首屏摘要用。
    *
-   * 说明：⭐ 0.8.33 起**只数轨迹点**（`kind='track'`）——「打卡」那一块前端暂时整块不显示，
-   *      若还把它算进「轨迹点」就是一句假话。⚠️ 与 SQLite 侧 `kind='track'` 同一口径。
+   * 若还把它算进「轨迹点」就是一句假话。⚠️ 与 SQLite 侧 `kind='track'` 同一口径。
    *
    * @param {(number|string)} uid - 用户 id
-   * @param {?(number|string)} tripId - 行程 id，或 null
-   * @returns {number} 轨迹点数（空为 0）
    */
   countTripPoints(uid, tripId) {
     const u = Number(uid);
@@ -409,15 +367,8 @@ const ops = {
    * 功能：⭐ **批量插入**轨迹点 / 打卡点 —— 整批**只落盘一次**，返回插好的行数组。
    *
    * 说明：⭐⭐ 与 SQLite 侧同名同参、同一语义（整批要么全进、要么不进）。
-   *      ⚠️⭐ **`_saveJson()` 只能调一次**（方案 §5.6）：JSON 后端每次写都重写整个文件，
-   *      逐条落盘在 200 点的批次上会变成 200 次全文件写 —— 「能跑，但慢到不像话」，
-   *      而且**没有任何用例会红**。
-   *      ⚠️ 行由业务层拼全（含 `user_id` / `trip_id` / `created_at`）；空数组直接回空数组。
-   *
-   * @param {(number|string)} uid - 用户 id（行里已带，保留形参是为了两后端同名同参）
-   * @param {?(number|string)} tripId - 行程 id（同上）
-   * @param {Array.<Object>} rows - 待写入的行
-   * @returns {Array.<Object>} 插入后的行数组（`id` 已回填）
+   * 逐条落盘在 200 点的批次上会变成 200 次全文件写 —— 「能跑，但慢到不像话」，
+   * 而且**没有任何用例会红**。
    */
   insertTripPoints(uid, tripId, rows) {
     const list = Array.isArray(rows) ? rows : [];
@@ -445,12 +396,8 @@ const ops = {
    * 功能：把该账号的三档提醒开关整份写入（一人一行，不存在则建），返回写入后的行。
    *
    * 说明：⭐ 与 SQLite 那条 `ON CONFLICT(user_id) DO UPDATE` 逐字同一语义：**一人一行**。
-   *      ⚠️ JSON 这边没有唯一约束 ⇒ 「先找、找到就改、找不到就插」必须自己写全。
+   * JSON 这边没有唯一约束 ⇒ 「先找、找到就改、找不到就插」必须自己写全。
    *
-   * @param {(number|string)} uid - 用户 id
-   * @param {Object} values - 恰好三个键：`remind_d3` / `remind_d1` / `remind_h3`
-   * @param {number} stamp - 更新时间戳（epoch 毫秒）
-   * @returns {Object} 写入后的开关行
    */
   upsertTripPrefs(uid, values, stamp) {
     const u = Number(uid);
@@ -469,12 +416,10 @@ const ops = {
 
   /**
    * 功能：把该账号的「人生日历」两项设置**整份写入**（一人一行，不存在则建），返回写入后的行。
-   * 说明：⭐ 0.8.9：与 `upsertTripPrefs()` 逐字同构 —— ⚠️ 它**只写 `LIFE_KEYS` 那两个键**，
-   *      三个提醒开关一个字节都不会动（见 `LIFE_KEYS` 的说明）。
+   * 三个提醒开关一个字节都不会动（见 `LIFE_KEYS` 的说明）。
    * @param {number} uid - 用户 id
    * @param {Object} values - 恰好两个键：`birth_date` / `expect_years`
    * @param {number} stamp - 更新时间戳（epoch 毫秒）
-   * @returns {Object} 写入后的行
    */
   upsertTripLife(uid, values, stamp) {
     const u = Number(uid);
@@ -496,12 +441,7 @@ const ops = {
    * 功能：⭐ 提醒专用取数 —— `depart_at` 落在 `[fromKey, toKey]`（**完整时刻串**）的票。
    *
    * 说明：⚠️ 与 `listTripTickets` 的「按日期比较」不同：提醒要的是「哪一分钟」。
-   *      返回的字段也**只挑提醒要的那几个**（与 SQLite 侧的 `SELECT` 列清单逐字一致）。
-   *
-   * @param {(number|string)} uid - 用户 id
-   * @param {string} fromKey - 起点时刻 `YYYY-MM-DD HH:MM`（含）
-   * @param {string} toKey - 终点时刻 `YYYY-MM-DD HH:MM`（含）
-   * @returns {Array.<Object>} 候选票行数组（按出发时刻升序）
+   * 返回的字段也**只挑提醒要的那几个**（与 SQLite 侧的 `SELECT` 列清单逐字一致）。
    */
   departingTripTickets(uid, fromKey, toKey) {
     const u = Number(uid);
@@ -531,11 +471,9 @@ const ops = {
   /**
    * 功能：取本模块进**个人备份**的那四份数据。
    *
-   * 说明：⭐ 深拷贝：备份里的对象**不许**和内存里的行共享引用（与 `exportCalendar` 同一条理由）。
-   *      ⚠️ 键名 = **表名**，必须与 `store/methods/backup.js` 的 `PERSONAL_SOURCES` 逐字一致。
+   * 键名 = **表名**，必须与 `store/methods/backup.js` 的 `PERSONAL_SOURCES` 逐字一致。
    *
    * @param {(number|string)} uid - 用户 id
-   * @returns {{trips: Array, time_trip_tickets: Array, time_trip_points: Array, time_trip_prefs: Array}} 四个键
    */
   exportTrip(uid) {
     const u = Number(uid);

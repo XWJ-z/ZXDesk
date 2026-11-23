@@ -1,7 +1,5 @@
 /**
  * 公告：响应校验、拉取失败分类、已读与缓存。
- *
- * 公告是纯内容，坏一条不该让整屏消失 ⇒ 这里专门验「跳过坏条目、留下好条目」。
  */
 
 import assert from 'node:assert/strict';
@@ -198,7 +196,6 @@ test('服务：已读 id 跟着 setReadIds 走（换人/换机会重算）', asy
   assert.equal(service.snapshot().unread, 0);
 });
 
-// ---------------------------------------------------------------- 0.2.2 增补：顶置公告（marquee）
 
 test('顶置公告：解析成单行文本，与公告列表分开', () => {
   const result = parseNotices(
@@ -298,7 +295,7 @@ test('公告条：旧服务端（响应里没有 marquee 字段）→ 暂用最�
   const logs = [];
   const svc = new NoticeService({
     apiUrl: URL_OK,
-    // 0.2.1 及以前的接口就是这个形状：只有 data，没有 marquee
+    // 及以前的接口就是这个形状：只有 data，没有 marquee
     fetchImpl: jsonFetch({ ok: true, platform: 'windows', updated: '2026-10-27 15:00:00', data: [{ id: 'a1', title: '公告系统已上线' }] }),
     file: tmpFile(t),
     log: (level, message) => logs.push(message),

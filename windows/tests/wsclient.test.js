@@ -1,10 +1,5 @@
 /**
  * S4 的本机证据：**真的开一个 socket 服务端**，用真帧跑一遍
- * 「握手带 Cookie: mode=relay → 101 → 发 JSON → 按 reqid 收回包」。
- *
- * ⚠️ 为什么不用 `node:http`：本机（NAS 容器）里 undici 的 llhttp WASM 分配失败，
- * `node:http` 一碰请求就 `Out of memory: Cannot allocate Wasm memory`。
- * 裸 `net` 正常 ⇒ 这里手写握手与帧的解析，等价于飞牛服务端的最小行为。
  */
 
 import assert from 'node:assert/strict';

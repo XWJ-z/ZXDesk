@@ -1,30 +1,11 @@
 'use strict';
 /**
- * modules/calendar/lunar.js —— 农历换算与节日查表（0.7.6，纯函数、零依赖）
- *
+ * modules/calendar/lunar.js —— 农历换算与节日查表
  * 功能：把公历日期换成农历（年 / 月 / 日 / 是否闰月），并给出「这一天是什么节日」。
- *      日历的月视图用它往格子里写「农历 / 节日」那一行。
- *
- * ⭐ **为什么自己写**：项目**零依赖**（铁律 1 / 5 —— `Project/fnos/zxdesk/` 内不许出现第三方库），
- *    而农历是一张**固定压缩表**，不需要任何运行时、也不需要构建链。
- *
- * ⭐ **数据来源**：1900–2100 农历压缩表（每年一个整数）——
- *    · 低 12 位依次标记「正月…腊月」这 12 个朔望月是大月（30 天）还是小月（29 天）；
- *    · `0x10000` 那一位标记闰月是大月还是小月；
- *    · 最低 4 位存**闰月的月份**（0 = 这一年没有闰月）。
- *    这是公开的权威压缩数据（各地农历库共用同一张），本文件只做**纯查表 + 算术**，
- *    ⛔ 不含任何近似公式或经验修正。
- *
- * ⚠️ **验证方式**（`ttt/test/calendar.test.js` 钉成断言）：用几个**已知日期**反查 ——
- *    2026-02-17 = 正月初一（春节）、2026-06-19 = 五月初五（端午）、2026-09-25 = 八月十五（中秋），
- *    再覆盖闰月年（2025 闰六月、2023 闰二月）。这几条覆盖了「春节」「闰月」「大月 / 小月」三种边界。
- *
- * ⚠️ 本文件只被 `modules/calendar/*` 用（日历是唯一的消费方）。将来若课表 / 看板也要用，
- *    再上移到 `core/`—— 现在上移等于白造一层。
- *
+ * 日历的月视图用它往格子里写「农历 / 节日」那一行。
  * @author zx
  * @date   2026-09-19
- * @since 0.7.6
+ * @since 0.9.7
  * 相关：docs/公共/架构文档/22-日历.md、core/holidays.js（**法定节假日数据**是另一回事）
  */
 
@@ -148,13 +129,8 @@ function daysOfYear(y) {
  * 功能：把公历日期（`YYYY-MM-DD`）换成农历 —— ⭐ 本模块的**唯一**换算入口。
  *
  * 说明：⚠️ 用 `Date.UTC` 而不是本地时间构造：这条换算只做「相差多少天」的算术，
- *      一旦掺进本机时区（夏令时 / UTC+8 的午夜边界），同一天在会算出不同结果。
- *      ⚠️ 表外的年份（<1900 / >2100）**如实返回 `null`**，⛔ 不许拿边界年份的数据硬套
- *      （没收录的就不算，别静默按旧的算）。
+ * （没收录的就不算，别静默按旧的算）。
  *
- * @param {string} dateStr - 公历日期（`YYYY-MM-DD`）
- * @returns {?{year: number, month: number, day: number, leap: boolean, monthName: string, dayName: string}}
- *          农历四项 + 两个现成的名字；超出表范围时是 `null`
  */
 export function solarToLunar(dateStr) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr == null ? '' : dateStr));
@@ -218,12 +194,8 @@ export function solarToLunar(dateStr) {
  * 功能：取这一天是**什么节日**（没有就返回空串）—— 公历节日优先，其次农历节日。
  *
  * 说明：⭐ 除夕要单独算：它是「腊月的最后一天」（腊月可能是廿九或三十），
- *      表里查不出来，只能按当年的腊月天数推。
- *      ⚠️ 闰月里的同一个日子**不算节日**（闰五月初五不是端午）。
- *      ⚠️ 只认表里的日子 —— 表外的年份（`solarToLunar` 返回 null）只可能命中公历节日。
- *
- * @param {string} dateStr - 公历日期（`YYYY-MM-DD`）
- * @returns {string} 节日名（如「中秋节」），没有时是空串
+ * 表里查不出来，只能按当年的腊月天数推。
+ * 闰月里的同一个日子**不算节日**（闰五月初五不是端午）。
  */
 export function festivalOf(dateStr) {
   const s = String(dateStr == null ? '' : dateStr);
@@ -240,11 +212,7 @@ export function festivalOf(dateStr) {
  *
  * 规则（高 → 低）：**节日名** > **农历初一显示月名**（如「八月」）> **农历日**（如「廿八」）。
  * 说明：⚠️ 这是**桌面端**的规则（格子宽，放得下一个词）。手机端格子更小，只显示节日名
- *      （见 `modules/calendar/mobile.js` 的说明）—— 那边不再走这个函数，而是直接问 `festivalOf()`。
- *      ⚠️ 表外年份（1900 前 / 2100 后）返回空串：格子上那一行**留空**，⛔ 不显示假数据。
- *
- * @param {string} dateStr - 公历日期（`YYYY-MM-DD`）
- * @returns {string} 一句农历文字（可能为空串）
+ * （见 `modules/calendar/mobile.js` 的说明）—— 那边不再走这个函数，而是直接问 `festivalOf()`。
  */
 export function gridLunarText(dateStr) {
   const f = festivalOf(dateStr);
